@@ -1,0 +1,51 @@
+# Example CCPM configuration
+# Copy to .claude/.ccpmrc and customize
+#
+# Set the PRD directory path used by PM commands.
+# Use a repo-relative path (no leading ./) and NO trailing slash.
+# Examples:
+# PRD_DIR=.claude/prds
+# PRD_DIR=docs/prds
+
+PRD_DIR=docs/prds
+
+# === Workflow Mode Configuration ===
+# Control parallel execution and worktree usage for human-in-the-loop vs agentic workflows
+
+# PARALLEL_MODE: Launch parallel agents for faster execution?
+# - true  = Multiple agents work concurrently (requires WORKTREE_MODE=true)
+# - false = Sequential, human-controlled execution
+# Default: true
+PARALLEL_MODE=true
+
+# WORKTREE_MODE: Use git worktrees for epic isolation?
+# - true  = Create ../epic-xyz worktrees (isolated workspace)
+# - false = Use branches in current directory (IDE-friendly)
+# Default: true
+WORKTREE_MODE=true
+
+# 🔴 IMPORTANT: PARALLEL_MODE=true requires WORKTREE_MODE=true
+# If WORKTREE_MODE=false, PARALLEL_MODE will be auto-disabled to prevent
+# git lock conflicts from multiple agents in same directory.
+
+# === Recommended Configurations ===
+#
+# 100% Agentic (default):
+#   PARALLEL_MODE=true
+#   WORKTREE_MODE=true
+#   → Fast autonomous execution in isolated worktree
+#
+# Human-in-the-loop (recommended for IDE work):
+#   PARALLEL_MODE=false
+#   WORKTREE_MODE=false
+#   → All work in current directory, full manual control
+#   → See diffs in IDE, run tests manually, review each step
+#
+# Isolated + Manual:
+#   PARALLEL_MODE=false
+#   WORKTREE_MODE=true
+#   → Separate worktree, but you control each step
+
+
+
+

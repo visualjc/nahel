@@ -5,7 +5,9 @@ dist/
 .env
 .env.*
 
-# ccpm scaffolding: local-only config (examples are committed)
+# ccpm scaffolding IS committed in this repo (overrides global gitignore):
+# it is pinned temporary tooling + Stage B state that must travel via git.
+!.claude/
 .claude/settings.json
 .claude/settings.local.json
 .claude/.ccpmrc

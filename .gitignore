@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+
+# ccpm scaffolding: local-only config (examples are committed)
+.claude/settings.json
+.claude/settings.local.json
+.claude/.ccpmrc

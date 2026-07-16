@@ -113,6 +113,22 @@ export function knowledgePaths(
   };
 }
 
+/**
+ * Read a UTF-8 text file through the store; null when the file does not
+ * exist. The first-class read-or-null primitive init.ts and snapshot.ts noted
+ * as a store gap — brief (PRD F7) reads PRODUCT.md through it, because a
+ * missing constitution is a finding in the brief, not an error.
+ */
+export async function readTextFile(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+
 /** A work-item record: validated frontmatter plus its markdown body. */
 export interface ItemRecord {
   frontmatter: WorkItemFrontmatter;

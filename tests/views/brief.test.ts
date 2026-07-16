@@ -238,11 +238,22 @@ describe("renderBrief — composes the status and progress renderers", () => {
     expect(brief).toContain(renderStatus(snapshot));
   });
 
-  test("the recent-activity section is renderProgress output verbatim when under budget", async () => {
+  test("the recent-activity section is renderProgress output verbatim when under budget", () => {
+    const env = seededEnv();
+    const events = Array.from({ length: 5 }, (_, i) => makeEvent(env, i));
+    const brief = renderBrief(makeInputs({ events }));
+    expect(brief).toContain(renderProgress(events));
+    expect(brief).not.toContain("older events truncated");
+  });
+
+  test("when activity is truncated, the surviving lines are still renderProgress verbatim over the newest events", async () => {
     const store = await populatedWithProduct();
     const events = await collectProgress(store.layout);
     const brief = await briefOf(store);
-    expect(brief).toContain(renderProgress(events));
+    const marker = brief.match(/\[… (\d+) older events truncated — full timeline: nahel progress\]/);
+    expect(marker).not.toBeNull(); // this fixture sits just over budget by design
+    const dropped = Number(marker![1]);
+    expect(brief).toContain(renderProgress(events.slice(dropped)));
   });
 
   test("an empty store renders explicit empty markers through the composed renderers", () => {

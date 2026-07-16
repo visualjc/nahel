@@ -3,7 +3,7 @@ name: nahel-core
 description: Phase 0 foundation — state schema v1, deterministic CLI (init/log/status/progress/brief/validate + intervention ops), canonical workflow format, Claude Code shim generator
 status: backlog
 created: 2026-07-16T00:34:30Z
-updated: 2026-07-16T16:51:16Z
+updated: 2026-07-16T17:07:05Z
 ---
 
 # PRD: nahel-core
@@ -54,6 +54,7 @@ Personas: **Jim** (solo builder, human maintainer), **host agent** (Claude Code,
   - *Non-run segment ownership*: non-run events go to a writer-scoped segment created per session with a merge-safe random ID (same generator as work-item IDs). No two writers ever share an active segment file.
   - *Deterministic ordering*: each segment carries a monotonic per-segment sequence number; merged reads order by timestamp, then segment sequence, then event ID — a total order identical on every machine.
   - *Atomic writes*: journal appends are single-line `O_APPEND` writes; frontmatter and `state.json` mutations are write-temp-then-atomic-rename. A killed process never leaves a half-written record.
+  - *Mutation consistency (write-ahead journal)*: a mutation is two fs ops — journal event and record write — and the event goes **first**, carrying the full mutation. The only crash window therefore leaves the journal ahead of the record, never an unjournaled mutation (the audit can under-materialize but never lie). `validate` detects journal-ahead divergence (record `updated` vs latest mutation event) and `validate --repair` replays the pending mutation deterministically from the event payload.
   - *Rotation*: only closed segments (ended runs, closed sessions) are archived; active segments are never touched by rotation.
   - *Claims across worktrees*: claim state is repo state and travels via git like everything else (ADR-0002) — enforcement is evaluated per-checkout at CLI-call time, so cross-worktree visibility is eventual on git sync, by construction. Consequence, stated not hidden: claim *before* kicking off parallel runs for immediate effect; `validate` flags claim conflicts discovered at merge.
 
@@ -77,7 +78,7 @@ Personas: **Jim** (solo builder, human maintainer), **host agent** (Claude Code,
 - *Size budget*: 4 KB target. Truncation drops content in fixed priority order (oldest activity first, then done-item detail); required sections are never dropped, and truncation is always marked in output. Constitution text over budget is truncated with an explicit pointer to the file, never silently.
 - If PRODUCT.md is missing or lacks the conventional headings, brief says so explicitly (that's a finding, not an error).
 
-**F8 — `nahel validate`**: schema validity of every record; referential integrity (parent, depends_on, run→item, observation sources→events); claim-violation detection (including conflicts surfaced by merges); journal segment well-formedness; rotation-overdue and compaction-overdue warnings (per ADR-0004). Exit 0 clean / non-zero on errors.
+**F8 — `nahel validate`**: schema validity of every record; referential integrity (parent, depends_on, run→item, observation sources→events); claim-violation detection (including conflicts surfaced by merges); journal segment well-formedness; journal-ahead divergence detection with `--repair` (deterministic replay of pending mutation events — the only flag that mutates, and it only materializes what the journal already records); rotation-overdue and compaction-overdue warnings (per ADR-0004). Exit 0 clean / non-zero on errors.
 
 **F9 — Intervention ops**: `nahel pause <run>`, `nahel claim <item>`, `nahel handback <item>` per glossary semantics. Sharpened:
 - *Claim scope*: claiming an item covers its entire subtree — descendants are claimed transitively; active runs touching any covered item are paused.

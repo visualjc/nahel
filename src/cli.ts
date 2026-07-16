@@ -6,6 +6,7 @@
 // their CommandContext, per-command flags are parsed with node:util parseArgs
 // inside each command.
 
+import { briefCommand } from "./commands/brief";
 import { initCommand } from "./commands/init";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
@@ -13,6 +14,7 @@ import { logCommand } from "./commands/log";
 import { progressCommand } from "./commands/progress";
 import { runCommand } from "./commands/run";
 import { statusCommand } from "./commands/status";
+import { validateCommand } from "./commands/validate";
 import { systemEnv, type Env } from "./schema/env";
 import { NAHEL_ACTOR_VAR } from "./store/actor";
 
@@ -58,6 +60,7 @@ function adapt(command: {
 }
 
 export const COMMANDS: Record<string, Command> = {
+  brief: briefCommand,
   claim: adapt(claimCommand),
   handback: adapt(handbackCommand),
   init: initCommand,
@@ -67,6 +70,7 @@ export const COMMANDS: Record<string, Command> = {
   progress: progressCommand,
   run: adapt(runCommand),
   status: statusCommand,
+  validate: validateCommand,
 };
 
 function helpText(): string {

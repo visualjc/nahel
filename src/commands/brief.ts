@@ -1,7 +1,8 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import { readConfig, storeLayout } from "../store/layout";
-import { composeBrief, NO_WARNINGS, type BriefWarningsSource } from "../views/brief";
+import { validateStore } from "../validate";
+import { composeBrief, type BriefWarningsSource } from "../views/brief";
 import { UsageError } from "./item";
 
 /**
@@ -14,14 +15,14 @@ import { UsageError } from "./item";
 const USAGE = "usage: nahel brief";
 
 /**
- * VALIDATE-WARNINGS SEAM (#9 integration point). Until validate lands, the
- * stub reports no warnings. At merge the orchestrator swaps this constant for
- * validate's findings collector — a two-line change in this file:
- *
- *   import { collectWarnings } from "../views/validate";   // wherever #9 exports (layout) => Promise<string[]>
- *   const warningsSource: BriefWarningsSource = collectWarnings;
+ * VALIDATE-WARNINGS SEAM (#9 integration, wired at merge): the brief surfaces
+ * every validate finding, errors first (validateStore sorts deterministically),
+ * as `severity: [check] message` lines.
  */
-const warningsSource: BriefWarningsSource = NO_WARNINGS;
+const warningsSource: BriefWarningsSource = async (layout) =>
+  (await validateStore(layout)).map(
+    (finding) => `${finding.severity}: [${finding.check}] ${finding.message}`,
+  );
 
 function parseFlags(argv: string[]): void {
   let positionals: string[];

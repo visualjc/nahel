@@ -89,12 +89,13 @@ describe("store layer owns ALL fs I/O", () => {
   }
 });
 
-describe("command, template, and view layers are pure over the store", () => {
+describe("command, template, view, and validate layers are pure over the store", () => {
   // Commands are thin verbs: all I/O flows through src/store, all time and
   // randomness through the injected Env. Templates are pure strings. Views
-  // are pure functions over store reads (task #7). Only the cli.ts entry
+  // are pure functions over store reads (task #7); validate's checks are pure
+  // functions over collected store reads (task #9). Only the cli.ts entry
   // point may touch the ambient process (argv, cwd, exit).
-  for (const layer of ["commands", "templates", "views"]) {
+  for (const layer of ["commands", "templates", "views", "validate"]) {
     test(`src/${layer} files use no ambient environment, time, or randomness`, () => {
       const files = tsFilesUnder(join(SRC_DIR, layer));
       expect(files.length).toBeGreaterThan(0);

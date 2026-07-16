@@ -86,13 +86,20 @@ export function observationPath(layout: StoreLayout, id: string): string {
 
 /** Read and validate `nahel/config`. */
 export async function readConfig(layout: StoreLayout): Promise<Config> {
-  let text: string;
+  return configSchema.parse(YAML.parse(await readConfigText(layout)));
+}
+
+/**
+ * Raw text of `nahel/config`, unvalidated — validate's tolerant read (PRD F8:
+ * an invalid config must be REPORTED as a finding, which readConfig's
+ * parse-or-throw cannot do).
+ */
+export async function readConfigText(layout: StoreLayout): Promise<string> {
   try {
-    text = await readFile(layout.configPath, "utf8");
+    return await readFile(layout.configPath, "utf8");
   } catch {
     throw new Error(`nahel/config not found at ${layout.configPath} — run \`nahel init\``);
   }
-  return configSchema.parse(YAML.parse(text));
 }
 
 /** Validate and atomically write `nahel/config`. */
@@ -153,13 +160,16 @@ export async function listItems(layout: StoreLayout): Promise<string[]> {
 
 /** Read and validate one run record. */
 export async function readRun(layout: StoreLayout, id: string): Promise<Run> {
-  let text: string;
+  return runSchema.parse(JSON.parse(await readRunRecordText(layout, id)));
+}
+
+/** Raw text of a run record, unvalidated — validate's tolerant read (PRD F8). */
+export async function readRunRecordText(layout: StoreLayout, id: string): Promise<string> {
   try {
-    text = await readFile(runRecordPath(layout, id), "utf8");
+    return await readFile(runRecordPath(layout, id), "utf8");
   } catch {
     throw new Error(`run ${id} not found at ${runRecordPath(layout, id)}`);
   }
-  return runSchema.parse(JSON.parse(text));
 }
 
 /** Validate and atomically write one run record. */
@@ -174,6 +184,12 @@ export async function listRuns(layout: StoreLayout): Promise<string[]> {
     () => [],
   );
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+/** Ids of every observation record on disk. */
+export async function listObservations(layout: StoreLayout): Promise<string[]> {
+  const entries = await readdir(layout.observationsDir).catch(() => [] as string[]);
+  return entries.filter((name) => name.endsWith(".md")).map((name) => name.slice(0, -3));
 }
 
 /** An observation record: validated frontmatter plus the fact it records. */

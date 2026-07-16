@@ -259,7 +259,15 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
   for (const [id, pending] of [...latestItems.entries()].sort(([a], [b]) =>
     a < b ? -1 : 1,
   )) {
-    const current = (await itemExists(layout, id)) ? await readItem(layout, id) : undefined;
+    // An unreadable or schema-invalid current record is simply out of sync:
+    // the journal holds the truth, so repair restores it rather than choking
+    // on the corruption (mirrors the run branch below).
+    let current: Awaited<ReturnType<typeof readItem>> | undefined;
+    try {
+      current = await readItem(layout, id);
+    } catch {
+      current = undefined;
+    }
     const inSync =
       current !== undefined &&
       JSON.stringify(current.frontmatter) === JSON.stringify(pending.record) &&

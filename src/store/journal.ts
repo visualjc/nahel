@@ -175,8 +175,14 @@ export async function closeSession(
   });
 }
 
-/** Stream one segment's events in file order, validating every line. */
-async function* readSegment(path: string): AsyncGenerator<JournalEvent> {
+/** One non-blank physical line of a segment file, with its 1-based number. */
+interface SegmentLine {
+  number: number;
+  text: string;
+}
+
+/** Stream one segment's non-blank lines in file order (never a full load). */
+async function* readSegmentLines(path: string): AsyncGenerator<SegmentLine> {
   const handle = await open(path, "r");
   try {
     const buffer = Buffer.alloc(64 * 1024);
@@ -192,7 +198,7 @@ async function* readSegment(path: string): AsyncGenerator<JournalEvent> {
         if (newline === -1) break;
         lineNumber += 1;
         const line = data.subarray(start, newline).toString("utf8");
-        if (line.trim() !== "") yield parseEventLine(path, lineNumber, line);
+        if (line.trim() !== "") yield { number: lineNumber, text: line };
         start = newline + 1;
       }
       pending = Buffer.from(data.subarray(start));
@@ -200,15 +206,22 @@ async function* readSegment(path: string): AsyncGenerator<JournalEvent> {
     if (pending.length > 0) {
       lineNumber += 1;
       const line = pending.toString("utf8");
-      if (line.trim() !== "") yield parseEventLine(path, lineNumber, line);
+      if (line.trim() !== "") yield { number: lineNumber, text: line };
     }
   } finally {
     await handle.close();
   }
 }
 
+/** Stream one segment's events in file order, validating every line. */
+async function* readSegment(path: string): AsyncGenerator<JournalEvent> {
+  for await (const line of readSegmentLines(path)) {
+    yield parseEventLine(path, line.number, line.text);
+  }
+}
+
 /** Total order over journal events: ts, then per-segment seq, then event id. */
-function compareEvents(a: JournalEvent, b: JournalEvent): number {
+export function compareEvents(a: JournalEvent, b: JournalEvent): number {
   if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
   if (a.seq !== b.seq) return a.seq - b.seq;
   if (a.id !== b.id) return a.id < b.id ? -1 : 1;
@@ -281,4 +294,62 @@ export async function* readJournal(layout: StoreLayout): AsyncGenerator<JournalE
     ...segments.archived.map((name) => join(layout.journalArchiveDir, name)),
   ];
   yield* mergeSegments(paths);
+}
+
+/** One malformed segment line: unparseable JSON or an invalid event shape. */
+export interface SegmentLineError {
+  line: number;
+  reason: string;
+}
+
+/**
+ * One segment's tolerant scan result: every valid event in file order plus
+ * every malformed line, instead of readSegment's throw-on-first-error.
+ */
+export interface SegmentScan {
+  /** Segment filename, e.g. `run-abc12345.jsonl`. */
+  name: string;
+  path: string;
+  archived: boolean;
+  events: JournalEvent[];
+  malformed: SegmentLineError[];
+}
+
+/**
+ * Tolerantly scan every segment — active and archived, name-sorted within
+ * each — validating line by line and reporting malformed lines rather than
+ * throwing. This is `validate`'s raw view of the journal (PRD F8: segment
+ * well-formedness must be REPORTED, which a throwing reader cannot do).
+ */
+export async function scanSegments(layout: StoreLayout): Promise<SegmentScan[]> {
+  const segments = await listSegments(layout);
+  const groups: Array<{ names: string[]; dir: string; archived: boolean }> = [
+    { names: [...segments.active].sort(), dir: layout.journalDir, archived: false },
+    { names: [...segments.archived].sort(), dir: layout.journalArchiveDir, archived: true },
+  ];
+  const scans: SegmentScan[] = [];
+  for (const group of groups) {
+    for (const name of group.names) {
+      const path = join(group.dir, name);
+      const scan: SegmentScan = {
+        name,
+        path,
+        archived: group.archived,
+        events: [],
+        malformed: [],
+      };
+      for await (const line of readSegmentLines(path)) {
+        try {
+          scan.events.push(journalEventSchema.parse(JSON.parse(line.text)));
+        } catch (error) {
+          scan.malformed.push({
+            line: line.number,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      scans.push(scan);
+    }
+  }
+  return scans;
 }

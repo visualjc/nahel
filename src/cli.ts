@@ -7,6 +7,8 @@
 // inside each command.
 
 import { initCommand } from "./commands/init";
+import { itemCommand } from "./commands/item";
+import { runCommand } from "./commands/run";
 import { systemEnv, type Env } from "./schema/env";
 
 export const VERSION = "0.0.1";
@@ -33,8 +35,21 @@ export interface Command {
  * The command registry. Registering a new verb is exactly two lines: one
  * import at the top of this file, one entry here.
  */
+/** Adapt a mutation-command shape (run(argv, env, cwd)) to the registry's CommandContext shape. */
+function adapt(command: {
+  description: string;
+  run(argv: string[], env: Env, cwd: string): Promise<number>;
+}): Command {
+  return {
+    description: command.description,
+    run: (argv, ctx) => command.run(argv, ctx.env, ctx.cwd),
+  };
+}
+
 export const COMMANDS: Record<string, Command> = {
   init: initCommand,
+  item: adapt(itemCommand),
+  run: adapt(runCommand),
 };
 
 function helpText(): string {

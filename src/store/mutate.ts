@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { Env } from "../schema/env";
 import {
   runSchema,
@@ -8,7 +9,13 @@ import {
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { resolveActor } from "./actor";
-import { appendEvent, newSessionSegmentId, readJournal } from "./journal";
+import {
+  appendEvent,
+  latestCandidates,
+  listSegments,
+  mergeSegments,
+  newSessionSegmentId,
+} from "./journal";
 import {
   itemExists,
   readConfig,
@@ -230,33 +237,56 @@ interface PendingRun {
 /**
  * Detect records behind their latest mutation event (the write-ahead crash
  * window) and materialize them deterministically from the event payloads.
- * Streams the journal in total order, so "latest" is identical on every
- * machine; never journals anything itself — it only makes real what the
- * journal already records. Consumed by `validate --repair` (PRD F8).
+ * Never journals anything itself — it only makes real what the journal
+ * already records. Consumed by `validate --repair` (PRD F8).
+ *
+ * "Latest" is segment-aware: within a segment seq is causal, so each
+ * segment's LAST mutation event per record supersedes its earlier ones;
+ * across segments, a same-second tie between finalists is genuinely
+ * ambiguous (per-invocation session segments, second-precision timestamps —
+ * see latestCandidates), so a record matching ANY max-ts finalist is in
+ * sync. Only a record matching none is repaired — to the total-order-latest
+ * candidate, identical on every machine.
  */
 export async function replayPending(layout: StoreLayout): Promise<RepairedRecord[]> {
-  const latestItems = new Map<string, PendingItem>();
-  const latestRuns = new Map<string, PendingRun>();
+  const itemFinalists = new Map<string, PendingItem[]>();
+  const runFinalists = new Map<string, PendingRun[]>();
 
-  for await (const event of readJournal(layout)) {
-    const payload = event.payload;
-    if (payload["target"] === "item" && payload["record"] !== undefined) {
-      const record = workItemFrontmatterSchema.parse(payload["record"]);
-      const body = payload["body"];
-      if (typeof body !== "string") {
-        throw new Error(
-          `mutation event ${event.id} has an item payload without a string body — cannot replay`,
-        );
+  const segments = await listSegments(layout);
+  const paths = [
+    ...segments.active.map((name) => join(layout.journalDir, name)),
+    ...segments.archived.map((name) => join(layout.journalArchiveDir, name)),
+  ];
+  for (const path of paths) {
+    // Per segment, append order is causal order: later overwrites earlier.
+    const segmentItems = new Map<string, PendingItem>();
+    const segmentRuns = new Map<string, PendingRun>();
+    for await (const event of mergeSegments([path])) {
+      const payload = event.payload;
+      if (payload["target"] === "item" && payload["record"] !== undefined) {
+        const record = workItemFrontmatterSchema.parse(payload["record"]);
+        const body = payload["body"];
+        if (typeof body !== "string") {
+          throw new Error(
+            `mutation event ${event.id} has an item payload without a string body — cannot replay`,
+          );
+        }
+        segmentItems.set(record.id, { event, record, body });
+      } else if (payload["target"] === "run" && payload["record"] !== undefined) {
+        const record = runSchema.parse(payload["record"]);
+        segmentRuns.set(record.id, { event, record });
       }
-      latestItems.set(record.id, { event, record, body });
-    } else if (payload["target"] === "run" && payload["record"] !== undefined) {
-      const record = runSchema.parse(payload["record"]);
-      latestRuns.set(record.id, { event, record });
+    }
+    for (const [id, pending] of segmentItems) {
+      itemFinalists.set(id, [...(itemFinalists.get(id) ?? []), pending]);
+    }
+    for (const [id, pending] of segmentRuns) {
+      runFinalists.set(id, [...(runFinalists.get(id) ?? []), pending]);
     }
   }
 
   const repaired: RepairedRecord[] = [];
-  for (const [id, pending] of [...latestItems.entries()].sort(([a], [b]) =>
+  for (const [id, finalists] of [...itemFinalists.entries()].sort(([a], [b]) =>
     a < b ? -1 : 1,
   )) {
     // An unreadable or schema-invalid current record is simply out of sync:
@@ -268,16 +298,21 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     } catch {
       current = undefined;
     }
+    const candidates = latestCandidates(finalists);
     const inSync =
       current !== undefined &&
-      JSON.stringify(current.frontmatter) === JSON.stringify(pending.record) &&
-      current.body === pending.body;
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(current!.frontmatter) === JSON.stringify(candidate.record) &&
+          current!.body === candidate.body,
+      );
     if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
       await writeItem(layout, pending.record, pending.body);
       repaired.push({ target: "item", id, eventId: pending.event.id });
     }
   }
-  for (const [id, pending] of [...latestRuns.entries()].sort(([a], [b]) =>
+  for (const [id, finalists] of [...runFinalists.entries()].sort(([a], [b]) =>
     a < b ? -1 : 1,
   )) {
     let current: Run | undefined;
@@ -286,7 +321,14 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     } catch {
       current = undefined;
     }
-    if (current === undefined || JSON.stringify(current) !== JSON.stringify(pending.record)) {
+    const candidates = latestCandidates(finalists);
+    const inSync =
+      current !== undefined &&
+      candidates.some(
+        (candidate) => JSON.stringify(current) === JSON.stringify(candidate.record),
+      );
+    if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
       await writeRun(layout, pending.record);
       repaired.push({ target: "run", id, eventId: pending.event.id });
     }

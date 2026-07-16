@@ -229,6 +229,29 @@ export function compareEvents(a: JournalEvent, b: JournalEvent): number {
 }
 
 /**
+ * Among per-segment-FINAL mutation candidates for one record, keep those
+ * carrying the maximal ts — the causal "latest" SET. Within a segment, seq
+ * orders events causally, so callers pass each segment's last mutation event
+ * per record; across segments a same-second tie is genuinely ambiguous (every
+ * CLI invocation mints its own session segment and timestamps are second-
+ * precision), so ANY max-ts finalist is a legitimate final state. Returned in
+ * ascending total order (compareEvents): the last entry is the deterministic
+ * tie-broken latest that repair materializes when no candidate matches disk.
+ */
+export function latestCandidates<T extends { event: JournalEvent }>(
+  finalists: readonly T[],
+): T[] {
+  if (finalists.length === 0) return [];
+  let maxTs = finalists[0]!.event.ts;
+  for (const finalist of finalists) {
+    if (finalist.event.ts > maxTs) maxTs = finalist.event.ts;
+  }
+  return finalists
+    .filter((finalist) => finalist.event.ts === maxTs)
+    .sort((a, b) => compareEvents(a.event, b.event));
+}
+
+/**
  * Streaming k-way merge over segment files. Each segment is read line-by-line
  * (never fully loaded); the result is the ts → seq → id total order and is
  * identical regardless of the order `paths` arrives in.

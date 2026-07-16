@@ -77,6 +77,14 @@ export type Mutation =
       eventType: string;
       frontmatter: WorkItemFrontmatter;
       body: string;
+      /**
+       * Extra fields merged into the journal event payload alongside the
+       * mutation itself — how item.claimed carries its git baseline and
+       * item.handback its evidence (PRD F9) while still flowing write-ahead
+       * through this choke point. The reserved replay keys (target, record,
+       * body) always win over extras.
+       */
+      extraPayload?: Record<string, unknown>;
     }
   | { target: "run"; eventType: string; run: Run };
 
@@ -138,7 +146,12 @@ function mutationEventFields(mutation: Mutation): {
   if (mutation.target === "item") {
     return {
       item: mutation.frontmatter.id,
-      payload: { target: "item", record: mutation.frontmatter, body: mutation.body },
+      payload: {
+        ...mutation.extraPayload,
+        target: "item",
+        record: mutation.frontmatter,
+        body: mutation.body,
+      },
     };
   }
   return {

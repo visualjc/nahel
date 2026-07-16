@@ -116,11 +116,21 @@ function parseEventLine(path: string, lineNumber: number, line: string): Journal
   }
 }
 
+/**
+ * Read and validate a segment's final event via the tail reader (no full
+ * load); null for a missing or empty segment. Used for seq derivation here
+ * and closed-session detection in rotation.
+ */
+export async function readLastEvent(path: string): Promise<JournalEvent | null> {
+  const lastLine = await readLastLine(path);
+  if (lastLine === null) return null;
+  return parseEventLine(path, -1, lastLine);
+}
+
 /** Next per-segment seq, derived from the segment's tail (survives restarts). */
 async function nextSeq(path: string): Promise<number> {
-  const lastLine = await readLastLine(path);
-  if (lastLine === null) return 0;
-  return parseEventLine(path, -1, lastLine).seq + 1;
+  const lastEvent = await readLastEvent(path);
+  return lastEvent === null ? 0 : lastEvent.seq + 1;
 }
 
 /**

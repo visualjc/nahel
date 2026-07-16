@@ -60,7 +60,7 @@ describe("nahel progress — the full timeline", () => {
       expect(lines[index]).toContain(event.ts);
     }
     // Newest last.
-    expect(lines[lines.length - 1]).toContain("test.failed");
+    expect(lines[lines.length - 1]).toContain("item.claimed");
   });
 
   test("contains NOTHING that is not in the journal — every output token traces to an event", async () => {
@@ -136,9 +136,10 @@ describe("nahel progress — filters", () => {
     const result = await runProgress(["--since", pivot.ts], store.root);
     expect(result.code).toBe(0);
     const lines = result.stdout.split("\n");
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toContain("run.ended");
     expect(lines[2]).toContain("test.failed");
+    expect(lines[3]).toContain("item.claimed");
   });
 
   test("--limit keeps the newest n events (still newest-last)", async () => {
@@ -147,8 +148,8 @@ describe("nahel progress — filters", () => {
     expect(result.code).toBe(0);
     const lines = result.stdout.split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("note");
-    expect(lines[1]).toContain("test.failed");
+    expect(lines[0]).toContain("test.failed");
+    expect(lines[1]).toContain("item.claimed");
   });
 
   test("filters compose: --item --since --limit", async () => {
@@ -162,8 +163,8 @@ describe("nahel progress — filters", () => {
     expect(result.code).toBe(0);
     const lines = result.stdout.split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("note");
-    expect(lines[1]).toContain("test.failed");
+    expect(lines[0]).toContain("test.failed");
+    expect(lines[1]).toContain("item.claimed");
   });
 });
 

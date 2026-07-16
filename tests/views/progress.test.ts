@@ -32,7 +32,7 @@ describe("renderProgress — pure renderer, newest last", () => {
     const lines = renderProgress(events).split("\n");
     expect(lines).toHaveLength(events.length);
     expect(lines[0]).toContain("item.created");
-    expect(lines[lines.length - 1]).toContain("test.failed");
+    expect(lines[lines.length - 1]).toContain("item.claimed");
     // Timestamps ascend down the page: newest last.
     const stamps = lines.map((line) => line.slice(0, 20));
     expect([...stamps].sort()).toEqual(stamps);
@@ -79,13 +79,18 @@ describe("collectProgress — streaming filters", () => {
     const events = await allEvents(store);
     const pivot = events.find((event) => event.type === "run.ended")!;
     const filtered = await collectProgress(store.layout, { since: pivot.ts });
-    expect(filtered.map((event) => event.type)).toEqual(["run.ended", "note", "test.failed"]);
+    expect(filtered.map((event) => event.type)).toEqual([
+      "run.ended",
+      "note",
+      "test.failed",
+      "item.claimed",
+    ]);
   });
 
   test("limit keeps the NEWEST n events, still oldest-first for rendering", async () => {
     const store = await buildPopulatedStore(tempDirs);
     const filtered = await collectProgress(store.layout, { limit: 3 });
-    expect(filtered.map((event) => event.type)).toEqual(["run.ended", "note", "test.failed"]);
+    expect(filtered.map((event) => event.type)).toEqual(["note", "test.failed", "item.claimed"]);
   });
 
   test("item filtering covers the subtree AND run-ref-only events of the subtree's runs", async () => {
@@ -112,6 +117,7 @@ describe("collectProgress — streaming filters", () => {
       "run.ended",
       "note",
       "test.failed",
+      "item.claimed", // task-alpha claimed by jim — inside the subtree
     ]);
     for (const event of filtered) {
       expect(event.item === undefined || event.item !== store.soloChoreId).toBe(true);
@@ -135,7 +141,7 @@ describe("collectProgress — streaming filters", () => {
       since: pivot.ts,
       limit: 2,
     });
-    expect(filtered.map((event) => event.type)).toEqual(["note", "test.failed"]);
+    expect(filtered.map((event) => event.type)).toEqual(["test.failed", "item.claimed"]);
   });
 });
 

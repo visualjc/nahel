@@ -3,7 +3,8 @@ import { itemCommand } from "../../src/commands/item";
 import { logCommand } from "../../src/commands/log";
 import { runCommand } from "../../src/commands/run";
 import type { Env } from "../../src/schema/env";
-import { ensureLayout, readItem, writeConfig, writeItem, type StoreLayout } from "../../src/store/layout";
+import { ensureLayout, readItem, writeConfig, type StoreLayout } from "../../src/store/layout";
+import { createStoreContext, mutate } from "../../src/store/mutate";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
@@ -50,6 +51,7 @@ export const FIXTURE_EVENT_TYPES = [
   "run.ended", // ended run → success
   "note", // logged against task-alpha
   "test.failed", // logged against the active run (run ref only, no item ref)
+  "item.claimed", // task-alpha claimed by human:jim via mutate() — the newest event
 ] as const;
 
 /**
@@ -160,10 +162,17 @@ export async function buildPopulatedStore(
     root,
   );
 
-  // Claim task-alpha through the store (the claim command is issue #9's):
-  // views render claims straight from the frontmatter's claimed_by field.
+  // Claim task-alpha through the mutate() choke point so the journal stays
+  // consistent with the record (validate's journal.divergence check would
+  // rightly flag a raw writeItem here as a hand-edit).
   const { frontmatter, body } = await readItem(layout, taskAlphaId);
-  await writeItem(layout, { ...frontmatter, claimed_by: "jim" }, body);
+  const claimCtx = await createStoreContext(root, env, { actorOverride: "human:jim" });
+  await mutate(claimCtx, {
+    target: "item",
+    eventType: "item.claimed",
+    frontmatter: { ...frontmatter, claimed_by: "jim" },
+    body,
+  });
 
   return {
     root,

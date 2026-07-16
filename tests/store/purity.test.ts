@@ -7,6 +7,7 @@ const STORE_DIR = join(SRC_DIR, "store");
 
 const EXPECTED_STORE_FILES = [
   "actor.ts",
+  "baseline.ts",
   "frontmatter.ts",
   "hotstate.ts",
   "journal.ts",
@@ -18,8 +19,15 @@ const EXPECTED_STORE_FILES = [
 /** fs imports are the store layer's exclusive privilege. */
 const FS_IMPORT = /from\s+["'](node:)?(fs|fs\/promises)["']/;
 
-/** Network and process spawning belong to no layer in this codebase. */
-const FORBIDDEN_EVERYWHERE = /from\s+["'](node:)?(net|http|https|http2|dns|tls|child_process|worker_threads)["']/;
+/** The network belongs to no layer in this codebase. */
+const FORBIDDEN_EVERYWHERE = /from\s+["'](node:)?(net|http|https|http2|dns|tls)["']/;
+
+/**
+ * Process spawning is store-layer I/O with exactly one legitimate use:
+ * baseline.ts spawning `git` for claim baselines and handback evidence
+ * (PRD F9). Everywhere else it stays forbidden.
+ */
+const PROCESS_SPAWN_IMPORT = /from\s+["'](node:)?(child_process|worker_threads)["']/;
 
 /** Ambient I/O and environment access forbidden in the store layer. */
 const FORBIDDEN_GLOBALS = [/\bfetch\s*\(/, /\bBun\.(file|write|spawn|serve|env)\b/, /\bprocess\.env\b/];
@@ -38,7 +46,7 @@ function tsFilesUnder(dir: string): string[] {
 }
 
 describe("store layer owns ALL fs I/O", () => {
-  test("src/store contains exactly the seven store modules", () => {
+  test("src/store contains exactly the known store modules", () => {
     expect(readdirSync(STORE_DIR).sort()).toEqual(EXPECTED_STORE_FILES);
   });
 
@@ -50,11 +58,25 @@ describe("store layer owns ALL fs I/O", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("no file anywhere in src/ reaches for the network or child processes", () => {
+  test("no file anywhere in src/ reaches for the network", () => {
     const offenders = tsFilesUnder(SRC_DIR)
       .filter((path) => FORBIDDEN_EVERYWHERE.test(readFileSync(path, "utf8")))
       .map((path) => relative(SRC_DIR, path));
     expect(offenders).toEqual([]);
+  });
+
+  test("spawning processes is store/baseline.ts's exclusive privilege (git evidence capture)", () => {
+    const baselinePath = join(STORE_DIR, "baseline.ts");
+    const offenders = tsFilesUnder(SRC_DIR)
+      .filter((path) => path !== baselinePath)
+      .filter((path) => PROCESS_SPAWN_IMPORT.test(readFileSync(path, "utf8")))
+      .map((path) => relative(SRC_DIR, path));
+    expect(offenders).toEqual([]);
+    // The exemption is load-bearing, not decorative: baseline.ts really does
+    // spawn git through child_process (and nothing broader).
+    const source = readFileSync(baselinePath, "utf8");
+    expect(source).toMatch(/from\s+["']node:child_process["']/);
+    expect(source).not.toMatch(/worker_threads/);
   });
 
   for (const file of EXPECTED_STORE_FILES) {

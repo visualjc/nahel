@@ -38,3 +38,10 @@ governance:
   product: human        # Jim Carter (visualjc)
   architecture: human   # Jim Carter (visualjc)
 ```
+
+## Change log
+
+Every change to this document is recorded here with the human sign-off that authorized it.
+
+- **2026-07-15** — Drafted by the founding agent, transcribed from Jim Carter's decisions in the founding grilling session (2026-07-14/15).
+- **2026-07-15** — Reviewed and blessed by Jim Carter; change-log section added under the same sign-off.

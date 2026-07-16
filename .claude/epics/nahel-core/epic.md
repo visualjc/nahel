@@ -4,7 +4,7 @@ status: backlog
 created: 2026-07-16T16:54:21Z
 progress: 0%
 prd: .claude/prds/nahel-core.md
-github: [Will be updated when synced to GitHub]
+github: https://github.com/visualjc/nahel/issues/1
 ---
 
 # Epic: nahel-core
@@ -77,20 +77,20 @@ Dependency shape: T1 → T2 → {T3, T4, T5} → {T6, T7, T8, T9} → T10.
 
 ## Tasks Created
 
-- [ ] 001.md - Schema layer — types, validation, injected ID/clock (parallel: true)
-- [ ] 002.md - Store layer — atomic I/O, journal segments, mutation choke point (parallel: false)
-- [ ] 003.md - nahel init — scaffold, config, templates (parallel: true)
-- [ ] 004.md - Mutation commands — item new/update, run start/update/end (parallel: true)
-- [ ] 005.md - nahel log — typed events, non-run segments (parallel: true)
-- [ ] 006.md - Views — nahel status and nahel progress (parallel: true)
-- [ ] 007.md - nahel brief — composition, verbatim extraction, truncation (parallel: true)
-- [ ] 008.md - nahel validate — integrity checks and warnings (parallel: true)
-- [ ] 009.md - Intervention ops — pause, claim, handback (parallel: true)
-- [ ] 010.md - Workflow format, install shims, acceptance proofs, self-init (parallel: false)
+- [ ] #2 - Schema layer — types, validation, injected ID/clock (parallel: true)
+- [ ] #3 - Store layer — atomic I/O, journal segments, mutation choke point (parallel: false)
+- [ ] #4 - nahel init — scaffold, config, templates (parallel: true)
+- [ ] #5 - Mutation commands — item new/update, run start/update/end (parallel: true)
+- [ ] #6 - nahel log — typed events, non-run segments (parallel: true)
+- [ ] #7 - Views — nahel status and nahel progress (parallel: true)
+- [ ] #8 - nahel brief — composition, verbatim extraction, truncation (parallel: true)
+- [ ] #9 - nahel validate — integrity checks and warnings (parallel: true)
+- [ ] #10 - Intervention ops — pause, claim, handback (parallel: true)
+- [ ] #11 - Workflow format, install shims, acceptance proofs, self-init (parallel: false)
 
 Total tasks: 10
 Parallel tasks: 8 (within their dependency waves; all command tasks share `src/cli.ts` registration — noted in conflicts_with)
-Sequential tasks: 2 (002 critical path, 010 final integration)
+Sequential tasks: 2 (#3 critical path, #11 final integration)
 Estimated total effort: 67 hours
 
 ## Estimated Effort

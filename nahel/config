@@ -1,0 +1,7 @@
+knowledge:
+  product: PRODUCT.md
+  context: CONTEXT.md
+  adr: docs/adr
+actor:
+  kind: human
+  id: maintainer

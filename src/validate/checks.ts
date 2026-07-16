@@ -12,7 +12,12 @@ import {
   type WorkItemFrontmatter,
 } from "../schema/records";
 import type { HotState } from "../store/hotstate";
-import { compareEvents, SESSION_CLOSED_EVENT_TYPE, type SegmentScan } from "../store/journal";
+import {
+  compareEvents,
+  latestCandidates,
+  SESSION_CLOSED_EVENT_TYPE,
+  type SegmentScan,
+} from "../store/journal";
 
 /**
  * `nahel validate`'s check library (PRD F8): pure functions over the raw
@@ -582,19 +587,25 @@ function checkJournal(state: ParsedState): Finding[] {
 
 /**
  * Journal-ahead divergence (PRD F1's write-ahead crash window): a record
- * behind — or missing, or differing from — its LATEST mutation event in total
- * order. `validate --repair` replays these via the store's replayPending().
+ * behind — or missing, or differing from — its latest mutation event.
+ * `validate --repair` replays these via the store's replayPending().
  * Mutation events whose payload cannot be replayed are reported instead.
+ *
+ * "Latest" mirrors replayPending's segment-aware rule: within a segment seq
+ * is causal (only the segment's LAST mutation event per record counts);
+ * across segments, same-second finalists are genuinely order-ambiguous
+ * (per-invocation session segments, second-precision timestamps — see the
+ * store's latestCandidates), so a record matching ANY max-ts finalist is in
+ * sync. Anything less would flag a false divergence — and repair would
+ * REGRESS the record — whenever two CLI invocations mutate one record within
+ * the same wall-clock second.
  */
 function checkDivergence(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
-  const latestItems = new Map<string, { event: JournalEvent; record: WorkItemFrontmatter; body: string }>();
-  const latestRuns = new Map<string, { event: JournalEvent; record: Run }>();
 
   for (const event of state.events) {
     const mutation = mutationRecord(event);
-    if (mutation === undefined) continue;
-    if ("invalid" in mutation) {
+    if (mutation !== undefined && "invalid" in mutation) {
       findings.push({
         severity: "error",
         check: "journal.payload",
@@ -603,28 +614,52 @@ function checkDivergence(state: ParsedState): Finding[] {
           `${mutation.target} payload — ${mutation.invalid} — repair cannot use it`,
         fix: "the event payload was corrupted — restore the segment from git",
       });
-      continue;
     }
-    if (mutation.target === "item") {
-      latestItems.set(mutation.record.id, {
-        event,
-        record: mutation.record,
-        body: mutation.body,
-      });
-    } else {
-      latestRuns.set(mutation.record.id, { event, record: mutation.record });
+  }
+
+  type ItemFinalist = { event: JournalEvent; record: WorkItemFrontmatter; body: string };
+  type RunFinalist = { event: JournalEvent; record: Run };
+  const itemFinalists = new Map<string, ItemFinalist[]>();
+  const runFinalists = new Map<string, RunFinalist[]>();
+  for (const segment of state.input.segments) {
+    // Per segment, event order is causal order: later overwrites earlier.
+    const segmentItems = new Map<string, ItemFinalist>();
+    const segmentRuns = new Map<string, RunFinalist>();
+    for (const event of segment.events) {
+      const mutation = mutationRecord(event);
+      if (mutation === undefined || "invalid" in mutation) continue;
+      if (mutation.target === "item") {
+        segmentItems.set(mutation.record.id, {
+          event,
+          record: mutation.record,
+          body: mutation.body,
+        });
+      } else {
+        segmentRuns.set(mutation.record.id, { event, record: mutation.record });
+      }
+    }
+    for (const [id, finalist] of segmentItems) {
+      itemFinalists.set(id, [...(itemFinalists.get(id) ?? []), finalist]);
+    }
+    for (const [id, finalist] of segmentRuns) {
+      runFinalists.set(id, [...(runFinalists.get(id) ?? []), finalist]);
     }
   }
 
   const repairFix =
     "run `nahel validate --repair` — it replays the journaled mutation and only materializes what the journal already records";
-  for (const [id, pending] of latestItems) {
+  for (const [id, finalists] of itemFinalists) {
     const disk = state.items.get(id);
+    const candidates = latestCandidates(finalists);
     const inSync =
       disk !== undefined &&
-      JSON.stringify(disk.record) === JSON.stringify(pending.record) &&
-      disk.body === pending.body;
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
+          disk.body === candidate.body,
+      );
     if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
       findings.push({
         severity: "error",
         check: "journal.divergence",
@@ -636,11 +671,16 @@ function checkDivergence(state: ParsedState): Finding[] {
       });
     }
   }
-  for (const [id, pending] of latestRuns) {
+  for (const [id, finalists] of runFinalists) {
     const disk = state.runs.get(id);
+    const candidates = latestCandidates(finalists);
     const inSync =
-      disk !== undefined && JSON.stringify(disk.record) === JSON.stringify(pending.record);
+      disk !== undefined &&
+      candidates.some(
+        (candidate) => JSON.stringify(disk.record) === JSON.stringify(candidate.record),
+      );
     if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
       findings.push({
         severity: "error",
         check: "journal.divergence",

@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import YAML from "yaml";
 import {
@@ -133,6 +133,36 @@ export async function readTextFile(path: string): Promise<string | null> {
     const code = (error as { code?: unknown }).code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
     throw error;
+  }
+}
+
+/** Directory of the canonical workflow docs (PRD F10): nahel/workflows. */
+export function workflowsDir(layout: StoreLayout): string {
+  return join(layout.nahelDir, "workflows");
+}
+
+/**
+ * Sorted markdown file names in a directory ([] when it is missing). Additive
+ * store export for `nahel install` (task #11): the workflow scan and the
+ * shim-directory scan are directory listings the command layer may not do
+ * itself — fs is the store's exclusive privilege (see tests/store/purity).
+ */
+export async function listMarkdownDocs(dir: string): Promise<string[]> {
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  return entries.filter((name) => name.endsWith(".md")).sort();
+}
+
+/**
+ * Delete one file; a missing file is a no-op. Additive store export for
+ * `nahel install`'s stale-shim pruning — the store's only delete primitive,
+ * deliberately file-scoped (nothing recursive).
+ */
+export async function removeFile(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
   }
 }
 

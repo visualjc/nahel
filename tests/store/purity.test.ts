@@ -66,3 +66,28 @@ describe("store layer owns ALL fs I/O", () => {
     });
   }
 });
+
+describe("command and template layers are pure over the store", () => {
+  // Commands are thin verbs: all I/O flows through src/store, all time and
+  // randomness through the injected Env. Templates are pure strings. Only the
+  // cli.ts entry point may touch the ambient process (argv, cwd, exit).
+  for (const layer of ["commands", "templates"]) {
+    test(`src/${layer} files use no ambient environment, time, or randomness`, () => {
+      const files = tsFilesUnder(join(SRC_DIR, layer));
+      expect(files.length).toBeGreaterThan(0);
+      for (const path of files) {
+        const source = readFileSync(path, "utf8");
+        for (const pattern of [...FORBIDDEN_GLOBALS, ...AMBIENT_TIME_RANDOMNESS]) {
+          expect(source).not.toMatch(pattern);
+        }
+      }
+    });
+  }
+
+  test("src/templates modules import nothing at all — pure string templates", () => {
+    for (const path of tsFilesUnder(join(SRC_DIR, "templates"))) {
+      const source = readFileSync(path, "utf8");
+      expect(source).not.toMatch(/^\s*import\s/m);
+    }
+  });
+});

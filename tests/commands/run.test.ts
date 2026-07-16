@@ -188,7 +188,7 @@ describe("run start", () => {
     expect(stderr()).toContain("jim");
     expect(stderr()).toContain("handback");
     expect(await listRuns(layout)).toEqual([]);
-    expect(segmentEvents(layout, "zzzzzzzz")).rejects.toThrow(); // and obviously no segment
+    await expect(segmentEvents(layout, "zzzzzzzz")).rejects.toThrow(); // and obviously no segment
     expect(await journalEvents(layout)).toHaveLength(1); // only item.created
   });
 

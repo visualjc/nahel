@@ -208,7 +208,7 @@ async function* readSegment(path: string): AsyncGenerator<JournalEvent> {
 }
 
 /** Total order over journal events: ts, then per-segment seq, then event id. */
-export function compareEvents(a: JournalEvent, b: JournalEvent): number {
+function compareEvents(a: JournalEvent, b: JournalEvent): number {
   if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
   if (a.seq !== b.seq) return a.seq - b.seq;
   if (a.id !== b.id) return a.id < b.id ? -1 : 1;

@@ -8,6 +8,7 @@
 
 import { briefCommand } from "./commands/brief";
 import { initCommand } from "./commands/init";
+import { installCommand } from "./commands/install";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
@@ -64,6 +65,7 @@ export const COMMANDS: Record<string, Command> = {
   claim: adapt(claimCommand),
   handback: adapt(handbackCommand),
   init: initCommand,
+  install: installCommand,
   item: adapt(itemCommand),
   log: logCommand,
   pause: adapt(pauseCommand),

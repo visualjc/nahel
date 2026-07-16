@@ -1,8 +1,8 @@
 ---
 name: nahel-core
-status: backlog
+status: completed
 created: 2026-07-16T16:54:21Z
-progress: 0%
+progress: 100%
 prd: .claude/prds/nahel-core.md
 github: https://github.com/visualjc/nahel/issues/1
 ---

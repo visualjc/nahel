@@ -27,20 +27,36 @@ async function requireRun(layout: StoreLayout, runId: string): Promise<void> {
   }
 }
 
-/** Read a run's hot state; refuses unknown runs and missing state. */
-export async function readHotState(layout: StoreLayout, runId: string): Promise<HotState> {
+/**
+ * Read a run's hot state, or null when state.json does not exist yet (the
+ * write-ahead crash window can leave a run without hot state). Still refuses
+ * unknown runs and still throws on malformed content — that IS corrupt state.
+ */
+export async function readHotStateOrNull(
+  layout: StoreLayout,
+  runId: string,
+): Promise<HotState | null> {
   await requireRun(layout, runId);
   let text: string;
   try {
     text = await readFile(hotStatePath(layout, runId), "utf8");
   } catch {
-    throw new Error(`run ${runId} has no hot state yet at ${hotStatePath(layout, runId)}`);
+    return null;
   }
   const parsed: unknown = JSON.parse(text);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`hot state for run ${runId} must be a JSON object`);
   }
   return parsed as HotState;
+}
+
+/** Read a run's hot state; refuses unknown runs and missing state. */
+export async function readHotState(layout: StoreLayout, runId: string): Promise<HotState> {
+  const state = await readHotStateOrNull(layout, runId);
+  if (state === null) {
+    throw new Error(`run ${runId} has no hot state yet at ${hotStatePath(layout, runId)}`);
+  }
+  return state;
 }
 
 /** Atomically overwrite a run's hot state; refuses unknown runs. */

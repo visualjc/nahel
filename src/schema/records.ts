@@ -106,6 +106,8 @@ export type ObservationFrontmatter = z.infer<typeof observationFrontmatterSchema
 /**
  * Config — `nahel/config`: where the knowledge layer lives (paths relative to
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
+ * The optional `validate` block tunes the maintenance-warning thresholds
+ * (PRD F8, ADR-0004) — additive, so existing configs stay valid.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -114,5 +116,21 @@ export const configSchema = z.strictObject({
     adr: nonEmptyString("knowledge.adr path"),
   }),
   actor: actorSchema,
+  validate: z
+    .strictObject({
+      /** Warn when this many closed segments sit unarchived (rotation debt). */
+      rotation_overdue_segments: z
+        .number()
+        .int("rotation_overdue_segments must be an integer")
+        .positive("rotation_overdue_segments must be >= 1")
+        .optional(),
+      /** Warn when the journal holds this many events (compaction debt). */
+      compaction_overdue_events: z
+        .number()
+        .int("compaction_overdue_events must be an integer")
+        .positive("compaction_overdue_events must be >= 1")
+        .optional(),
+    })
+    .optional(),
 });
 export type Config = z.infer<typeof configSchema>;

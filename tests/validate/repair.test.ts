@@ -79,6 +79,31 @@ describe("validate — journal-ahead divergence and --repair (kill-injected cras
     expect(findings[0]!.message).toContain(v1.id);
   });
 
+  test("repair also heals a SCHEMA-CORRUPT record whose truth the journal holds (found by driving)", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, {}, "the journaled truth\n");
+
+    // Hand-corrupt the on-disk record: an invalid status the schema rejects.
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const { itemPath } = await import("../../src/store/layout");
+    const path = itemPath(fixture.layout, item.id);
+    await writeFile(path, (await readFile(path, "utf8")).replace("status: backlog", "status: cooking"));
+
+    // Detected as both a schema error and a divergence from the journal.
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "schema.item")).toHaveLength(1);
+    expect(findingsFor(findings, "journal.divergence")).toHaveLength(1);
+
+    // replayPending must not choke on the corrupt current record — the
+    // journal already records the truth, so repair restores it.
+    const repaired = await replayPending(fixture.layout);
+    expect(repaired.map((r) => `${r.target}:${r.id}`)).toEqual([`item:${item.id}`]);
+    const healed = await readItem(fixture.layout, item.id);
+    expect(healed.frontmatter).toEqual(item);
+    expect(healed.body).toBe("the journaled truth\n");
+    expect(await validateStore(fixture.layout)).toEqual([]);
+  });
+
   test("a mutation event whose payload cannot be replayed is reported, never thrown", async () => {
     const fixture = await setupFixture(dirs);
     await appendEvent(fixture.layout, fixture.env, {

@@ -8,6 +8,7 @@
 
 import { initCommand } from "./commands/init";
 import { itemCommand } from "./commands/item";
+import { logCommand } from "./commands/log";
 import { runCommand } from "./commands/run";
 import { systemEnv, type Env } from "./schema/env";
 import { NAHEL_ACTOR_VAR } from "./store/actor";
@@ -56,6 +57,7 @@ function adapt(command: {
 export const COMMANDS: Record<string, Command> = {
   init: initCommand,
   item: adapt(itemCommand),
+  log: logCommand,
   run: adapt(runCommand),
 };
 

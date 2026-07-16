@@ -7,9 +7,12 @@
 // inside each command.
 
 import { initCommand } from "./commands/init";
+import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
+import { progressCommand } from "./commands/progress";
 import { runCommand } from "./commands/run";
+import { statusCommand } from "./commands/status";
 import { systemEnv, type Env } from "./schema/env";
 import { NAHEL_ACTOR_VAR } from "./store/actor";
 
@@ -55,10 +58,15 @@ function adapt(command: {
 }
 
 export const COMMANDS: Record<string, Command> = {
+  claim: adapt(claimCommand),
+  handback: adapt(handbackCommand),
   init: initCommand,
   item: adapt(itemCommand),
   log: logCommand,
+  pause: adapt(pauseCommand),
+  progress: progressCommand,
   run: adapt(runCommand),
+  status: statusCommand,
 };
 
 function helpText(): string {

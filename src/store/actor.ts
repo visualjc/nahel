@@ -5,9 +5,9 @@ import { actorSchema, type Actor } from "../schema/records";
  * Actor resolution (PRD F9, trust boundary settled): identity comes from the
  * config actor entry or the NAHEL_ACTOR environment override — never a casual
  * per-command flag. The environment variable's *value* is read at the entry
- * point and passed in here; nothing deep in the store touches process.env.
- * This is a cooperative guardrail, not auth — no identity machinery beyond
- * validation belongs here (hard constraint 1).
+ * point and passed in here; nothing deep in the store reads the process
+ * environment. This is a cooperative guardrail, not auth — no identity
+ * machinery beyond validation belongs here (hard constraint 1).
  */
 
 /** Name of the environment override; the entry point reads it and passes the value down. */

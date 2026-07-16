@@ -1,0 +1,489 @@
+import { describe, expect, test } from "bun:test";
+import type { ZodType } from "zod";
+import { CORE_EVENT_TYPES } from "../../src/schema/events";
+import { generateId } from "../../src/schema/id";
+import {
+  actorSchema,
+  configSchema,
+  journalEventSchema,
+  observationFrontmatterSchema,
+  runSchema,
+  workItemFrontmatterSchema,
+  type WorkItemFrontmatter,
+} from "../../src/schema/records";
+import { fixedEnv } from "./fixed-env";
+
+/**
+ * Parse an expected-invalid value and return its issues as "path: message"
+ * strings. Logs them so failing runs show exactly what the validator said —
+ * the error text itself is part of the contract under test.
+ */
+function rejectionIssues(schema: ZodType, value: unknown, label: string): string[] {
+  const result = schema.safeParse(value);
+  if (result.success) {
+    throw new Error(`${label}: expected validation to fail but it passed`);
+  }
+  const rendered = result.error.issues.map(
+    (issue) => `${issue.path.join(".")}: ${issue.message}`,
+  );
+  console.log(`[${label}]`, rendered);
+  return rendered;
+}
+
+function expectAccepted(schema: ZodType, value: unknown, label: string): void {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    console.log(`[${label}] unexpected issues:`, result.error.issues);
+  }
+  expect(result.success).toBe(true);
+}
+
+const NOW = "2026-07-16T12:00:00Z";
+
+const validItem = {
+  id: "0gz8r4cm",
+  name: "schema-layer",
+  type: "feature",
+  status: "backlog",
+  lane: "direct",
+  depends_on: [],
+  external_refs: [],
+  created: NOW,
+  updated: NOW,
+};
+
+const validRun = {
+  id: "abcdefgh",
+  item: "0gz8r4cm",
+  actor: { kind: "agent", id: "claude-code" },
+  lane: "direct",
+  phase: "implementing",
+  status: "active",
+  started: NOW,
+};
+
+const validEvent = {
+  id: "kqm3vx7t",
+  ts: NOW,
+  seq: 0,
+  type: CORE_EVENT_TYPES.itemCreated,
+  actor: { kind: "human", id: "jim" },
+  payload: { name: "schema-layer" },
+};
+
+const validObservation = {
+  id: "2n4p6q8r",
+  created: NOW,
+  tags: ["cli", "journal"],
+  sources: ["kqm3vx7t"],
+};
+
+const validConfig = {
+  knowledge: { product: "PRODUCT.md", context: "CONTEXT.md", adr: "docs/adr" },
+  actor: { kind: "human", id: "jim" },
+};
+
+describe("schema/records — work item frontmatter", () => {
+  test("accepts a minimal valid work item", () => {
+    expectAccepted(workItemFrontmatterSchema, validItem, "item minimal");
+  });
+
+  test("accepts optional parent, claimed_by, refs, and dependencies", () => {
+    expectAccepted(
+      workItemFrontmatterSchema,
+      {
+        ...validItem,
+        parent: "abcdefgh",
+        claimed_by: "jim",
+        depends_on: ["kqm3vx7t"],
+        external_refs: [{ provider: "github", id: "2" }],
+      },
+      "item full",
+    );
+  });
+
+  test("rejects a malformed id with a message naming the base32 format", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, id: "NOT-VALID-ID" },
+      "item bad id",
+    );
+    expect(issues.some((i) => i.startsWith("id:") && i.includes("base32"))).toBe(true);
+  });
+
+  test("rejects a non-slug name with a message naming the slug rule", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, name: "Not A Slug!" },
+      "item bad name",
+    );
+    expect(issues.some((i) => i.startsWith("name:") && i.includes("slug"))).toBe(true);
+  });
+
+  test("rejects an unknown type, listing the valid types", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, type: "task" },
+      "item bad type",
+    );
+    const typeIssue = issues.find((i) => i.startsWith("type:"));
+    expect(typeIssue).toBeDefined();
+    for (const valid of ["feature", "bug", "chore", "plan", "prototype", "qa"]) {
+      expect(typeIssue).toContain(valid);
+    }
+  });
+
+  test("rejects an unknown status, listing the valid statuses", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, status: "todo" },
+      "item bad status",
+    );
+    const statusIssue = issues.find((i) => i.startsWith("status:"));
+    expect(statusIssue).toBeDefined();
+    for (const valid of ["backlog", "in-progress", "blocked", "in-review", "done", "dropped"]) {
+      expect(statusIssue).toContain(valid);
+    }
+  });
+
+  test("rejects an unknown lane, listing the valid lanes", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, lane: "yolo" },
+      "item bad lane",
+    );
+    const laneIssue = issues.find((i) => i.startsWith("lane:"));
+    expect(laneIssue).toBeDefined();
+    for (const valid of ["direct", "epic-lite", "full"]) {
+      expect(laneIssue).toContain(valid);
+    }
+  });
+
+  test("rejects a malformed parent id, pointing at the parent field", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, parent: "nope" },
+      "item bad parent",
+    );
+    expect(issues.some((i) => i.startsWith("parent:"))).toBe(true);
+  });
+
+  test("rejects a malformed depends_on entry, pointing at the exact index", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, depends_on: ["0gz8r4cm", "BAD"] },
+      "item bad depends_on",
+    );
+    expect(issues.some((i) => i.startsWith("depends_on.1:"))).toBe(true);
+  });
+
+  test("rejects an external_ref missing its provider, pointing at the field", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, external_refs: [{ id: "42" }] },
+      "item bad external_refs",
+    );
+    expect(issues.some((i) => i.startsWith("external_refs.0.provider:"))).toBe(true);
+  });
+
+  test("rejects an empty claimed_by", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, claimed_by: "" },
+      "item empty claimed_by",
+    );
+    expect(issues.some((i) => i.startsWith("claimed_by:"))).toBe(true);
+  });
+
+  test("rejects a non-UTC created timestamp, naming the required format", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, created: "2026-07-16T12:00:00+02:00" },
+      "item non-utc created",
+    );
+    expect(
+      issues.some((i) => i.startsWith("created:") && i.includes("YYYY-MM-DDTHH:MM:SSZ")),
+    ).toBe(true);
+  });
+
+  test("rejects a millisecond-precision updated timestamp (repo rule: second precision)", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, updated: "2026-07-16T12:00:00.123Z" },
+      "item ms updated",
+    );
+    expect(issues.some((i) => i.startsWith("updated:"))).toBe(true);
+  });
+
+  test("rejects unknown frontmatter keys, naming the offending key (typo guard)", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, statuss: "done" },
+      "item unknown key",
+    );
+    expect(issues.some((i) => i.includes("statuss"))).toBe(true);
+  });
+
+  test("rejects a missing required field, pointing at it by name", () => {
+    const { name: _omitted, ...withoutName } = validItem;
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      withoutName,
+      "item missing name",
+    );
+    expect(issues.some((i) => i.startsWith("name:"))).toBe(true);
+  });
+});
+
+describe("schema/records — run", () => {
+  test("accepts an active run without ended, and an ended run with it", () => {
+    expectAccepted(runSchema, validRun, "run active");
+    expectAccepted(
+      runSchema,
+      { ...validRun, status: "ended", ended: "2026-07-16T13:00:00Z" },
+      "run ended",
+    );
+  });
+
+  test("rejects a run without an actor", () => {
+    const { actor: _omitted, ...withoutActor } = validRun;
+    const issues = rejectionIssues(runSchema, withoutActor, "run missing actor");
+    expect(issues.some((i) => i.startsWith("actor:"))).toBe(true);
+  });
+
+  test("rejects an unknown run status, listing the valid ones", () => {
+    const issues = rejectionIssues(
+      runSchema,
+      { ...validRun, status: "running" },
+      "run bad status",
+    );
+    const statusIssue = issues.find((i) => i.startsWith("status:"));
+    expect(statusIssue).toBeDefined();
+    for (const valid of ["active", "paused", "ended"]) {
+      expect(statusIssue).toContain(valid);
+    }
+  });
+
+  test("rejects an empty phase (phase is a workflow-owned non-empty string)", () => {
+    const issues = rejectionIssues(runSchema, { ...validRun, phase: "" }, "run empty phase");
+    expect(issues.some((i) => i.startsWith("phase:"))).toBe(true);
+  });
+
+  test("rejects a malformed item ref", () => {
+    const issues = rejectionIssues(
+      runSchema,
+      { ...validRun, item: "not-an-id" },
+      "run bad item ref",
+    );
+    expect(issues.some((i) => i.startsWith("item:") && i.includes("base32"))).toBe(true);
+  });
+
+  test("rejects a malformed ended timestamp", () => {
+    const issues = rejectionIssues(
+      runSchema,
+      { ...validRun, ended: "yesterday" },
+      "run bad ended",
+    );
+    expect(issues.some((i) => i.startsWith("ended:"))).toBe(true);
+  });
+});
+
+describe("schema/records — journal event", () => {
+  test("accepts a valid event, with and without run/item refs", () => {
+    expectAccepted(journalEventSchema, validEvent, "event minimal");
+    expectAccepted(
+      journalEventSchema,
+      { ...validEvent, run: "abcdefgh", item: "0gz8r4cm" },
+      "event with refs",
+    );
+  });
+
+  test("rejects an event without an actor (actor is required on every event)", () => {
+    const { actor: _omitted, ...withoutActor } = validEvent;
+    const issues = rejectionIssues(
+      journalEventSchema,
+      withoutActor,
+      "event missing actor",
+    );
+    expect(issues.some((i) => i.startsWith("actor:"))).toBe(true);
+  });
+
+  test("rejects an actor with an unknown kind, listing human|agent", () => {
+    const issues = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, actor: { kind: "robot", id: "hal" } },
+      "event bad actor kind",
+    );
+    const kindIssue = issues.find((i) => i.startsWith("actor.kind:"));
+    expect(kindIssue).toBeDefined();
+    expect(kindIssue).toContain("human");
+    expect(kindIssue).toContain("agent");
+  });
+
+  test("rejects an actor with an empty id", () => {
+    const issues = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, actor: { kind: "agent", id: "" } },
+      "event empty actor id",
+    );
+    expect(issues.some((i) => i.startsWith("actor.id:"))).toBe(true);
+  });
+
+  test("rejects a negative or fractional seq (per-segment monotonic counter)", () => {
+    const negative = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, seq: -1 },
+      "event negative seq",
+    );
+    expect(negative.some((i) => i.startsWith("seq:"))).toBe(true);
+    const fractional = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, seq: 1.5 },
+      "event fractional seq",
+    );
+    expect(fractional.some((i) => i.startsWith("seq:"))).toBe(true);
+  });
+
+  test("rejects a malformed ts, naming the required format", () => {
+    const issues = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, ts: "16/07/2026" },
+      "event bad ts",
+    );
+    expect(issues.some((i) => i.startsWith("ts:") && i.includes("YYYY-MM-DDTHH:MM:SSZ"))).toBe(
+      true,
+    );
+  });
+
+  test("rejects a non-object payload", () => {
+    const issues = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, payload: "not an object" },
+      "event bad payload",
+    );
+    expect(issues.some((i) => i.startsWith("payload:"))).toBe(true);
+  });
+
+  test("rejects a malformed run ref", () => {
+    const issues = rejectionIssues(
+      journalEventSchema,
+      { ...validEvent, run: "RUN#1" },
+      "event bad run ref",
+    );
+    expect(issues.some((i) => i.startsWith("run:"))).toBe(true);
+  });
+});
+
+describe("schema/records — observation frontmatter", () => {
+  test("accepts a valid observation", () => {
+    expectAccepted(observationFrontmatterSchema, validObservation, "observation valid");
+  });
+
+  test("rejects a malformed sources entry (provenance must be event ids)", () => {
+    const issues = rejectionIssues(
+      observationFrontmatterSchema,
+      { ...validObservation, sources: ["kqm3vx7t", "event-42"] },
+      "observation bad source",
+    );
+    expect(issues.some((i) => i.startsWith("sources.1:") && i.includes("base32"))).toBe(true);
+  });
+
+  test("rejects an empty tag", () => {
+    const issues = rejectionIssues(
+      observationFrontmatterSchema,
+      { ...validObservation, tags: [""] },
+      "observation empty tag",
+    );
+    expect(issues.some((i) => i.startsWith("tags.0:"))).toBe(true);
+  });
+
+  test("rejects a missing id", () => {
+    const { id: _omitted, ...withoutId } = validObservation;
+    const issues = rejectionIssues(
+      observationFrontmatterSchema,
+      withoutId,
+      "observation missing id",
+    );
+    expect(issues.some((i) => i.startsWith("id:"))).toBe(true);
+  });
+});
+
+describe("schema/records — config", () => {
+  test("accepts a valid config (knowledge paths + actor entry)", () => {
+    expectAccepted(configSchema, validConfig, "config valid");
+    expectAccepted(
+      configSchema,
+      { ...validConfig, actor: { kind: "agent", id: "claude-code", session: "s1" } },
+      "config with session",
+    );
+  });
+
+  test("rejects a missing knowledge path, pointing at it", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      { ...validConfig, knowledge: { product: "PRODUCT.md", context: "CONTEXT.md" } },
+      "config missing adr path",
+    );
+    expect(issues.some((i) => i.startsWith("knowledge.adr:"))).toBe(true);
+  });
+
+  test("rejects an actor entry with a bad kind", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      { ...validConfig, actor: { kind: "bot", id: "x" } },
+      "config bad actor kind",
+    );
+    expect(issues.some((i) => i.startsWith("actor.kind:"))).toBe(true);
+  });
+
+  test("rejects unknown config keys, naming them", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      { ...validConfig, knowlege: {} },
+      "config unknown key",
+    );
+    expect(issues.some((i) => i.includes("knowlege"))).toBe(true);
+  });
+});
+
+describe("schema/records — actor", () => {
+  test("session is optional but must be non-empty when present", () => {
+    expectAccepted(actorSchema, { kind: "human", id: "jim" }, "actor no session");
+    expectAccepted(
+      actorSchema,
+      { kind: "agent", id: "codex", session: "run-1" },
+      "actor with session",
+    );
+    const issues = rejectionIssues(
+      actorSchema,
+      { kind: "agent", id: "codex", session: "" },
+      "actor empty session",
+    );
+    expect(issues.some((i) => i.startsWith("session:"))).toBe(true);
+  });
+});
+
+describe("schema/records — determinism through the injected Env", () => {
+  test("identical fixed Envs build byte-identical validated records", () => {
+    const build = (): WorkItemFrontmatter => {
+      const env = fixedEnv({
+        now: "2026-03-01T09:30:00Z",
+        randoms: [0.03, 0.11, 0.42, 0.9, 0.66, 0.31, 0.77, 0.005],
+      });
+      return workItemFrontmatterSchema.parse({
+        id: generateId(env),
+        name: "deterministic-item",
+        type: "chore",
+        status: "backlog",
+        lane: "direct",
+        depends_on: [],
+        external_refs: [],
+        created: env.now(),
+        updated: env.now(),
+      });
+    };
+    const first = build();
+    const second = build();
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+});

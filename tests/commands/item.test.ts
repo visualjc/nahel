@@ -490,6 +490,25 @@ describe("item update", () => {
       expect(await journalEvents(layout)).toHaveLength(1);
     });
 
+    test("moving an unclaimed item under a claimed parent via --parent is refused for agents", async () => {
+      const { root, layout, env } = await setup(); // config actor: agent claude-code
+      const parent = await newItem(env, root);
+      const record = await readItem(layout, parent);
+      await writeItem(layout, { ...record.frontmatter, claimed_by: "jim" }, record.body);
+      const id = await newItem(env, root); // unclaimed, outside the claimed subtree
+
+      const code = await itemCommand.run(["update", id, "--parent", parent], env, root);
+      expect(code).toBe(1);
+      expect(stderr()).toContain(parent);
+      expect(stderr()).toContain("jim");
+      expect(stderr()).toContain("handback");
+
+      // Refusal writes nothing: parent unchanged, no journal event beyond the
+      // two item.created events.
+      expect((await readItem(layout, id)).frontmatter.parent).toBeUndefined();
+      expect(await journalEvents(layout)).toHaveLength(2);
+    });
+
     test("a human config actor passes the claim check", async () => {
       const { root, layout, env } = await setup({ actor: { kind: "human", id: "jim" } });
       const id = await newItem(env, root);

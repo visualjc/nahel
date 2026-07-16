@@ -190,6 +190,27 @@ describe("mutate — claim enforcement (cooperative guardrail, PRD F9)", () => {
     expect(attempt).rejects.toThrow(ClaimViolationError);
   });
 
+  test("refuses an agent --parent move of an unclaimed item INTO a claimed subtree, writing nothing", async () => {
+    const { layout, env, ctx } = await setup();
+    const { root, child, sibling } = await claimedTree(ctx, env);
+    // sibling is unclaimed and outside the claimed subtree; the mutation
+    // re-parents it under `child` — whose ancestor `root` is claimed. The
+    // check must evaluate the POST-mutation chain, not just the on-disk one.
+    const attempt = mutate(ctx, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemUpdated,
+      frontmatter: { ...sibling, parent: child.id },
+      body: "",
+    });
+    await expect(attempt).rejects.toThrow(ClaimViolationError);
+    await expect(attempt).rejects.toThrow(root.id);
+    // Refusal writes nothing: record unchanged, no journal event.
+    expect((await readItem(layout, sibling.id)).frontmatter.parent).toBeUndefined();
+    await expect(
+      readFile(sessionSegmentPath(layout, ctx.session), "utf8"),
+    ).rejects.toThrow();
+  });
+
   test("refuses an agent run mutation whose run touches a covered item", async () => {
     const { env, ctx } = await setup();
     const { grandchild } = await claimedTree(ctx, env);

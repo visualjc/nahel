@@ -76,13 +76,18 @@ async function readOpenRun(ctx: StoreContext, runId: string, closing: boolean): 
   return run;
 }
 
-async function runStart(args: string[], env: Env, cwd: string): Promise<number> {
+async function runStart(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
   if (positionals.length !== 1) {
     throw new UsageError("run start takes exactly one <item>");
   }
   const itemId = positionals[0]!;
-  const ctx = await commandContext(cwd, env);
+  const ctx = await commandContext(cwd, env, actorOverride);
   await requireExistingItem(ctx.layout, itemId, "item");
   const { frontmatter: item } = await readItem(ctx.layout, itemId);
 
@@ -101,7 +106,12 @@ async function runStart(args: string[], env: Env, cwd: string): Promise<number> 
   return 0;
 }
 
-async function runUpdate(args: string[], env: Env, cwd: string): Promise<number> {
+async function runUpdate(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     options: { phase: { type: "string" } },
@@ -116,7 +126,7 @@ async function runUpdate(args: string[], env: Env, cwd: string): Promise<number>
   }
   const phase = requireValid(runSchema.shape.phase, values.phase, "--phase");
 
-  const ctx = await commandContext(cwd, env);
+  const ctx = await commandContext(cwd, env, actorOverride);
   const run = await readOpenRun(ctx, runId, false);
   const next: Run = { ...run, phase };
   await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runUpdated, run: next });
@@ -124,7 +134,12 @@ async function runUpdate(args: string[], env: Env, cwd: string): Promise<number>
   return 0;
 }
 
-async function runEnd(args: string[], env: Env, cwd: string): Promise<number> {
+async function runEnd(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
   if (positionals.length !== 2) {
     throw new UsageError("run end takes exactly <run> <outcome> (e.g. success, failure)");
@@ -132,7 +147,7 @@ async function runEnd(args: string[], env: Env, cwd: string): Promise<number> {
   const runId = positionals[0]!;
   const outcome = requireValid(runSchema.shape.phase, positionals[1], "outcome");
 
-  const ctx = await commandContext(cwd, env);
+  const ctx = await commandContext(cwd, env, actorOverride);
   const run = await readOpenRun(ctx, runId, true);
   const ended = env.now();
   const closed: Run = { ...run, phase: outcome, status: "ended", ended };
@@ -144,16 +159,16 @@ async function runEnd(args: string[], env: Env, cwd: string): Promise<number> {
 export const runCommand: Command = {
   name: "run",
   description: "drive the run lifecycle (run start | run update --phase | run end)",
-  run: (argv, env, cwd) =>
+  run: (argv, env, cwd, actorOverride) =>
     execute("run `nahel run --help` for usage", async () => {
       const [sub, ...rest] = argv;
       if (sub === "--help" || sub === "-h" || rest.includes("--help") || rest.includes("-h")) {
         console.log(USAGE);
         return 0;
       }
-      if (sub === "start") return runStart(rest, env, cwd);
-      if (sub === "update") return runUpdate(rest, env, cwd);
-      if (sub === "end") return runEnd(rest, env, cwd);
+      if (sub === "start") return runStart(rest, env, cwd, actorOverride);
+      if (sub === "update") return runUpdate(rest, env, cwd, actorOverride);
+      if (sub === "end") return runEnd(rest, env, cwd, actorOverride);
       throw new UsageError(
         sub === undefined
           ? "missing subcommand — expected `run start`, `run update` or `run end`"

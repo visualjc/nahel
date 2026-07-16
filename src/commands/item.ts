@@ -9,7 +9,6 @@ import {
   type ExternalRef,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { NAHEL_ACTOR_VAR } from "../store/actor";
 import { itemExists, readItem, type StoreLayout } from "../store/layout";
 import { createStoreContext, mutate, type StoreContext } from "../store/mutate";
 
@@ -25,28 +24,28 @@ import { createStoreContext, mutate, type StoreContext } from "../store/mutate";
  * issue #5 owns exactly these two command files.
  */
 
-/** Registration-ready CLI command; cli.ts wires name → run (issue #4). */
+/**
+ * Registration-ready CLI command; cli.ts wires name → run (issue #4).
+ * `actorOverride` is the NAHEL_ACTOR spec *value*: only the cli.ts entry
+ * point reads the process environment, and it injects the value here —
+ * commands stay pure over their arguments (see store/actor.ts).
+ */
 export interface Command {
   name: string;
   description: string;
-  run(argv: string[], env: Env, cwd: string): Promise<number>;
+  run(argv: string[], env: Env, cwd: string, actorOverride?: string): Promise<number>;
 }
 
 /** A user-input error: printed with the command's usage hint, exit 1. */
 export class UsageError extends Error {}
 
-/**
- * Commands are the CLI entry point, so the NAHEL_ACTOR override *value* is
- * read here and passed down — store code never reads the process environment
- * (see store/actor.ts).
- */
-export function processActorOverride(): string | undefined {
-  return process.env[NAHEL_ACTOR_VAR];
-}
-
 /** Resolve the store context every mutation command starts from. */
-export function commandContext(cwd: string, env: Env): Promise<StoreContext> {
-  return createStoreContext(cwd, env, { actorOverride: processActorOverride() });
+export function commandContext(
+  cwd: string,
+  env: Env,
+  actorOverride?: string,
+): Promise<StoreContext> {
+  return createStoreContext(cwd, env, { actorOverride });
 }
 
 function isParseArgsError(error: unknown): boolean {
@@ -140,7 +139,12 @@ const USAGE = `usage:
       which requires --reopen (guard against accidental resurrection);
       done <-> dropped and non-status edits of a closed item need no flag.`;
 
-async function itemNew(args: string[], env: Env, cwd: string): Promise<number> {
+async function itemNew(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     options: {
@@ -160,7 +164,7 @@ async function itemNew(args: string[], env: Env, cwd: string): Promise<number> {
   const lane = requireEnum(positionals[2]!, LANES, "lane");
   const externalRefs = (values["external-ref"] ?? []).map(parseExternalRef);
 
-  const ctx = await commandContext(cwd, env);
+  const ctx = await commandContext(cwd, env, actorOverride);
   if (values.parent !== undefined) {
     await requireExistingItem(ctx.layout, values.parent, "--parent");
   }
@@ -191,7 +195,12 @@ async function itemNew(args: string[], env: Env, cwd: string): Promise<number> {
   return 0;
 }
 
-async function itemUpdate(args: string[], env: Env, cwd: string): Promise<number> {
+async function itemUpdate(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     options: {
@@ -220,7 +229,7 @@ async function itemUpdate(args: string[], env: Env, cwd: string): Promise<number
     );
   }
 
-  const ctx = await commandContext(cwd, env);
+  const ctx = await commandContext(cwd, env, actorOverride);
   if (!(await itemExists(ctx.layout, id))) {
     throw new UsageError(`item ${id} not found — check the id (records live in nahel/items/)`);
   }
@@ -274,15 +283,15 @@ async function itemUpdate(args: string[], env: Env, cwd: string): Promise<number
 export const itemCommand: Command = {
   name: "item",
   description: "create and update work items (item new | item update)",
-  run: (argv, env, cwd) =>
+  run: (argv, env, cwd, actorOverride) =>
     execute("run `nahel item --help` for usage", async () => {
       const [sub, ...rest] = argv;
       if (sub === "--help" || sub === "-h" || rest.includes("--help") || rest.includes("-h")) {
         console.log(USAGE);
         return 0;
       }
-      if (sub === "new") return itemNew(rest, env, cwd);
-      if (sub === "update") return itemUpdate(rest, env, cwd);
+      if (sub === "new") return itemNew(rest, env, cwd, actorOverride);
+      if (sub === "update") return itemUpdate(rest, env, cwd, actorOverride);
       throw new UsageError(
         sub === undefined
           ? "missing subcommand — expected `item new` or `item update`"

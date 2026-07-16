@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { COMMANDS, main, VERSION, type CommandContext } from "../src/cli";
-import { seededEnv } from "./store/helpers";
+import type { JournalEvent } from "../src/schema/records";
+import { NAHEL_ACTOR_VAR } from "../src/store/actor";
+import { readJournal } from "../src/store/journal";
+import { ensureLayout, writeConfig } from "../src/store/layout";
+import { makeConfig, makeTempDir, seededEnv } from "./store/helpers";
 
 /**
  * CLI dispatch (task #4 owns this structure): parseArgs-based, a registry
@@ -93,5 +99,69 @@ describe("cli dispatch", () => {
     const result = await runMain(["init", "--definitely-not-a-flag"]);
     expect(result.code).toBe(1);
     expect(result.stderr.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cli entry point — NAHEL_ACTOR environment contract", () => {
+  // The env var contract lives at the entry point: cli.ts is the single
+  // ambient-process reader, so the variable is exercised end-to-end here by
+  // spawning the real CLI — commands themselves only ever see the injected
+  // actorOverride value (tests/commands/*.test.ts cover that layer).
+  test("NAHEL_ACTOR set in the process environment overrides the config actor", async () => {
+    const root = await makeTempDir("nahel-cli-actor-");
+    try {
+      const layout = await ensureLayout(root);
+      await writeConfig(layout, makeConfig()); // config actor: agent claude-code
+
+      const proc = Bun.spawn(
+        ["bun", "run", join(import.meta.dir, "../src/cli.ts"), "item", "new", "chore", "env-actor", "direct"],
+        {
+          cwd: root,
+          env: { ...process.env, [NAHEL_ACTOR_VAR]: "human:jim" },
+          stderr: "pipe",
+        },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      expect(stderr).toBe("");
+      expect(await proc.exited).toBe(0);
+      const id = stdout.trim();
+      expect(id.length).toBeGreaterThan(0);
+
+      const events: JournalEvent[] = [];
+      for await (const event of readJournal(layout)) events.push(event);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe("item.created");
+      expect(events[0]!.item).toBe(id);
+      expect(events[0]!.actor).toEqual({ kind: "human", id: "jim" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("without NAHEL_ACTOR the config actor resolves end-to-end", async () => {
+    const root = await makeTempDir("nahel-cli-actor-");
+    try {
+      const layout = await ensureLayout(root);
+      await writeConfig(layout, makeConfig()); // config actor: agent claude-code
+
+      const env = { ...process.env };
+      delete env[NAHEL_ACTOR_VAR];
+      const proc = Bun.spawn(
+        ["bun", "run", join(import.meta.dir, "../src/cli.ts"), "item", "new", "chore", "config-actor", "direct"],
+        { cwd: root, env, stderr: "pipe" },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      const id = stdout.trim();
+
+      const events: JournalEvent[] = [];
+      for await (const event of readJournal(layout)) events.push(event);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.item).toBe(id);
+      expect(events[0]!.actor).toEqual({ kind: "agent", id: "claude-code" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

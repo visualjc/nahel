@@ -10,6 +10,7 @@ import { initCommand } from "./commands/init";
 import { itemCommand } from "./commands/item";
 import { runCommand } from "./commands/run";
 import { systemEnv, type Env } from "./schema/env";
+import { NAHEL_ACTOR_VAR } from "./store/actor";
 
 export const VERSION = "0.0.1";
 
@@ -19,6 +20,12 @@ export interface CommandContext {
   env: Env;
   /** Repo root the command operates on. */
   cwd: string;
+  /**
+   * NAHEL_ACTOR spec value (`kind:id[:session]`), if set. The entry point
+   * reads it from the process environment; commands only ever see this
+   * injected value (see store/actor.ts).
+   */
+  actorOverride?: string;
   /** Write one line of normal output. */
   stdout: (text: string) => void;
   /** Write one line of error/warning output. */
@@ -35,14 +42,14 @@ export interface Command {
  * The command registry. Registering a new verb is exactly two lines: one
  * import at the top of this file, one entry here.
  */
-/** Adapt a mutation-command shape (run(argv, env, cwd)) to the registry's CommandContext shape. */
+/** Adapt a mutation-command shape (run(argv, env, cwd, actorOverride?)) to the registry's CommandContext shape. */
 function adapt(command: {
   description: string;
-  run(argv: string[], env: Env, cwd: string): Promise<number>;
+  run(argv: string[], env: Env, cwd: string, actorOverride?: string): Promise<number>;
 }): Command {
   return {
     description: command.description,
-    run: (argv, ctx) => command.run(argv, ctx.env, ctx.cwd),
+    run: (argv, ctx) => command.run(argv, ctx.env, ctx.cwd, ctx.actorOverride),
   };
 }
 
@@ -96,9 +103,13 @@ export async function main(argv: string[], ctx: CommandContext): Promise<number>
 }
 
 if (import.meta.main) {
+  // cli.ts is the single ambient-process reader: argv, cwd, exit, the real
+  // clock, and the NAHEL_ACTOR environment override are all read here and
+  // injected down — no other src/ layer touches process.env.
   const code = await main(Bun.argv.slice(2), {
     env: systemEnv(),
     cwd: process.cwd(),
+    actorOverride: process.env[NAHEL_ACTOR_VAR],
     stdout: console.log,
     stderr: console.error,
   });

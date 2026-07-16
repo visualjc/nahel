@@ -5,7 +5,6 @@ import { runCommand } from "../../src/commands/run";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
-import { NAHEL_ACTOR_VAR } from "../../src/store/actor";
 import { readHotState } from "../../src/store/hotstate";
 import { readJournal, runSegmentPath } from "../../src/store/journal";
 import {
@@ -45,7 +44,6 @@ beforeEach(() => {
   errSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     errs.push(args.join(" "));
   });
-  delete process.env[NAHEL_ACTOR_VAR];
 });
 
 afterEach(async () => {
@@ -199,6 +197,23 @@ describe("run start", () => {
     errs = [];
     expect(await runCommand.run(["start", itemId, "--bogus"], env, root)).toBe(1);
     expect(stderr()).toContain("--bogus");
+  });
+
+  test("an explicit actorOverride wins over the config actor for the run's actor", async () => {
+    // The NAHEL_ACTOR environment variable itself is read only by the cli.ts
+    // entry point (tests/cli.test.ts covers the env contract end-to-end); at
+    // the command layer the override arrives as an argument.
+    const { root, layout, env } = await setup(); // config actor: agent claude-code
+    const itemId = await newItem(env, root);
+
+    const code = await runCommand.run(["start", itemId], env, root, "human:jim");
+    expect(stderr()).toBe("");
+    expect(code).toBe(0);
+    const runId = logs[logs.length - 1]!;
+
+    expect((await readRun(layout, runId)).actor).toEqual({ kind: "human", id: "jim" });
+    const events = await segmentEvents(layout, runId);
+    expect(events[0]!.actor).toEqual({ kind: "human", id: "jim" });
   });
 });
 

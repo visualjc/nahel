@@ -4,7 +4,6 @@ import { itemCommand } from "../../src/commands/item";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { Config, JournalEvent } from "../../src/schema/records";
-import { NAHEL_ACTOR_VAR } from "../../src/store/actor";
 import { readJournal } from "../../src/store/journal";
 import {
   ensureLayout,
@@ -41,7 +40,6 @@ beforeEach(() => {
   errSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     errs.push(args.join(" "));
   });
-  delete process.env[NAHEL_ACTOR_VAR];
 });
 
 afterEach(async () => {
@@ -523,20 +521,23 @@ describe("item update", () => {
       expect(after.frontmatter.claimed_by).toBe("jim"); // claim preserved by update
     });
 
-    test("the NAHEL_ACTOR environment override wins over the config actor", async () => {
+    test("an explicit actorOverride wins over the config actor", async () => {
+      // The NAHEL_ACTOR environment variable itself is read only by the
+      // cli.ts entry point (see tests/cli.test.ts for the end-to-end env
+      // contract); at the command layer the override arrives as an argument.
       const { root, layout, env } = await setup(); // config actor: agent
       const id = await newItem(env, root);
       const record = await readItem(layout, id);
       await writeItem(layout, { ...record.frontmatter, claimed_by: "jim" }, record.body);
 
-      process.env[NAHEL_ACTOR_VAR] = "human:jim";
-      try {
-        const code = await itemCommand.run(["update", id, "--status", "in-progress"], env, root);
-        expect(stderr()).toBe("");
-        expect(code).toBe(0);
-      } finally {
-        delete process.env[NAHEL_ACTOR_VAR];
-      }
+      const code = await itemCommand.run(
+        ["update", id, "--status", "in-progress"],
+        env,
+        root,
+        "human:jim",
+      );
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
 
       const events = await journalEvents(layout);
       expect(events[events.length - 1]!.actor).toEqual({ kind: "human", id: "jim" });

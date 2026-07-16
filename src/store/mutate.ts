@@ -25,7 +25,9 @@ import {
  * mutation flows through mutate(), which (1) acts as the resolved actor from
  * the injected context, (2) refuses agent mutations on claimed items —
  * including descendants of a claimed ancestor (claim covers the subtree,
- * PRD F9), (3) appends the journal event FIRST, carrying the full mutation
+ * PRD F9) on both the current and the post-mutation parent chain — moving an
+ * item INTO a claimed subtree is refused too, (3) appends the journal event
+ * FIRST, carrying the full mutation
  * payload (write-ahead, PRD F1), and (4) applies the record write. The only
  * crash window leaves the journal ahead of the record — never an unjournaled
  * mutation — and replayPending() heals it deterministically from the payload.
@@ -84,37 +86,48 @@ export interface MutationResult {
 }
 
 /**
- * Find the claim covering `itemId`, if any: the item's own claim or the
- * nearest claimed ancestor (claims cover the whole subtree). For records not
- * yet on disk, the walk starts from `parentOverride` (the incoming parent).
- * The walk reads DISK records only, so incoming frontmatter can never drop a
- * claim to slip past the check.
+ * Walk one ancestor chain (starting at `startId`, inclusive) looking for a
+ * claim. Reads DISK records only, so incoming frontmatter can never drop a
+ * claim to slip past the check; a record not on disk cannot carry a claim
+ * and ends the walk. `seen` is shared across chains: a node a previous walk
+ * passed through without returning is proven claim-free upward.
  */
-async function findCoveringClaim(
+async function findClaimOnChain(
   layout: StoreLayout,
-  itemId: string,
-  parentOverride: string | undefined,
+  startId: string | undefined,
+  seen: Set<string>,
 ): Promise<{ id: string; claimedBy: string } | undefined> {
-  const seen = new Set<string>();
-  let current: string | undefined = itemId;
-  let isTarget = true;
+  let current = startId;
   while (current !== undefined && !seen.has(current)) {
     seen.add(current);
-    if (!(await itemExists(layout, current))) {
-      // A record not on disk cannot carry a claim; for the target itself the
-      // incoming parent tells us where it hangs in the tree.
-      current = isTarget ? parentOverride : undefined;
-      isTarget = false;
-      continue;
-    }
+    if (!(await itemExists(layout, current))) return undefined;
     const { frontmatter } = await readItem(layout, current);
     if (frontmatter.claimed_by !== undefined) {
       return { id: frontmatter.id, claimedBy: frontmatter.claimed_by };
     }
     current = frontmatter.parent;
-    isTarget = false;
   }
   return undefined;
+}
+
+/**
+ * Find the claim covering `itemId`, if any: the item's own claim or the
+ * nearest claimed ancestor (claims cover the whole subtree). BOTH parent
+ * chains are checked — the one the record has now (its on-disk parent) and
+ * the one it will have after the mutation (`incomingParent`) — so an agent
+ * can neither mutate anything currently under a claim nor move an item INTO
+ * a claimed subtree. For records not yet on disk the incoming parent is the
+ * only chain.
+ */
+async function findCoveringClaim(
+  layout: StoreLayout,
+  itemId: string,
+  incomingParent: string | undefined,
+): Promise<{ id: string; claimedBy: string } | undefined> {
+  const seen = new Set<string>();
+  const current = await findClaimOnChain(layout, itemId, seen);
+  if (current !== undefined) return current;
+  return findClaimOnChain(layout, incomingParent, seen);
 }
 
 function mutationEventFields(mutation: Mutation): {
@@ -150,9 +163,9 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
   // claimed subtree. Humans pass — the claim is theirs.
   if (ctx.actor.kind === "agent") {
     const targetItem = mutation.target === "item" ? mutation.frontmatter.id : mutation.run.item;
-    const parentOverride =
+    const incomingParent =
       mutation.target === "item" ? mutation.frontmatter.parent : undefined;
-    const claim = await findCoveringClaim(ctx.layout, targetItem, parentOverride);
+    const claim = await findCoveringClaim(ctx.layout, targetItem, incomingParent);
     if (claim !== undefined) {
       const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
       throw new ClaimViolationError(

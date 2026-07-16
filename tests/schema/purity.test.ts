@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 const SCHEMA_DIR = join(import.meta.dir, "../../src/schema");
 
-const EXPECTED_FILES = ["env.ts", "enums.ts", "events.ts", "id.ts", "records.ts"];
+const EXPECTED_FILES = ["enums.ts", "env.ts", "events.ts", "id.ts", "records.ts"];
 
 /** Module specifiers the schema layer must never import (I/O belongs to the store layer). */
 const FORBIDDEN_IMPORT = /from\s+["'](node:)?(fs|fs\/promises|net|http|https|http2|dns|tls|child_process|worker_threads)["']/;

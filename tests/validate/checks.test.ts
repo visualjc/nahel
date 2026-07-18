@@ -475,6 +475,118 @@ describe("validate — claim checks over the journaled history", () => {
   });
 });
 
+describe("validate — claim/pause coherence over current state (claims.active-run)", () => {
+  // PR #12 review HIGH 3: claim journals claimed_by, then pauses covered runs
+  // in a second loop. A crash between the two leaves a claimed subtree with
+  // ACTIVE runs, and replay does not heal run status - validate must surface
+  // it.
+  test("an active run on an item covered by a claim is an error naming run, item, and claim", async () => {
+    const fixture = await setupFixture(dirs);
+    const parent = await createItem(fixture, { name: "claimed-parent" });
+    const child = await createItem(fixture, { name: "covered-child", parent: parent.id });
+    const run = await createRun(fixture, child.id); // active
+
+    // The claim lands (journal + record)...
+    const claimed = { ...parent, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+    // ...and the process dies before the pause loop: the run stays active.
+
+    const findings = findingsFor(await validateStore(fixture.layout), "claims.active-run");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain(child.id);
+    expect(findings[0]!.message).toContain(parent.id);
+    expect(findings[0]!.message).toContain("jim");
+    expect(findings[0]!.fix).toContain(`nahel pause ${run.id}`);
+  });
+
+  test("a directly-claimed item with its own active run is an error too", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+    const run = await createRun(fixture, item.id);
+    const claimed = { ...item, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "claims.active-run");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(run.id);
+  });
+
+  test("a completed claim (covered runs paused) reports nothing", async () => {
+    const fixture = await setupFixture(dirs);
+    const parent = await createItem(fixture, { name: "claimed-parent" });
+    const child = await createItem(fixture, { name: "covered-child", parent: parent.id });
+    const run = await createRun(fixture, child.id);
+
+    const claimed = { ...parent, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+    // The pause loop completed: the covered run is paused, hot state follows.
+    const paused = { ...run, status: "paused" as const };
+    await mutate(fixture.human, {
+      target: "run",
+      eventType: CORE_EVENT_TYPES.runPaused,
+      run: paused,
+    });
+    const { writeHotState } = await import("../../src/store/hotstate");
+    await writeHotState(fixture.layout, run.id, {
+      phase: paused.phase,
+      status: paused.status,
+      updated: fixture.env.now(),
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "claims.active-run")).toEqual([]);
+  });
+
+  test("an ended run under a claim reports nothing, and active runs elsewhere stay clean", async () => {
+    const fixture = await setupFixture(dirs);
+    const claimedItem = await createItem(fixture, { name: "claimed" });
+    const freeItem = await createItem(fixture, { name: "free" });
+    // Ended run under the claim; active run OUTSIDE the claim.
+    const endedRun = await createRun(fixture, claimedItem.id);
+    const closed = { ...endedRun, status: "ended" as const, ended: fixture.env.now() };
+    await mutate(fixture.agent, {
+      target: "run",
+      eventType: CORE_EVENT_TYPES.runEnded,
+      run: closed,
+    });
+    const { writeHotState } = await import("../../src/store/hotstate");
+    await writeHotState(fixture.layout, endedRun.id, {
+      phase: closed.phase,
+      status: closed.status,
+      updated: fixture.env.now(),
+    });
+    await createRun(fixture, freeItem.id);
+
+    const claimed = { ...claimedItem, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "claims.active-run");
+    expect(findings).toEqual([]);
+  });
+});
+
 describe("validate — journal well-formedness", () => {
   test("a non-monotonic seq within a segment is an error naming the segment", async () => {
     const fixture = await setupFixture(dirs);

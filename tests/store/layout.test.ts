@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ensureLayout,
@@ -91,15 +91,36 @@ describe("config", () => {
     expect(readConfig(layout)).rejects.toThrow();
   });
 
+  // knowledgePaths may resolve synchronously or asynchronously (symlink
+  // canonicalization is fs work); every call site treats it as awaitable and
+  // every refusal as a rejection.
+  async function resolveKnowledgePaths(
+    layout: Parameters<typeof knowledgePaths>[0],
+    config: Parameters<typeof knowledgePaths>[1],
+  ): Promise<Awaited<ReturnType<typeof knowledgePaths>>> {
+    return knowledgePaths(layout, config);
+  }
+
   test("knowledgePaths resolves config-relative knowledge paths against the root", async () => {
     const root = await tempRoot();
     const layout = await ensureLayout(root);
     const config = makeConfig();
-    expect(knowledgePaths(layout, config)).toEqual({
+    expect(await resolveKnowledgePaths(layout, config)).toEqual({
       product: join(root, "PRODUCT.md"),
       context: join(root, "CONTEXT.md"),
       adr: join(root, "docs/adr"),
     });
+  });
+
+  test("knowledgePaths resolves a nested relative path whose directories do not exist yet", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    const config = makeConfig({
+      knowledge: { product: "docs/notes/deep/PRODUCT.md", context: "CONTEXT.md", adr: "docs/adr" },
+    });
+    expect((await resolveKnowledgePaths(layout, config)).product).toBe(
+      join(root, "docs/notes/deep/PRODUCT.md"),
+    );
   });
 
   // Containment (hard constraint 2, PR #12 review blocker 1): knowledgePaths
@@ -111,7 +132,7 @@ describe("config", () => {
     const config = makeConfig({
       knowledge: { product: "/tmp/evil.md", context: "CONTEXT.md", adr: "docs/adr" },
     });
-    expect(() => knowledgePaths(layout, config)).toThrow(/product/);
+    expect(resolveKnowledgePaths(layout, config)).rejects.toThrow(/product/);
   });
 
   test("knowledgePaths refuses relative paths resolving above the root", async () => {
@@ -122,7 +143,7 @@ describe("config", () => {
       { product: "PRODUCT.md", context: "docs/../../outside.md", adr: "docs/adr" },
       { product: "PRODUCT.md", context: "CONTEXT.md", adr: "../adr" },
     ]) {
-      expect(() => knowledgePaths(layout, makeConfig({ knowledge }))).toThrow(/repo/);
+      expect(resolveKnowledgePaths(layout, makeConfig({ knowledge }))).rejects.toThrow(/repo/);
     }
   });
 
@@ -132,7 +153,7 @@ describe("config", () => {
     const config = makeConfig({
       knowledge: { product: "PRODUCT.md", context: "CONTEXT.md", adr: "." },
     });
-    expect(() => knowledgePaths(layout, config)).toThrow(/adr/);
+    expect(resolveKnowledgePaths(layout, config)).rejects.toThrow(/adr/);
   });
 
   test("knowledgePaths refuses a sibling-prefix escape (root '/a' vs '/a-evil')", async () => {
@@ -147,7 +168,71 @@ describe("config", () => {
         adr: "docs/adr",
       },
     });
-    expect(() => knowledgePaths(layout, config)).toThrow(/repo/);
+    expect(resolveKnowledgePaths(layout, config)).rejects.toThrow(/repo/);
+  });
+
+  // PR #12 review blocker: containment was purely lexical — resolve() never
+  // canonicalizes symlinked components, so `ln -s <outside> repo/escape` +
+  // product "escape/PRODUCT.md" passed the string-prefix check and wrote
+  // OUTSIDE the repo. Canonical (realpath'd) paths on BOTH sides are the
+  // containment truth.
+  test("knowledgePaths refuses a symlink-component escape to a directory outside the repo", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    const outside = await tempRoot(); // sibling temp dir — NOT under root
+    await symlink(outside, join(root, "escape"));
+    const config = makeConfig({
+      knowledge: { product: "escape/PRODUCT.md", context: "CONTEXT.md", adr: "docs/adr" },
+    });
+    expect(resolveKnowledgePaths(layout, config)).rejects.toThrow(/hard constraint 2/);
+    expect(resolveKnowledgePaths(layout, config)).rejects.toThrow(/product/);
+    // The canary outside dir stays empty: resolution alone writes nothing.
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  test("knowledgePaths refuses a symlink escape where only the deepest EXISTING ancestor is the link", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    const outside = await tempRoot();
+    await symlink(outside, join(root, "escape"));
+    // Nothing under escape/ exists yet — the non-existing tail must be
+    // re-joined onto the canonicalized ancestor before the check.
+    const config = makeConfig({
+      knowledge: { product: "escape/deep/nested/PRODUCT.md", context: "CONTEXT.md", adr: "docs/adr" },
+    });
+    expect(resolveKnowledgePaths(layout, config)).rejects.toThrow(/hard constraint 2/);
+  });
+
+  test("knowledgePaths accepts a repo reached THROUGH a symlinked parent (macOS /tmp style)", async () => {
+    // The repo itself sits behind a symlink: real/repo, addressed via link/repo.
+    // Both sides of the containment check must be canonicalized, or every
+    // legitimate path breaks (macOS /tmp -> /private/tmp is exactly this).
+    const parent = await tempRoot();
+    const real = join(parent, "real");
+    await mkdir(join(real, "docs"), { recursive: true });
+    await symlink(real, join(parent, "link"));
+    const linkedRoot = join(parent, "link");
+    const layout = storeLayout(linkedRoot);
+    const config = makeConfig();
+    expect(await resolveKnowledgePaths(layout, config)).toEqual({
+      product: join(linkedRoot, "PRODUCT.md"),
+      context: join(linkedRoot, "CONTEXT.md"),
+      adr: join(linkedRoot, "docs/adr"),
+    });
+  });
+
+  test("knowledgePaths accepts an in-repo symlink pointing at an in-repo directory", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await mkdir(join(root, "documents"), { recursive: true });
+    await symlink(join(root, "documents"), join(root, "docs-link"));
+    const config = makeConfig({
+      knowledge: { product: "docs-link/PRODUCT.md", context: "CONTEXT.md", adr: "docs/adr" },
+    });
+    // Canonically inside the repo — allowed; the returned path is the resolved one.
+    expect((await resolveKnowledgePaths(layout, config)).product).toBe(
+      join(root, "docs-link/PRODUCT.md"),
+    );
   });
 });
 

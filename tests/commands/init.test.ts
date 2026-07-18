@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main, type CommandContext } from "../../src/cli";
 import type { Env } from "../../src/schema/env";
@@ -284,6 +284,45 @@ describe("nahel init — knowledge-path containment (hard constraint 2)", () => 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("adr");
     expect(existsSync(join(root, "nahel"))).toBe(false);
+  });
+
+  // PR #12 review blocker (verified escape): `ln -s <outside-dir> repo/escape`
+  // then `nahel init --product escape/PRODUCT.md` succeeded and wrote
+  // PRODUCT.md OUTSIDE the repo — the lexical prefix check never canonicalizes
+  // symlinked components.
+  test("rejects a symlink-component escape and creates nothing outside the repo", async () => {
+    const root = await makeRepo();
+    const outside = await makeTempDir("nahel-init-canary-");
+    tempDirs.push(outside);
+    symlinkSync(outside, join(root, "escape"));
+
+    const result = await runCli(["init", "--product", "escape/PRODUCT.md"], root);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("product");
+    expect(result.stderr).toContain("hard constraint 2");
+    // Nothing lands in the canary dir outside the repo…
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(outside, "PRODUCT.md"))).toBe(false);
+    // …and nothing inside either: refusal happens before any write.
+    expect(existsSync(join(root, "nahel"))).toBe(false);
+    expect(existsSync(join(root, "AGENTS.md"))).toBe(false);
+  });
+
+  test("inits fine when the repo itself sits under a symlinked parent (macOS /tmp style)", async () => {
+    const parent = await makeTempDir("nahel-init-symparent-");
+    tempDirs.push(parent);
+    const real = join(parent, "real");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, join(parent, "link"));
+    const linkedRoot = join(parent, "link");
+    const proc = Bun.spawn(["git", "init", "-q"], { cwd: linkedRoot });
+    expect(await proc.exited).toBe(0);
+
+    const result = await runCli(["init"], linkedRoot);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(existsSync(join(real, "nahel", "config"))).toBe(true);
+    expect(existsSync(join(real, "PRODUCT.md"))).toBe(true);
   });
 });
 

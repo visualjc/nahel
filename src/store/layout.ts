@@ -11,6 +11,7 @@ import {
   type Run,
   type WorkItemFrontmatter,
 } from "../schema/records";
+import { requireValidId } from "../schema/id";
 import { readFrontmatterFile, writeFileAtomic, writeFrontmatterFile } from "./frontmatter";
 
 /**
@@ -64,14 +65,14 @@ export async function ensureLayout(root: string): Promise<StoreLayout> {
   return layout;
 }
 
-/** Path of a work-item record. */
+/** Path of a work-item record. The id is validated before any join. */
 export function itemPath(layout: StoreLayout, id: string): string {
-  return join(layout.itemsDir, `${id}.md`);
+  return join(layout.itemsDir, `${requireValidId(id, "item")}.md`);
 }
 
-/** Directory a run's record and hot state live in. */
+/** Directory a run's record and hot state live in. Id validated before join. */
 export function runDir(layout: StoreLayout, id: string): string {
-  return join(layout.runsDir, id);
+  return join(layout.runsDir, requireValidId(id, "run"));
 }
 
 /** Path of a run record. */
@@ -79,9 +80,9 @@ export function runRecordPath(layout: StoreLayout, id: string): string {
   return join(runDir(layout, id), "run.json");
 }
 
-/** Path of an observation record. */
+/** Path of an observation record. The id is validated before any join. */
 export function observationPath(layout: StoreLayout, id: string): string {
-  return join(layout.observationsDir, `${id}.md`);
+  return join(layout.observationsDir, `${requireValidId(id, "observation")}.md`);
 }
 
 /** Read and validate `nahel/config`. */
@@ -207,10 +208,16 @@ export async function readItem(layout: StoreLayout, id: string): Promise<ItemRec
   return { frontmatter: workItemFrontmatterSchema.parse(frontmatter), body };
 }
 
-/** True when the item record exists on disk. */
+/**
+ * True when the item record exists on disk. The path is computed OUTSIDE the
+ * try: an invalid id throws InvalidIdError instead of answering false —
+ * "not found" would steer callers into misleading errors while hiding that
+ * the id itself was never usable.
+ */
 export async function itemExists(layout: StoreLayout, id: string): Promise<boolean> {
+  const path = itemPath(layout, id);
   try {
-    await readFile(itemPath(layout, id), "utf8");
+    await readFile(path, "utf8");
     return true;
   } catch {
     return false;
@@ -240,10 +247,13 @@ export async function readRun(layout: StoreLayout, id: string): Promise<Run> {
 
 /** Raw text of a run record, unvalidated — validate's tolerant read (PRD F8). */
 export async function readRunRecordText(layout: StoreLayout, id: string): Promise<string> {
+  // Path computed outside the try: an invalid id throws InvalidIdError
+  // instead of masquerading as "run not found".
+  const path = runRecordPath(layout, id);
   try {
-    return await readFile(runRecordPath(layout, id), "utf8");
+    return await readFile(path, "utf8");
   } catch {
-    throw new Error(`run ${id} not found at ${runRecordPath(layout, id)}`);
+    throw new Error(`run ${id} not found at ${path}`);
   }
 }
 

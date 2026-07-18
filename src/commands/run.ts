@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
 import { CORE_EVENT_TYPES } from "../schema/events";
-import { generateId } from "../schema/id";
+import { generateId, InvalidIdError } from "../schema/id";
 import { runSchema, type Run } from "../schema/records";
 import { writeHotState } from "../store/hotstate";
 import { readItem, readRun } from "../store/layout";
@@ -60,6 +60,11 @@ async function readOpenRun(ctx: StoreContext, runId: string, closing: boolean): 
   try {
     run = await readRun(ctx.layout, runId);
   } catch (error) {
+    // A malformed id is its own refusal (PR #12 review, blocker 2) — never
+    // rewrapped as "not found", which would suggest the id could exist.
+    if (error instanceof InvalidIdError) {
+      throw new UsageError(error.message);
+    }
     throw new UsageError(
       `run ${runId} not found — start one with \`nahel run start <item>\` (${
         error instanceof Error ? error.message : String(error)
@@ -130,7 +135,9 @@ async function runUpdate(
   const run = await readOpenRun(ctx, runId, false);
   const next: Run = { ...run, phase };
   await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runUpdated, run: next });
-  await writeHotState(ctx.layout, runId, hotStateFor(next, env.now()));
+  // Hot state is keyed by the PARSED record's schema-valid id — never the
+  // raw argv id (PR #12 review, blocker 2 amendment).
+  await writeHotState(ctx.layout, next.id, hotStateFor(next, env.now()));
   return 0;
 }
 
@@ -152,7 +159,8 @@ async function runEnd(
   const ended = env.now();
   const closed: Run = { ...run, phase: outcome, status: "ended", ended };
   await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runEnded, run: closed });
-  await writeHotState(ctx.layout, runId, { ...hotStateFor(closed, ended), outcome });
+  // Keyed by the parsed record's id, never raw argv (blocker 2 amendment).
+  await writeHotState(ctx.layout, closed.id, { ...hotStateFor(closed, ended), outcome });
   return 0;
 }
 

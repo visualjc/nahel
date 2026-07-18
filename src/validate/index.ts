@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { ID_PATTERN } from "../schema/id";
 import { readFrontmatterFile } from "../store/frontmatter";
 import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
@@ -77,14 +79,43 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
     input.configError = errorMessage(error);
   }
 
+  // Ids below come from readdir (single path components — they cannot
+  // traverse), but the hardened path helpers refuse anything failing
+  // ID_PATTERN, and validate must REPORT a rogue filename, never throw
+  // (PRD F8) — so malformed names are recorded as raw errors up front.
   for (const id of (await listItems(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.items.push({
+        id,
+        path: join(layout.itemsDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
     input.items.push(await collectFrontmatterRecord(id, itemPath(layout, id)));
   }
   for (const id of (await listObservations(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.observations.push({
+        id,
+        path: join(layout.observationsDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
     input.observations.push(await collectFrontmatterRecord(id, observationPath(layout, id)));
   }
 
   for (const id of (await listRuns(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.runs.push({
+        id,
+        path: join(layout.runsDir, id, "run.json"),
+        hotStatePath: join(layout.runsDir, id, "state.json"),
+        error: `directory name ${JSON.stringify(id)} is not a well-formed nahel id — rename the run directory`,
+      });
+      continue;
+    }
     const raw: RawRunRecord = {
       id,
       path: runRecordPath(layout, id),

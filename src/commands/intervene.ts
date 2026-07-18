@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
 import { CORE_EVENT_TYPES } from "../schema/events";
+import { InvalidIdError } from "../schema/id";
 import type { Run, WorkItemFrontmatter } from "../schema/records";
 import {
   captureBaseline,
@@ -75,7 +76,12 @@ function wantsHelp(argv: string[]): boolean {
 async function readRunOrUsage(ctx: StoreContext, runId: string): Promise<Run> {
   try {
     return await readRun(ctx.layout, runId);
-  } catch {
+  } catch (error) {
+    // A malformed id is its own refusal (PR #12 review, blocker 2) — never
+    // rewrapped as "not found", which would suggest the id could exist.
+    if (error instanceof InvalidIdError) {
+      throw new UsageError(error.message);
+    }
     throw new UsageError(`run ${runId} not found — check the id (records live in nahel/runs/)`);
   }
 }

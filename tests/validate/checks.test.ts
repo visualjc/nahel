@@ -108,7 +108,7 @@ describe("validate — schema validity of every record", () => {
     const fixture = await setupFixture(dirs);
     const item = await createItem(fixture);
     // Copy the valid record under a different filename — a botched merge/rename.
-    const path = itemPath(fixture.layout, "wrongnam");
+    const path = itemPath(fixture.layout, "wr0ngnam");
     const { readFile } = await import("node:fs/promises");
     await writeFile(path, await readFile(itemPath(fixture.layout, item.id), "utf8"));
 
@@ -116,18 +116,38 @@ describe("validate — schema validity of every record", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]!.path).toBe(path);
     expect(findings[0]!.message).toContain(item.id);
-    expect(findings[0]!.message).toContain("wrongnam");
+    expect(findings[0]!.message).toContain("wr0ngnam");
   });
 
   test("an item file without frontmatter at all is a schema error, not a crash", async () => {
     const fixture = await setupFixture(dirs);
-    const path = itemPath(fixture.layout, "nofrontm");
+    const path = itemPath(fixture.layout, "n0fr0ntm");
     await writeFile(path, "just some prose, no frontmatter\n");
 
     const findings = findingsFor(await validateStore(fixture.layout), "schema.item");
     expect(findings).toHaveLength(1);
     expect(findings[0]!.severity).toBe("error");
     expect(findings[0]!.message).toContain("frontmatter");
+  });
+
+  test("a rogue filename that is not a well-formed id is a finding, not a crash", async () => {
+    const fixture = await setupFixture(dirs);
+    // Hand-dropped files whose names the hardened path helpers would refuse
+    // (PR #12 review, blocker 2) - validate must still REPORT them (PRD F8).
+    await writeFile(join(fixture.layout.itemsDir, "README.md"), "# stray notes\n");
+    await mkdir(join(fixture.layout.runsDir, "not-an-id"), { recursive: true });
+    await writeFile(join(fixture.layout.observationsDir, "NOTES.md"), "stray\n");
+
+    const findings = await validateStore(fixture.layout);
+    const item = findingsFor(findings, "schema.item");
+    expect(item).toHaveLength(1);
+    expect(item[0]!.message).toContain("README");
+    const run = findingsFor(findings, "schema.run");
+    expect(run).toHaveLength(1);
+    expect(run[0]!.message).toContain("not-an-id");
+    const observation = findingsFor(findings, "schema.observation");
+    expect(observation).toHaveLength(1);
+    expect(observation[0]!.message).toContain("NOTES");
   });
 
   test("a run record with unparseable JSON and one with a bad field are both reported", async () => {
@@ -138,10 +158,10 @@ describe("validate — schema validity of every record", () => {
     // Corrupt the existing run record's JSON.
     await writeFile(runRecordPath(fixture.layout, run.id), "{ not json");
     // A second run directory with a schema-invalid record.
-    await mkdir(join(fixture.layout.runsDir, "badrun01"), { recursive: true });
+    await mkdir(join(fixture.layout.runsDir, "badr7n01"), { recursive: true });
     await writeFile(
-      runRecordPath(fixture.layout, "badrun01"),
-      JSON.stringify({ ...run, id: "badrun01", status: "flying" }),
+      runRecordPath(fixture.layout, "badr7n01"),
+      JSON.stringify({ ...run, id: "badr7n01", status: "flying" }),
     );
 
     const findings = findingsFor(await validateStore(fixture.layout), "schema.run");
@@ -149,17 +169,17 @@ describe("validate — schema validity of every record", () => {
     const unparseable = findings.find((f) => f.path === runRecordPath(fixture.layout, run.id));
     expect(unparseable).toBeDefined();
     expect(unparseable!.severity).toBe("error");
-    const badField = findings.find((f) => f.path === runRecordPath(fixture.layout, "badrun01"));
+    const badField = findings.find((f) => f.path === runRecordPath(fixture.layout, "badr7n01"));
     expect(badField).toBeDefined();
     expect(badField!.message).toContain("status");
   });
 
   test("an observation with invalid frontmatter is reported with path and field", async () => {
     const fixture = await setupFixture(dirs);
-    const path = join(fixture.layout.observationsDir, "badobs01.md");
+    const path = join(fixture.layout.observationsDir, "bad0bs01.md");
     await writeFile(
       path,
-      ["---", "id: badobs01", "created: 2026-07-16T12:00:00Z", "tags: nope", "sources: []", "---", "fact", ""].join(
+      ["---", "id: bad0bs01", "created: 2026-07-16T12:00:00Z", "tags: nope", "sources: []", "---", "fact", ""].join(
         "\n",
       ),
     );

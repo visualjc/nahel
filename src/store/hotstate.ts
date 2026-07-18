@@ -18,11 +18,14 @@ export function hotStatePath(layout: StoreLayout, runId: string): string {
 }
 
 async function requireRun(layout: StoreLayout, runId: string): Promise<void> {
+  // Path computed outside the try (through the hardened runDir): an invalid
+  // id throws InvalidIdError instead of masquerading as "run not found".
+  const recordPath = runRecordPath(layout, runId);
   try {
-    await access(runRecordPath(layout, runId));
+    await access(recordPath);
   } catch {
     throw new Error(
-      `run ${runId} not found — hot state is scoped to the run record (${runRecordPath(layout, runId)})`,
+      `run ${runId} not found — hot state is scoped to the run record (${recordPath})`,
     );
   }
 }

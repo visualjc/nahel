@@ -1,7 +1,7 @@
 import { appendFile, open, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Env } from "../schema/env";
-import { generateId, ID_PATTERN } from "../schema/id";
+import { generateId, ID_PATTERN, requireValidId } from "../schema/id";
 import { journalEventSchema, type Actor, type JournalEvent } from "../schema/records";
 import type { StoreLayout } from "./layout";
 
@@ -25,9 +25,9 @@ export function newSessionSegmentId(env: Env): string {
   return generateId(env);
 }
 
-/** Path of a run's journal segment. */
+/** Path of a run's journal segment. The run id is validated before any join. */
 export function runSegmentPath(layout: StoreLayout, runId: string): string {
-  return join(layout.journalDir, `run-${runId}.jsonl`);
+  return join(layout.journalDir, `run-${requireValidId(runId, "run")}.jsonl`);
 }
 
 /** Path of a writer-scoped session segment. */

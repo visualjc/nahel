@@ -16,6 +16,26 @@ export const ID_LENGTH = 8;
 /** Matches exactly one well-formed Nahel ID. */
 export const ID_PATTERN = new RegExp(`^[${ID_ALPHABET}]{${ID_LENGTH}}$`);
 
+/** A user-supplied id failed ID_PATTERN validation before reaching a path. */
+export class InvalidIdError extends Error {}
+
+/**
+ * Validate a user-supplied id against ID_PATTERN, throwing InvalidIdError
+ * when it fails. The store's path helpers call this ONCE at the choke point
+ * (layout.itemPath / layout.runDir / journal.runSegmentPath / …) so a
+ * crafted id like `../../PRODUCT` can never be joined into a path — ids from
+ * argv are untrusted input (PR #12 review, blocker 2).
+ */
+export function requireValidId(id: string, what: string): string {
+  if (!ID_PATTERN.test(id)) {
+    throw new InvalidIdError(
+      `invalid ${what} id ${JSON.stringify(id)} — ids are exactly ${ID_LENGTH} characters ` +
+        `from the alphabet ${ID_ALPHABET}`,
+    );
+  }
+  return id;
+}
+
 /**
  * Generate one 8-char lowercase base32 ID. Pure over the injected RNG — no
  * filesystem, network, or ambient randomness — so a fixed Env yields a fixed

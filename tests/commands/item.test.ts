@@ -392,6 +392,117 @@ describe("item update", () => {
     expect((await readItem(layout, id)).frontmatter.parent).toBeUndefined();
   });
 
+  // PR #12 review: without explicit clear flags the CLI could SET
+  // parent/depends_on/external_refs but never CLEAR them — forcing hand-edits,
+  // which violates CLI-only mutation (hard constraint 3).
+  describe("clearing fields (--clear-parent, --clear-depends-on, --clear-external-refs)", () => {
+    test("--clear-parent removes the parent and the journaled record carries NO parent key", async () => {
+      const { root, layout, env } = await setup();
+      const parent = await newItem(env, root);
+      const id = await newItem(env, root, ["--parent", parent]);
+      expect((await readItem(layout, id)).frontmatter.parent).toBe(parent);
+
+      const code = await itemCommand.run(["update", id, "--clear-parent"], env, root);
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
+
+      const after = await readItem(layout, id);
+      expect(after.frontmatter.parent).toBeUndefined();
+      expect("parent" in after.frontmatter).toBe(false);
+
+      // Journaled like any mutation: the write-ahead payload IS the cleared record.
+      const events = await journalEvents(layout);
+      const updated = events[events.length - 1]!;
+      expect(updated.type).toBe("item.updated");
+      expect(updated.payload["record"]).toEqual(after.frontmatter);
+      expect("parent" in (updated.payload["record"] as Record<string, unknown>)).toBe(false);
+    });
+
+    test("--clear-depends-on and --clear-external-refs empty the lists, journaled", async () => {
+      const { root, layout, env } = await setup();
+      const dep = await newItem(env, root);
+      const id = await newItem(env, root, ["--depends-on", dep, "--external-ref", "github:9"]);
+
+      const code = await itemCommand.run(
+        ["update", id, "--clear-depends-on", "--clear-external-refs"],
+        env,
+        root,
+      );
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
+
+      const after = await readItem(layout, id);
+      expect(after.frontmatter.depends_on).toEqual([]);
+      expect(after.frontmatter.external_refs).toEqual([]);
+      const events = await journalEvents(layout);
+      expect(events[events.length - 1]!.payload["record"]).toEqual(after.frontmatter);
+    });
+
+    test("a clear flag counts as a change on its own — no 'nothing to update'", async () => {
+      const { root, env } = await setup();
+      const id = await newItem(env, root);
+      // Clearing an already-absent parent is a no-op edit, not a usage error.
+      expect(await itemCommand.run(["update", id, "--clear-parent"], env, root)).toBe(0);
+    });
+
+    test("each clear flag conflicts with its set flag: error, nothing written", async () => {
+      const { root, layout, env } = await setup();
+      const other = await newItem(env, root);
+      const id = await newItem(env, root);
+      const combos: string[][] = [
+        ["--parent", other, "--clear-parent"],
+        ["--depends-on", other, "--clear-depends-on"],
+        ["--external-ref", "github:1", "--clear-external-refs"],
+      ];
+      for (const combo of combos) {
+        errs = [];
+        const code = await itemCommand.run(["update", id, ...combo], env, root);
+        expect(code).toBe(1);
+        expect(stderr()).toContain(combo[combo.length - 1]!);
+        expect(stderr()).toContain("mutually exclusive");
+      }
+      // Refusals wrote nothing: only the two item.created events exist.
+      expect(await journalEvents(layout)).toHaveLength(2);
+      const record = await readItem(layout, id);
+      expect(record.frontmatter.parent).toBeUndefined();
+      expect(record.frontmatter.depends_on).toEqual([]);
+      expect(record.frontmatter.external_refs).toEqual([]);
+    });
+
+    test("an agent clearing the parent of an item inside a claimed subtree is refused", async () => {
+      const { root, layout, env } = await setup(); // config actor: agent
+      const parent = await newItem(env, root);
+      const child = await newItem(env, root, ["--parent", parent]);
+      const record = await readItem(layout, parent);
+      await writeItem(layout, { ...record.frontmatter, claimed_by: "jim" }, record.body);
+
+      // Clearing the parent would MOVE the child out of the claimed subtree —
+      // the claim covers it NOW (on-disk chain), so the agent is refused.
+      const code = await itemCommand.run(["update", child, "--clear-parent"], env, root);
+      expect(code).toBe(1);
+      expect(stderr()).toContain("claim");
+      const after = await readItem(layout, child);
+      expect(after.frontmatter.parent).toBe(parent); // untouched
+    });
+
+    test("the claimant's human actor can clear the parent inside their own claimed subtree", async () => {
+      const { root, layout, env } = await setup();
+      const parent = await newItem(env, root);
+      const child = await newItem(env, root, ["--parent", parent]);
+      const record = await readItem(layout, parent);
+      await writeItem(layout, { ...record.frontmatter, claimed_by: "jim" }, record.body);
+
+      const code = await itemCommand.run(
+        ["update", child, "--clear-parent"],
+        env,
+        root,
+        "human:jim",
+      );
+      expect(code).toBe(0);
+      expect((await readItem(layout, child)).frontmatter.parent).toBeUndefined();
+    });
+  });
+
   describe("re-open guard (done|dropped resurrection needs --reopen)", () => {
     test("refuses re-opening a done item without --reopen", async () => {
       const { root, layout, env } = await setup();

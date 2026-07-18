@@ -264,7 +264,7 @@ export async function composeBrief(
 ): Promise<string> {
   const snapshot = await loadSnapshot(layout);
   const events = await collectProgress(layout);
-  const productText = await readTextFile(knowledgePaths(layout, config).product);
+  const productText = await readTextFile((await knowledgePaths(layout, config)).product);
   const warnings = await warningsSource(layout);
   return renderBrief({
     snapshot,

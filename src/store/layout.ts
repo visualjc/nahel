@@ -1,5 +1,5 @@
-import { mkdir, readdir, readFile, unlink } from "node:fs/promises";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { mkdir, readdir, readFile, realpath, unlink } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
   configSchema,
@@ -110,14 +110,46 @@ export async function writeConfig(layout: StoreLayout, config: Config): Promise<
 }
 
 /**
+ * Canonicalize a path that may not fully exist yet: realpath the deepest
+ * EXISTING ancestor (resolving every symlinked component), then re-join the
+ * non-existing tail. This is what makes containment a statement about the
+ * real filesystem location instead of the path's spelling.
+ */
+async function canonicalize(path: string): Promise<string> {
+  let current = path;
+  const tail: string[] = [];
+  while (true) {
+    try {
+      const real = await realpath(current);
+      return tail.length === 0 ? real : join(real, ...tail);
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = dirname(current);
+      if (parent === current) {
+        // Even the filesystem root failed to resolve — nothing left to
+        // canonicalize; the lexical path is the best available truth.
+        return join(current, ...tail);
+      }
+      tail.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
  * Resolve one knowledge path and prove it stays STRICTLY under the repo root
  * (hard constraint 2: nahel never writes outside the repo). Absolute paths
- * are refused outright; relative ones are resolved and must land below the
- * root directory — not at it (adr is a directory under the root, not the
- * root), and not at a sibling whose name merely shares the root as a string
- * prefix.
+ * are refused outright; relative ones are resolved and their CANONICAL form
+ * (every symlinked component resolved — see canonicalize) must land below the
+ * canonical root directory — not at it (adr is a directory under the root,
+ * not the root), not at a sibling whose name merely shares the root as a
+ * string prefix, and not at a symlink target outside the repo. Both sides are
+ * canonicalized (macOS /tmp is itself a symlink to /private/tmp — a
+ * one-sided check breaks every legitimate path there). Returns the resolved
+ * (non-canonical) path so callers keep root-relative spellings.
  */
-function containKnowledgePath(root: string, key: string, path: string): string {
+async function containKnowledgePath(root: string, key: string, path: string): Promise<string> {
   if (isAbsolute(path)) {
     throw new Error(
       `knowledge path ${key} (${JSON.stringify(path)}) is absolute — ` +
@@ -126,10 +158,12 @@ function containKnowledgePath(root: string, key: string, path: string): string {
   }
   const rootResolved = resolve(root);
   const resolved = resolve(rootResolved, path);
-  if (resolved === rootResolved || !resolved.startsWith(rootResolved + sep)) {
+  const rootCanonical = await canonicalize(rootResolved);
+  const canonical = await canonicalize(resolved);
+  if (canonical === rootCanonical || !canonical.startsWith(rootCanonical + sep)) {
     throw new Error(
-      `knowledge path ${key} (${JSON.stringify(path)}) resolves to ${resolved}, ` +
-        `which is not strictly under the repo root ${rootResolved} (hard constraint 2)`,
+      `knowledge path ${key} (${JSON.stringify(path)}) resolves to ${canonical}, ` +
+        `which is not strictly under the repo root ${rootCanonical} (hard constraint 2)`,
     );
   }
   return resolved;
@@ -139,14 +173,14 @@ function containKnowledgePath(root: string, key: string, path: string): string {
  * Resolve the config's repo-relative knowledge paths against the root,
  * refusing any path that escapes the repo (see containKnowledgePath).
  */
-export function knowledgePaths(
+export async function knowledgePaths(
   layout: StoreLayout,
   config: Config,
-): { product: string; context: string; adr: string } {
+): Promise<{ product: string; context: string; adr: string }> {
   return {
-    product: containKnowledgePath(layout.root, "product", config.knowledge.product),
-    context: containKnowledgePath(layout.root, "context", config.knowledge.context),
-    adr: containKnowledgePath(layout.root, "adr", config.knowledge.adr),
+    product: await containKnowledgePath(layout.root, "product", config.knowledge.product),
+    context: await containKnowledgePath(layout.root, "context", config.knowledge.context),
+    adr: await containKnowledgePath(layout.root, "adr", config.knowledge.adr),
   };
 }
 

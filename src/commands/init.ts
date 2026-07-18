@@ -96,11 +96,12 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
   const config = existing ?? freshConfig;
 
   // Containment preflight (hard constraint 2): resolve the knowledge paths
-  // BEFORE anything touches disk — an escaping path refuses the whole init
-  // with nothing created, not even nahel/.
-  let paths: ReturnType<typeof knowledgePaths>;
+  // BEFORE anything touches disk — an escaping path (lexical traversal or a
+  // symlinked component) refuses the whole init with nothing created, not
+  // even nahel/.
+  let paths: Awaited<ReturnType<typeof knowledgePaths>>;
   try {
-    paths = knowledgePaths(layout, config);
+    paths = await knowledgePaths(layout, config);
   } catch (error) {
     ctx.stderr(`❌ ${error instanceof Error ? error.message : String(error)}`);
     return 1;

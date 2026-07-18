@@ -44,7 +44,7 @@ async function runBrief(args: string[], root: string): Promise<CommandResult> {
 async function writeProduct(store: PopulatedStore): Promise<void> {
   const config = await readConfig(store.layout);
   await writeFile(
-    knowledgePaths(store.layout, config).product,
+    (await knowledgePaths(store.layout, config)).product,
     `# P\n\n${GOAL_HEADING}\n\nShip the thing.\n\n${HARD_CONSTRAINTS_HEADING}\n\n1. Stay deterministic.\n`,
   );
 }

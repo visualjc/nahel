@@ -72,7 +72,7 @@ async function populatedWithProduct(): Promise<PopulatedStore> {
   const store = await buildPopulatedStore(tempDirs);
   const config = await readConfig(store.layout);
   await writeFile(
-    knowledgePaths(store.layout, config).product,
+    (await knowledgePaths(store.layout, config)).product,
     productMarkdown(GOAL_TEXT, CONSTRAINTS_TEXT),
   );
   return store;
@@ -382,7 +382,7 @@ describe("renderBrief — determinism", () => {
     const b = await buildPopulatedStore(tempDirs); // same default seed as `a`
     const configB = await readConfig(b.layout);
     await writeFile(
-      knowledgePaths(b.layout, configB).product,
+      (await knowledgePaths(b.layout, configB)).product,
       productMarkdown(GOAL_TEXT, CONSTRAINTS_TEXT),
     );
     expect(await briefOf(b)).toBe(briefA1);

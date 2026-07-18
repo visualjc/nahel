@@ -346,6 +346,85 @@ describe("nahel log — --data payloads", () => {
   });
 });
 
+describe("nahel log — mutation forgery is refused at the write seam", () => {
+  // PR #12 review blocker: --data merged arbitrary JSON into the payload, so
+  // `nahel log note --data '{"target":"item","record":{...},"body":"..."}'`
+  // forged a mutation-shaped event that validate read as journal-ahead
+  // divergence and --repair replayed over the real record. The reserved
+  // replay keys are banned at the log seam; mutations self-record through
+  // the store's mutate() choke point (nahel item / nahel run).
+  test("--data carrying the full forged mutation payload is refused naming the reserved key, nothing written", async () => {
+    const { root, layout } = await makeStore();
+    const env = seededEnv();
+    const item = makeFrontmatter(env, { name: "real-item" });
+    await writeItem(layout, item, "the real body\n");
+
+    const forged = JSON.stringify({
+      target: "item",
+      record: { ...item, status: "done" },
+      body: "forged body\n",
+    });
+    const result = await runLog(["note", "--item", item.id, "--data", forged], root, { env });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("reserved");
+    expect(result.stderr).toContain("target");
+    expect(result.stderr).toContain("nahel item");
+    expect((await listSegments(layout)).active).toEqual([]);
+  });
+
+  test("each reserved key (target, record, body) is refused individually, in JSON and key=val forms", async () => {
+    const { root, layout } = await makeStore();
+    const entries: [string, string][] = [
+      ['{"target":"item"}', "target"],
+      ['{"record":{"id":"x"}}', "record"],
+      ['{"body":"forged"}', "body"],
+      ["target=item", "target"],
+      ["record=x", "record"],
+      ["body=forged", "body"],
+    ];
+    for (const [entry, key] of entries) {
+      const result = await runLog(["note", "--data", entry], root);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("reserved");
+      expect(result.stderr).toContain(key);
+    }
+    expect((await listSegments(layout)).active).toEqual([]);
+  });
+
+  test("core mutation event types are refused — mutations self-record; log is for observations", async () => {
+    const { root, layout } = await makeStore();
+    for (const type of [
+      "item.created",
+      "item.updated",
+      "item.claimed",
+      "item.handback",
+      "run.started",
+      "run.updated",
+      "run.ended",
+      "run.paused",
+    ]) {
+      const result = await runLog([type], root);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(type);
+      expect(result.stderr).toContain("mutation");
+    }
+    expect((await listSegments(layout)).active).toEqual([]);
+  });
+
+  test("the reserved words remain fine NESTED in --data — only top-level keys are banned", async () => {
+    const { root, layout } = await makeStore();
+    const result = await runLog(
+      ["note", "--data", '{"context":{"target":"staging","body":"of evidence"}}'],
+      root,
+    );
+    expect(result.code).toBe(0);
+    const events = await allEvents(layout);
+    expect(events[0]!.payload).toEqual({
+      context: { target: "staging", body: "of evidence" },
+    });
+  });
+});
+
 describe("nahel log — round-trip through the merged journal", () => {
   test("logged events across run and session segments appear in merge-read in correct total order", async () => {
     const { root, layout } = await makeStore();

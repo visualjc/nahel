@@ -790,6 +790,105 @@ describe("validate — rotation and compaction overdue (warnings, thresholds fro
   });
 });
 
+describe("validate — mutation detection keys on event type, not payload shape", () => {
+  // PR #12 review blocker: checkDivergence/checkClaims duck-typed any event
+  // whose payload carried target+record as a mutation, so `nahel log note
+  // --data '{"target":"item",...}'` (or a rogue writer's hand-appended JSONL
+  // line) forged a "latest mutation" — validate flagged journal.divergence
+  // and --repair overwrote the real record with the forged payload. Only
+  // core mutation event types are mutations; a mutation-shaped payload under
+  // any other type is inert data.
+  test("a hand-appended note event with a forged item payload: no divergence, repair is a no-op", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, {}, "the real body\n");
+
+    // Rogue writer: the raw JSONL line lands directly in a session segment,
+    // one wall-clock second AFTER the real creation — shape-keyed detection
+    // would crown it the latest mutation for this item.
+    const forged = { ...item, status: "done" as const, updated: "2026-07-16T12:30:00Z" };
+    await writeFile(
+      sessionSegmentPath(fixture.layout, "f0f0f0f0"),
+      rawEventLine({
+        id: "f1f1f1f1",
+        ts: "2026-07-16T12:30:00Z",
+        type: "note",
+        item: item.id,
+        payload: { target: "item", record: forged, body: "forged body\n" },
+      }),
+    );
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+    expect(findingsFor(findings, "journal.payload")).toEqual([]);
+
+    // --repair path: nothing pending, the real record survives untouched.
+    const { replayPending } = await import("../../src/store/mutate");
+    expect(await replayPending(fixture.layout)).toEqual([]);
+    const { readItem } = await import("../../src/store/layout");
+    const disk = await readItem(fixture.layout, item.id);
+    expect(disk.frontmatter).toEqual(item);
+    expect(disk.body).toBe("the real body\n");
+  });
+
+  test("a forged run payload under an open-extension type is no divergence either", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+    const run = await createRun(fixture, item.id);
+
+    const forged = { ...run, status: "ended" as const, ended: "2026-07-16T12:30:00Z" };
+    await writeFile(
+      sessionSegmentPath(fixture.layout, "f2f2f2f2"),
+      rawEventLine({
+        id: "f3f3f3f3",
+        ts: "2026-07-16T12:30:00Z",
+        type: "deploy.finished",
+        item: item.id,
+        payload: { target: "run", record: forged },
+      }),
+    );
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+    const { replayPending } = await import("../../src/store/mutate");
+    expect(await replayPending(fixture.layout)).toEqual([]);
+  });
+
+  test("an agent note with a mutation-shaped payload registers no claim and violates none", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+
+    // Human claims the item through the choke point.
+    const claimed = { ...item, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    // An agent's note carries a mutation-shaped payload echoing the item with
+    // a DIFFERENT claimant. It is not a mutation: it neither trips
+    // claims.violation (agent "mutating" a claimed item) nor registers
+    // mallory's claim for claims.conflict.
+    const forged = { ...claimed, claimed_by: "mallory", updated: "2026-07-16T12:30:00Z" };
+    await writeFile(
+      sessionSegmentPath(fixture.layout, "f4f4f4f4"),
+      rawEventLine({
+        id: "f5f5f5f5",
+        ts: "2026-07-16T12:30:00Z",
+        type: "note",
+        item: item.id,
+        payload: { target: "item", record: forged, body: "" },
+      }),
+    );
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "claims.violation")).toEqual([]);
+    expect(findingsFor(findings, "claims.conflict")).toEqual([]);
+    expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+  });
+});
+
 describe("validate — finding shape and determinism", () => {
   test("findings order errors before warnings and is identical across calls", async () => {
     const fixture = await setupFixture(dirs, {

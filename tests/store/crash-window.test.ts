@@ -198,6 +198,66 @@ describe("mutation consistency — the write-ahead crash window", () => {
     expect(await readItem(layout, item.id)).toEqual(before);
   });
 
+  // PR #12 review blocker: replayPending keyed mutation detection on payload
+  // SHAPE (target+record), so a forged non-mutation event — `nahel log note
+  // --data '{"target":"item",...}'` or a rogue writer's hand-appended line —
+  // read as a pending mutation and repair overwrote the real record with the
+  // forged payload. Detection must key on the event TYPE: only core mutation
+  // types replay; payload shape is a validity check within those types.
+  test("a note event carrying a forged item-mutation payload never triggers repairs", async () => {
+    const { layout, env, ctx } = await setup();
+    const item = makeFrontmatter(env);
+    await mutate(ctx, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemCreated,
+      frontmatter: item,
+      body: "the real body\n",
+    });
+    const before = await readItem(layout, item.id);
+
+    // The forge lands one tick later (ticking env), so naive shape-keyed
+    // detection would see it as the LATEST "mutation" for this item.
+    const forged = { ...item, status: "done" as const, updated: env.now() };
+    const { appendEvent } = await import("../../src/store/journal");
+    await appendEvent(layout, env, {
+      type: "note",
+      actor: ctx.actor,
+      item: item.id,
+      payload: { target: "item", record: forged, body: "forged body\n" },
+      session: ctx.session,
+    });
+
+    expect(await replayPending(layout)).toEqual([]);
+    expect(await readItem(layout, item.id)).toEqual(before);
+  });
+
+  test("an open-extension event carrying a forged run-mutation payload never triggers repairs", async () => {
+    const { layout, env, ctx } = await setup();
+    const item = makeFrontmatter(env);
+    await mutate(ctx, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemCreated,
+      frontmatter: item,
+      body: "",
+    });
+    const run = makeRun(env, item.id);
+    await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runStarted, run });
+    const before = await readRun(layout, run.id);
+
+    const forged = { ...run, status: "ended" as const, ended: env.now() };
+    const { appendEvent } = await import("../../src/store/journal");
+    await appendEvent(layout, env, {
+      type: "deploy.finished",
+      actor: ctx.actor,
+      item: item.id,
+      run: run.id,
+      payload: { target: "run", record: forged },
+    });
+
+    expect(await replayPending(layout)).toEqual([]);
+    expect(await readRun(layout, run.id)).toEqual(before);
+  });
+
   test("replayPending() never journals: repairs only materialize what the journal already records", async () => {
     const { layout, env, ctx } = await setup();
     await sabotageItemWrites(layout.itemsDir);

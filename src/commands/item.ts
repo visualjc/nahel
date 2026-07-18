@@ -132,8 +132,11 @@ const USAGE = `usage:
 
   nahel item update <id> [--status <status>] [--lane <lane>] [--parent <id>]
                     [--depends-on <id>]... [--external-ref <provider>:<id>]... [--reopen]
+                    [--clear-parent] [--clear-depends-on] [--clear-external-refs]
     Update fields; the CLI maintains \`updated\`. Repeatable --depends-on and
-    --external-ref replace the whole list.
+    --external-ref replace the whole list; --clear-parent, --clear-depends-on
+    and --clear-external-refs remove the field / empty the list (each is
+    mutually exclusive with its set flag).
       status: ${WORK_ITEM_STATUSES.join(" | ")}
       Any status transition is legal except re-opening a done or dropped item,
       which requires --reopen (guard against accidental resurrection);
@@ -210,6 +213,9 @@ async function itemUpdate(
       "depends-on": { type: "string", multiple: true },
       "external-ref": { type: "string", multiple: true },
       reopen: { type: "boolean" },
+      "clear-parent": { type: "boolean" },
+      "clear-depends-on": { type: "boolean" },
+      "clear-external-refs": { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -217,15 +223,31 @@ async function itemUpdate(
     throw new UsageError("item update takes exactly one <id>");
   }
   const id = positionals[0]!;
+  // A set flag and its clear flag together are ambiguous — refused outright.
+  for (const [setFlag, clearFlag] of [
+    ["parent", "clear-parent"],
+    ["depends-on", "clear-depends-on"],
+    ["external-ref", "clear-external-refs"],
+  ] as const) {
+    if (values[setFlag] !== undefined && values[clearFlag] === true) {
+      throw new UsageError(
+        `--${setFlag} and --${clearFlag} are mutually exclusive — pass one or the other`,
+      );
+    }
+  }
   const hasChange =
     values.status !== undefined ||
     values.lane !== undefined ||
     values.parent !== undefined ||
     values["depends-on"] !== undefined ||
-    values["external-ref"] !== undefined;
+    values["external-ref"] !== undefined ||
+    values["clear-parent"] === true ||
+    values["clear-depends-on"] === true ||
+    values["clear-external-refs"] === true;
   if (!hasChange) {
     throw new UsageError(
-      "nothing to update — pass at least one of --status, --lane, --parent, --depends-on, --external-ref",
+      "nothing to update — pass at least one of --status, --lane, --parent, --depends-on, " +
+        "--external-ref, --clear-parent, --clear-depends-on, --clear-external-refs",
     );
   }
 
@@ -268,6 +290,20 @@ async function itemUpdate(
   }
   if (values["external-ref"] !== undefined) {
     next.external_refs = values["external-ref"].map(parseExternalRef);
+  }
+  // Clears build the full post-mutation record — "cleared" is an ABSENT
+  // parent key (never parent: undefined/null), an empty list for the others.
+  // The store's claim check still reads the CURRENT chain from disk starting
+  // at the item itself, so clearing the parent can never slip a covered item
+  // out of a claimed subtree.
+  if (values["clear-parent"] === true) {
+    delete next.parent;
+  }
+  if (values["clear-depends-on"] === true) {
+    next.depends_on = [];
+  }
+  if (values["clear-external-refs"] === true) {
+    next.external_refs = [];
   }
   next.updated = env.now();
 

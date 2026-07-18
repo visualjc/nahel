@@ -50,6 +50,7 @@ export const FIXTURE_EVENT_TYPES = [
   "run.started", // ended run (task-alpha)
   "run.ended", // ended run → success
   "note", // logged against task-alpha
+  "session.closed", // the store's marker: log closed its own session segment
   "test.failed", // logged against the active run (run ref only, no item ref)
   "item.claimed", // task-alpha claimed by human:jim via mutate() — the newest event
 ] as const;

@@ -112,9 +112,10 @@ describe("nahel progress — filters", () => {
     const result = await runProgress(["--item", store.epicId], store.root);
     expect(result.code).toBe(0);
     const lines = result.stdout.split("\n");
-    // solo-chore's creation is outside the subtree; everything else is inside,
-    // including the run-ref-only test.failed event.
-    expect(lines).toHaveLength(FIXTURE_EVENT_TYPES.length - 1);
+    // solo-chore's creation is outside the subtree, and session.closed carries
+    // no item or run ref; everything else is inside, including the
+    // run-ref-only test.failed event.
+    expect(lines).toHaveLength(FIXTURE_EVENT_TYPES.length - 2);
     expect(result.stdout).not.toContain(store.soloChoreId);
     expect(result.stdout).toContain("test.failed");
     expect(result.stdout).toContain("run.ended");
@@ -137,10 +138,11 @@ describe("nahel progress — filters", () => {
     const result = await runProgress(["--since", pivot.ts], store.root);
     expect(result.code).toBe(0);
     const lines = result.stdout.split("\n");
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toContain("run.ended");
-    expect(lines[2]).toContain("test.failed");
-    expect(lines[3]).toContain("item.claimed");
+    expect(lines[2]).toContain("session.closed");
+    expect(lines[3]).toContain("test.failed");
+    expect(lines[4]).toContain("item.claimed");
   });
 
   test("--limit keeps the newest n events (still newest-last)", async () => {

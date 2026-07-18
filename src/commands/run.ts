@@ -6,6 +6,7 @@ import { runSchema, type Run } from "../schema/records";
 import { writeHotState } from "../store/hotstate";
 import { readItem, readRun } from "../store/layout";
 import { mutate, type StoreContext } from "../store/mutate";
+import { rotateJournal } from "../store/rotate";
 import {
   commandContext,
   execute,
@@ -161,6 +162,11 @@ async function runEnd(
   await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runEnded, run: closed });
   // Keyed by the parsed record's id, never raw argv (blocker 2 amendment).
   await writeHotState(ctx.layout, closed.id, { ...hotStateFor(closed, ended), outcome });
+  // The run.ended event is the segment's final line and the record now says
+  // ended, so the run's segment is provably closed — archive it, sweeping any
+  // other eligible closed segments opportunistically (PRD F1). Bounded,
+  // deterministic, silent when nothing is eligible.
+  await rotateJournal(ctx.layout);
   return 0;
 }
 

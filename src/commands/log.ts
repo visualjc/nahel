@@ -4,11 +4,13 @@ import { CORE_EVENT_TYPES, MUTATION_EVENT_TYPES } from "../schema/events";
 import { NAHEL_ACTOR_VAR, resolveActor } from "../store/actor";
 import {
   appendEvent,
+  closeSession,
   newSessionSegmentId,
   SESSION_CLOSED_EVENT_TYPE,
 } from "../store/journal";
 import { itemExists, readConfig, readRun, storeLayout } from "../store/layout";
 import { MUTATION_PAYLOAD_KEYS } from "../store/mutate";
+import { rotateJournal } from "../store/rotate";
 
 /**
  * `nahel log` (PRD F4): append a typed journal event — an *observation about
@@ -174,6 +176,16 @@ async function runLog(argv: string[], ctx: LogCommandContext): Promise<number> {
       ...(flags.item === undefined ? {} : { item: flags.item }),
       payload,
     });
+
+    // The per-invocation session segment is single-use by design: close it so
+    // it becomes rotation-eligible, then run the opportunistic sweep (PRD F1:
+    // rotation/archiving enforced by the CLI). The sweep is bounded (one pass
+    // over active segments), deterministic, and silent when nothing is
+    // eligible; run segments stay untouched until their run has ended.
+    if (session !== undefined) {
+      await closeSession(layout, ctx.env, actor, session);
+    }
+    await rotateJournal(layout);
 
     if (!CORE_TYPE_SET.has(flags.type)) {
       ctx.stderr(

@@ -82,6 +82,7 @@ describe("collectProgress — streaming filters", () => {
     expect(filtered.map((event) => event.type)).toEqual([
       "run.ended",
       "note",
+      "session.closed",
       "test.failed",
       "item.claimed",
     ]);
@@ -90,7 +91,7 @@ describe("collectProgress — streaming filters", () => {
   test("limit keeps the NEWEST n events, still oldest-first for rendering", async () => {
     const store = await buildPopulatedStore(tempDirs);
     const filtered = await collectProgress(store.layout, { limit: 3 });
-    expect(filtered.map((event) => event.type)).toEqual(["note", "test.failed", "item.claimed"]);
+    expect(filtered.map((event) => event.type)).toEqual(["session.closed", "test.failed", "item.claimed"]);
   });
 
   test("item filtering covers the subtree AND run-ref-only events of the subtree's runs", async () => {

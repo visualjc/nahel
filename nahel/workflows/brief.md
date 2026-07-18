@@ -8,6 +8,11 @@ args: ""
 
 Load and follow this workflow to onboard onto the project from zero context.
 
+Before any `nahel` command: if you are an agent, set
+`NAHEL_ACTOR=agent:<your-id>` (example: `NAHEL_ACTOR=agent:claude-code`) in
+your environment so every journal event carries your identity and claim
+enforcement applies to you. Humans rely on the config actor default.
+
 1. Run `nahel brief` at the repo root. It renders the deterministic onboarding
    pack: the constitution's Goal and Hard constraints (verbatim), where
    canonical truth lives for each state layer, the work-item tree, recent

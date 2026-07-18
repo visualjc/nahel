@@ -16,6 +16,7 @@ You are working in the **Nahel** repo: a durable, tool-agnostic project state mo
 
 ## House rules
 
+- Set `NAHEL_ACTOR=agent:<your-id>` (e.g. `NAHEL_ACTOR=agent:claude-code`) before any `nahel` command; humans rely on the config actor default.
 - TypeScript on Bun. TDD for all CLI code (`bun test`).
 - Quality invariants of ADR-0011 apply to work on Nahel itself: repro test before bug fix, verify-by-driving before PRs, humans merge.
 - Every ccpm/tooling annoyance you hit becomes a Nahel work item, never a ccpm fix.

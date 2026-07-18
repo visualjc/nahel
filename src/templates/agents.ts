@@ -14,6 +14,7 @@ This project is managed with Nahel: durable, tool-agnostic project state under \
 
 ## Rules of the road
 
+- **Identify yourself first.** Agents MUST set \`NAHEL_ACTOR=agent:<your-id>\` in the environment (example: \`NAHEL_ACTOR=agent:claude-code\`) before running ANY \`nahel\` command — every journal event then carries the true actor, and claim enforcement can tell agents from humans. Humans set nothing: the config actor entry is the human default.
 - **Never hand-edit state.** Everything under \`nahel/\` (frontmatter, journals, hot state) is mutated only through \`nahel\` CLI verbs. If a change you need has no verb, that is a missing-feature bug — say so instead of editing files.
 - **Record what happens.** Log significant events with \`nahel log\` as you work; CLI mutations journal themselves automatically.
 - **Check before acting.** \`nahel status\` shows the work-item tree, \`nahel progress\` the timeline, \`nahel validate\` confirms state integrity.

@@ -146,6 +146,14 @@ async function findCoveringClaim(
   return findClaimOnChain(layout, incomingParent, seen);
 }
 
+/**
+ * The payload keys mutationEventFields writes and replay reads (target,
+ * record, body). Reserved at every non-mutation write seam: `nahel log`
+ * refuses --data carrying them at top level, so an observation can never
+ * masquerade as a mutation payload.
+ */
+export const MUTATION_PAYLOAD_KEYS = ["target", "record", "body"] as const;
+
 function mutationEventFields(mutation: Mutation): {
   item: string;
   run?: string;

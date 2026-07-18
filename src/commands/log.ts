@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { CORE_EVENT_TYPES } from "../schema/events";
+import { CORE_EVENT_TYPES, MUTATION_EVENT_TYPES } from "../schema/events";
 import { NAHEL_ACTOR_VAR, resolveActor } from "../store/actor";
 import {
   appendEvent,
@@ -8,6 +8,7 @@ import {
   SESSION_CLOSED_EVENT_TYPE,
 } from "../store/journal";
 import { itemExists, readConfig, readRun, storeLayout } from "../store/layout";
+import { MUTATION_PAYLOAD_KEYS } from "../store/mutate";
 
 /**
  * `nahel log` (PRD F4): append a typed journal event — an *observation about
@@ -74,6 +75,12 @@ function parseFlags(argv: string[]): LogFlags {
       `event type ${SESSION_CLOSED_EVENT_TYPE} is reserved — the store appends it when a session segment closes`,
     );
   }
+  if (MUTATION_EVENT_TYPES.has(type)) {
+    throw new UsageError(
+      `event type ${type} is a core mutation type — mutations self-record through ` +
+        "`nahel item`/`nahel run`; log is for observations about work",
+    );
+  }
   return {
     type,
     ...(values.item === undefined ? {} : { item: values.item }),
@@ -119,6 +126,17 @@ function parsePayload(entries: string[]): Record<string, unknown> {
         value = raw;
       }
       payload[key] = value;
+    }
+  }
+  // The store's replay machinery reads target/record/body from mutation
+  // event payloads; banned here at top level so a logged observation can
+  // never masquerade as a mutation (nested occurrences are plain data).
+  for (const key of MUTATION_PAYLOAD_KEYS) {
+    if (key in payload) {
+      throw new UsageError(
+        `--data key ${JSON.stringify(key)} is reserved for mutation payloads — ` +
+          "mutations self-record through `nahel item`/`nahel run`",
+      );
     }
   }
   return payload;

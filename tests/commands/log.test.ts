@@ -73,7 +73,7 @@ describe("nahel log — segment resolution", () => {
     await writeRun(layout, run);
 
     const result = await runLog(
-      ["run.started", "--run", run.id, "--item", item.id],
+      ["note", "--run", run.id, "--item", item.id],
       root,
       { env },
     );
@@ -87,7 +87,7 @@ describe("nahel log — segment resolution", () => {
     expect(events).toHaveLength(1);
     const event = events[0]!;
     expect(() => journalEventSchema.parse(event)).not.toThrow();
-    expect(event.type).toBe("run.started");
+    expect(event.type).toBe("note");
     expect(event.run).toBe(run.id);
     expect(event.item).toBe(item.id);
     expect(event.payload).toEqual({});
@@ -175,7 +175,10 @@ describe("nahel log — actor resolution", () => {
 });
 
 describe("nahel log — event types (core set open to extension)", () => {
-  test("core event types are accepted by name with no unknown-type flag", async () => {
+  // Core MUTATION types (run.started, item.claimed, …) are refused here —
+  // mutations self-record through mutate() (see the write-seam describe
+  // below); `note` is the core observation type log accepts silently.
+  test("the core observation type is accepted by name with no unknown-type flag", async () => {
     const { root, layout } = await makeStore();
     const env = seededEnv();
     const item = makeFrontmatter(env, { name: "an-item" });
@@ -183,17 +186,11 @@ describe("nahel log — event types (core set open to extension)", () => {
     const run = makeRun(env, item.id);
     await writeRun(layout, run);
 
-    for (const type of ["note", "run.started", "item.claimed"]) {
-      const result = await runLog([type, "--run", run.id], root, { env });
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain(type);
-    }
-    expect((await allEvents(layout)).map((e) => e.type)).toEqual([
-      "note",
-      "run.started",
-      "item.claimed",
-    ]);
+    const result = await runLog(["note", "--run", run.id], root, { env });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("note");
+    expect((await allEvents(layout)).map((e) => e.type)).toEqual(["note"]);
   });
 
   test("an unknown type is logged (open extension) but flagged distinctly in the output", async () => {
@@ -436,12 +433,14 @@ describe("nahel log — round-trip through the merged journal", () => {
     const run = makeRun(env, item.id);
     await writeRun(layout, run);
 
+    // Observation types only: log refuses core mutation types (mutations
+    // self-record), and run-segment routing follows --run, not the type.
     const invocations: string[][] = [
-      ["run.started", "--run", run.id, "--item", item.id],
+      ["test.failed", "--run", run.id, "--item", item.id],
       ["note", "--item", item.id, "--data", "text=looking around"],
-      ["run.updated", "--run", run.id, "--data", "phase=building"],
+      ["decision.made", "--run", run.id, "--data", "phase=building"],
       ["assumption.logged", "--data", '{"assume":"bun installed"}'],
-      ["run.ended", "--run", run.id],
+      ["review.requested", "--run", run.id],
     ];
     const loggedIds: string[] = [];
     for (const argv of invocations) {
@@ -455,11 +454,11 @@ describe("nahel log — round-trip through the merged journal", () => {
     const merged = await allEvents(layout);
     expect(merged.map((e) => e.id)).toEqual(loggedIds);
     expect(merged.map((e) => e.type)).toEqual([
-      "run.started",
+      "test.failed",
       "note",
-      "run.updated",
+      "decision.made",
       "assumption.logged",
-      "run.ended",
+      "review.requested",
     ]);
     // Run-ref'd events share the run segment; non-run events each sit in
     // their own session segment.

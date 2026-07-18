@@ -270,10 +270,11 @@ describe("nahel init — knowledge-path containment (hard constraint 2)", () => 
 
   test("rejects a sneaky in-repo prefix that traverses out (docs/../../evil.md)", async () => {
     const root = await makeRepo();
-    const result = await runCli(["init", "--product", "docs/../../evil.md"], root);
+    const escaped = `evil-${process.pid}.md`;
+    const result = await runCli(["init", "--product", `docs/../../${escaped}`], root);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("product");
-    expect(existsSync(join(root, "..", "evil.md"))).toBe(false);
+    expect(existsSync(join(root, "..", escaped))).toBe(false);
     expect(existsSync(join(root, "nahel"))).toBe(false);
   });
 

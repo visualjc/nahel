@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile, unlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
   configSchema,
@@ -108,15 +108,44 @@ export async function writeConfig(layout: StoreLayout, config: Config): Promise<
   await writeFileAtomic(layout.configPath, YAML.stringify(valid));
 }
 
-/** Resolve the config's repo-relative knowledge paths against the root. */
+/**
+ * Resolve one knowledge path and prove it stays STRICTLY under the repo root
+ * (hard constraint 2: nahel never writes outside the repo). Absolute paths
+ * are refused outright; relative ones are resolved and must land below the
+ * root directory — not at it (adr is a directory under the root, not the
+ * root), and not at a sibling whose name merely shares the root as a string
+ * prefix.
+ */
+function containKnowledgePath(root: string, key: string, path: string): string {
+  if (isAbsolute(path)) {
+    throw new Error(
+      `knowledge path ${key} (${JSON.stringify(path)}) is absolute — ` +
+        `knowledge paths must be repo-relative (hard constraint 2: nothing outside the repo)`,
+    );
+  }
+  const rootResolved = resolve(root);
+  const resolved = resolve(rootResolved, path);
+  if (resolved === rootResolved || !resolved.startsWith(rootResolved + sep)) {
+    throw new Error(
+      `knowledge path ${key} (${JSON.stringify(path)}) resolves to ${resolved}, ` +
+        `which is not strictly under the repo root ${rootResolved} (hard constraint 2)`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Resolve the config's repo-relative knowledge paths against the root,
+ * refusing any path that escapes the repo (see containKnowledgePath).
+ */
 export function knowledgePaths(
   layout: StoreLayout,
   config: Config,
 ): { product: string; context: string; adr: string } {
   return {
-    product: resolve(layout.root, config.knowledge.product),
-    context: resolve(layout.root, config.knowledge.context),
-    adr: resolve(layout.root, config.knowledge.adr),
+    product: containKnowledgePath(layout.root, "product", config.knowledge.product),
+    context: containKnowledgePath(layout.root, "context", config.knowledge.context),
+    adr: containKnowledgePath(layout.root, "adr", config.knowledge.adr),
   };
 }
 

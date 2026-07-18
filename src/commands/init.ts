@@ -95,6 +95,17 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
   };
   const config = existing ?? freshConfig;
 
+  // Containment preflight (hard constraint 2): resolve the knowledge paths
+  // BEFORE anything touches disk — an escaping path refuses the whole init
+  // with nothing created, not even nahel/.
+  let paths: ReturnType<typeof knowledgePaths>;
+  try {
+    paths = knowledgePaths(layout, config);
+  } catch (error) {
+    ctx.stderr(`❌ ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
   await ensureLayout(ctx.cwd);
 
   const created: string[] = [];
@@ -110,7 +121,6 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
     kept.push("nahel/config exists — kept");
   }
 
-  const paths = knowledgePaths(layout, config);
   const date = ctx.env.now().slice(0, 10);
   const templates = [
     { label: config.knowledge.product, path: paths.product, content: productTemplate(date) },

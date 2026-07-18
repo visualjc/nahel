@@ -543,6 +543,53 @@ function checkClaims(state: ParsedState): Finding[] {
   return findings;
 }
 
+/**
+ * Claim/pause coherence over CURRENT state (PRD F9, PR #12 review HIGH 3):
+ * `nahel claim` journals claimed_by and then pauses covered runs in a second
+ * loop — a crash between the two leaves a claimed subtree with ACTIVE runs,
+ * and replay cannot heal run status (the pause was never journaled). An
+ * active run whose item is covered by a claim (its own claim or a claimed
+ * ancestor, walking the on-disk parent chain) is therefore an error.
+ */
+function checkClaimedActiveRuns(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  const coveringClaim = (
+    itemId: string,
+  ): { id: string; claimant: string } | undefined => {
+    const seen = new Set<string>();
+    let current: string | undefined = itemId;
+    while (current !== undefined && !seen.has(current)) {
+      seen.add(current);
+      const item = state.items.get(current);
+      if (item === undefined) return undefined;
+      if (item.record.claimed_by !== undefined) {
+        return { id: current, claimant: item.record.claimed_by };
+      }
+      current = item.record.parent;
+    }
+    return undefined;
+  };
+
+  for (const { record, path } of state.runs.values()) {
+    if (record.status !== "active") continue;
+    const claim = coveringClaim(record.item);
+    if (claim === undefined) continue;
+    const via = claim.id === record.item ? "" : ` via claimed ancestor ${claim.id}`;
+    findings.push({
+      severity: "error",
+      check: "claims.active-run",
+      path,
+      message:
+        `run ${record.id} is active on item ${record.item}, which is covered by ` +
+        `${claim.claimant}'s claim${via} — claim pauses covered runs, so an active one ` +
+        `means the claim was interrupted before its pause step`,
+      fix: `pause the run (nahel pause ${record.id}) or hand back and re-run the claim (nahel handback ${claim.id})`,
+    });
+  }
+  return findings;
+}
+
 /** Journal well-formedness: monotonic seq per segment, globally unique ids. */
 function checkJournal(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -815,6 +862,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkRefs(state),
     ...checkCycles(state),
     ...checkClaims(state),
+    ...checkClaimedActiveRuns(state),
     ...checkJournal(state),
     ...checkDivergence(state),
     ...checkHotState(state),

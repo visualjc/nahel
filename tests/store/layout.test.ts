@@ -99,6 +99,54 @@ describe("config", () => {
       adr: join(root, "docs/adr"),
     });
   });
+
+  // Containment (hard constraint 2, PR #12 review blocker 1): knowledgePaths
+  // is the single resolution point, so it must refuse any path that is
+  // absolute or does not resolve STRICTLY under the repo root.
+  test("knowledgePaths refuses an absolute knowledge path", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    const config = makeConfig({
+      knowledge: { product: "/tmp/evil.md", context: "CONTEXT.md", adr: "docs/adr" },
+    });
+    expect(() => knowledgePaths(layout, config)).toThrow(/product/);
+  });
+
+  test("knowledgePaths refuses relative paths resolving above the root", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    for (const knowledge of [
+      { product: "../outside.md", context: "CONTEXT.md", adr: "docs/adr" },
+      { product: "PRODUCT.md", context: "docs/../../outside.md", adr: "docs/adr" },
+      { product: "PRODUCT.md", context: "CONTEXT.md", adr: "../adr" },
+    ]) {
+      expect(() => knowledgePaths(layout, makeConfig({ knowledge }))).toThrow(/repo/);
+    }
+  });
+
+  test("knowledgePaths refuses a path resolving to the root itself (adr must be under it)", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    const config = makeConfig({
+      knowledge: { product: "PRODUCT.md", context: "CONTEXT.md", adr: "." },
+    });
+    expect(() => knowledgePaths(layout, config)).toThrow(/adr/);
+  });
+
+  test("knowledgePaths refuses a sibling-prefix escape (root '/a' vs '/a-evil')", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    // Resolves to `${root}-evil/x.md`: starts with the root STRING but is
+    // outside the root DIRECTORY — the classic prefix-check bug, pinned down.
+    const config = makeConfig({
+      knowledge: {
+        product: `../${root.split("/").pop()}-evil/x.md`,
+        context: "CONTEXT.md",
+        adr: "docs/adr",
+      },
+    });
+    expect(() => knowledgePaths(layout, config)).toThrow(/repo/);
+  });
 });
 
 describe("work item records", () => {

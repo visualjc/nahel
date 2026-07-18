@@ -224,6 +224,68 @@ describe("nahel init — config", () => {
   });
 });
 
+describe("nahel init — knowledge-path containment (hard constraint 2)", () => {
+  // Every knowledge flag, escaping two ways: an absolute path and a relative
+  // traversal above the repo root. Verified escape (PR #12 review, blocker 1):
+  // `nahel init --product /tmp/x.md` created /tmp/x.md.
+  const flags = ["product", "context", "adr"] as const;
+
+  /** Unique per-test absolute path under /tmp (never created on green). */
+  function tmpEscapePath(flag: string): string {
+    return `/tmp/nahel-escape-${flag}-${process.pid}.md`;
+  }
+
+  afterEach(() => {
+    for (const flag of flags) rmSync(tmpEscapePath(flag), { force: true });
+  });
+
+  for (const flag of flags) {
+    test(`rejects an absolute --${flag} path, creates nothing at all`, async () => {
+      const root = await makeRepo();
+      const outside = tmpEscapePath(flag);
+      const result = await runCli(["init", `--${flag}`, outside], root);
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(flag);
+      // Nothing outside the repo…
+      expect(existsSync(outside)).toBe(false);
+      // …and nothing inside either: refusal happens before any write.
+      expect(existsSync(join(root, "nahel"))).toBe(false);
+      expect(existsSync(join(root, "PRODUCT.md"))).toBe(false);
+      expect(existsSync(join(root, "AGENTS.md"))).toBe(false);
+    });
+
+    test(`rejects a relative --${flag} path that resolves above the repo root`, async () => {
+      const root = await makeRepo();
+      const escape = `../outside-${flag}-${process.pid}.md`;
+      const result = await runCli(["init", `--${flag}`, escape], root);
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(flag);
+      expect(existsSync(join(root, "..", `outside-${flag}-${process.pid}.md`))).toBe(false);
+      expect(existsSync(join(root, "nahel"))).toBe(false);
+      expect(existsSync(join(root, "PRODUCT.md"))).toBe(false);
+    });
+  }
+
+  test("rejects a sneaky in-repo prefix that traverses out (docs/../../evil.md)", async () => {
+    const root = await makeRepo();
+    const result = await runCli(["init", "--product", "docs/../../evil.md"], root);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("product");
+    expect(existsSync(join(root, "..", "evil.md"))).toBe(false);
+    expect(existsSync(join(root, "nahel"))).toBe(false);
+  });
+
+  test("rejects a knowledge path resolving to the repo root itself", async () => {
+    const root = await makeRepo();
+    const result = await runCli(["init", "--adr", "."], root);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("adr");
+    expect(existsSync(join(root, "nahel"))).toBe(false);
+  });
+});
+
 describe("nahel init — never overwrites, re-run safe", () => {
   test("pristine re-run no-ops with a clear message and leaves every byte unchanged", async () => {
     const root = await makeRepo();

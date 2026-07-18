@@ -149,6 +149,21 @@ describe("nahel init — templates", () => {
     expect(agents.toLowerCase()).toContain("never hand-edit");
   });
 
+  test("AGENTS.md tells agents to self-identify via NAHEL_ACTOR before any nahel command", async () => {
+    const root = await makeRepo();
+    await runCli(["init"], root);
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
+
+    // PR #12 review: without this instruction, cooperative fresh agents run
+    // under the config's human default and silently bypass the claim
+    // guardrail — the onboarding doc must make self-identification explicit.
+    expect(agents).toContain("NAHEL_ACTOR=agent:");
+    expect(agents).toContain("NAHEL_ACTOR=agent:claude-code"); // concrete example
+    expect(agents.toLowerCase()).toContain("before");
+    // Humans are told they need not set it — the config actor is their default.
+    expect(agents).toContain("config actor");
+  });
+
   test("identical inputs produce byte-identical output (deterministic CLI)", async () => {
     const rootA = await makeRepo();
     const rootB = await makeRepo();

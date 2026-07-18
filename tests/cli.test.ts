@@ -107,37 +107,44 @@ describe("cli entry point — NAHEL_ACTOR environment contract", () => {
   // ambient-process reader, so the variable is exercised end-to-end here by
   // spawning the real CLI — commands themselves only ever see the injected
   // actorOverride value (tests/commands/*.test.ts cover that layer).
-  test("NAHEL_ACTOR set in the process environment overrides the config actor", async () => {
-    const root = await makeTempDir("nahel-cli-actor-");
-    try {
-      const layout = await ensureLayout(root);
-      await writeConfig(layout, makeConfig()); // config actor: agent claude-code
+  // Both actor kinds: the human override AND the fresh-agent self-identify
+  // path AGENTS.md instructs (NAHEL_ACTOR=agent:<id> before any command).
+  for (const [spec, expected] of [
+    ["human:jim", { kind: "human", id: "jim" }],
+    ["agent:fresh-agent", { kind: "agent", id: "fresh-agent" }],
+  ] as const) {
+    test(`NAHEL_ACTOR=${spec} in the process environment overrides the config actor`, async () => {
+      const root = await makeTempDir("nahel-cli-actor-");
+      try {
+        const layout = await ensureLayout(root);
+        await writeConfig(layout, makeConfig()); // config actor: agent claude-code
 
-      const proc = Bun.spawn(
-        ["bun", "run", join(import.meta.dir, "../src/cli.ts"), "item", "new", "chore", "env-actor", "direct"],
-        {
-          cwd: root,
-          env: { ...process.env, [NAHEL_ACTOR_VAR]: "human:jim" },
-          stderr: "pipe",
-        },
-      );
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      expect(stderr).toBe("");
-      expect(await proc.exited).toBe(0);
-      const id = stdout.trim();
-      expect(id.length).toBeGreaterThan(0);
+        const proc = Bun.spawn(
+          ["bun", "run", join(import.meta.dir, "../src/cli.ts"), "item", "new", "chore", "env-actor", "direct"],
+          {
+            cwd: root,
+            env: { ...process.env, [NAHEL_ACTOR_VAR]: spec },
+            stderr: "pipe",
+          },
+        );
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+        expect(stderr).toBe("");
+        expect(await proc.exited).toBe(0);
+        const id = stdout.trim();
+        expect(id.length).toBeGreaterThan(0);
 
-      const events: JournalEvent[] = [];
-      for await (const event of readJournal(layout)) events.push(event);
-      expect(events).toHaveLength(1);
-      expect(events[0]!.type).toBe("item.created");
-      expect(events[0]!.item).toBe(id);
-      expect(events[0]!.actor).toEqual({ kind: "human", id: "jim" });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        const events: JournalEvent[] = [];
+        for await (const event of readJournal(layout)) events.push(event);
+        expect(events).toHaveLength(1);
+        expect(events[0]!.type).toBe("item.created");
+        expect(events[0]!.item).toBe(id);
+        expect(events[0]!.actor).toEqual(expected);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("without NAHEL_ACTOR the config actor resolves end-to-end", async () => {
     const root = await makeTempDir("nahel-cli-actor-");

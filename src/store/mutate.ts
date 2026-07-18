@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Env } from "../schema/env";
+import { MUTATION_EVENT_TYPES } from "../schema/events";
 import {
   runSchema,
   workItemFrontmatterSchema,
@@ -262,6 +263,11 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     const segmentItems = new Map<string, PendingItem>();
     const segmentRuns = new Map<string, PendingRun>();
     for await (const event of mergeSegments([path])) {
+      // Mutations are identified by event TYPE (the choke point's core
+      // mutation types), never by payload shape — a mutation-shaped payload
+      // under `note` or any open extension type (a forged `nahel log`, a
+      // rogue writer) is inert data, not a replayable mutation.
+      if (!MUTATION_EVENT_TYPES.has(event.type)) continue;
       const payload = event.payload;
       if (payload["target"] === "item" && payload["record"] !== undefined) {
         const record = workItemFrontmatterSchema.parse(payload["record"]);

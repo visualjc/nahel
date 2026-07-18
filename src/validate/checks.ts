@@ -11,6 +11,7 @@ import {
   type Run,
   type WorkItemFrontmatter,
 } from "../schema/records";
+import { MUTATION_EVENT_TYPES } from "../schema/events";
 import type { HotState } from "../store/hotstate";
 import {
   compareEvents,
@@ -451,8 +452,16 @@ type Mutation =
   | { target: "run"; record: Run }
   | { target: "item" | "run"; invalid: string };
 
-/** Parse a mutation event's payload record, when the event is a mutation. */
+/**
+ * Parse a mutation event's payload record, when the event is a mutation.
+ * Mutations are identified by event TYPE (the choke point's core mutation
+ * types), never by payload shape — a mutation-shaped payload under `note` or
+ * any open extension type (a forged `nahel log`, a rogue writer) is inert
+ * data. Within a mutation type, payload shape is a validity check: a core
+ * mutation event that cannot be replayed is reported, not ignored.
+ */
 function mutationRecord(event: JournalEvent): Mutation | undefined {
+  if (!MUTATION_EVENT_TYPES.has(event.type)) return undefined;
   const payload = event.payload;
   if (payload["target"] === "item") {
     const result = workItemFrontmatterSchema.safeParse(payload["record"]);
@@ -468,7 +477,12 @@ function mutationRecord(event: JournalEvent): Mutation | undefined {
     if (!result.success) return { target: "run", invalid: zodIssues(result.error) };
     return { target: "run", record: result.data };
   }
-  return undefined;
+  // A core mutation type whose payload lacks the target/record replay fields:
+  // the choke point always writes them, so this event cannot be replayed.
+  return {
+    target: event.type.startsWith("item.") ? "item" : "run",
+    invalid: "payload carries no target/record mutation fields",
+  };
 }
 
 /**

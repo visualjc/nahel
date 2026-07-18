@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CORE_EVENT_TYPES } from "../../src/schema/events";
+import { CORE_EVENT_TYPES, MUTATION_EVENT_TYPES } from "../../src/schema/events";
 import { journalEventSchema } from "../../src/schema/records";
 
 const baseEvent = {
@@ -24,6 +24,12 @@ describe("schema/events", () => {
       itemHandback: "item.handback",
       note: "note",
     });
+  });
+
+  test("the mutation subset is exactly the core types minus the note observation type", () => {
+    const { note, ...mutations } = CORE_EVENT_TYPES;
+    expect(MUTATION_EVENT_TYPES).toEqual(new Set(Object.values(mutations)));
+    expect(MUTATION_EVENT_TYPES.has(note)).toBe(false);
   });
 
   test("every core event type is accepted by the journal event schema", () => {

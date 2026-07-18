@@ -409,6 +409,72 @@ describe("validate — claim checks over the journaled history", () => {
     expect(findings[0]!.message).toContain(parent.id);
   });
 
+  // PR #12 review HIGH 4: mutate() checks BOTH parent chains (current and
+  // incoming), so replay must too — a journaled agent reparent INTO a claimed
+  // subtree was evading claims.violation because checkClaims evaluated
+  // coverage only on the pre-update chain.
+  test("a journaled agent reparent INTO a claimed subtree is a violation (incoming-chain parity)", async () => {
+    const fixture = await setupFixture(dirs);
+    const claimedRoot = await createItem(fixture, { name: "claimed-root" });
+    const stray = await createItem(fixture, { name: "stray" });
+
+    const claimed = { ...claimedRoot, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    // A merge delivers an agent mutation journaled in another worktree that
+    // moves the stray item UNDER the claimed root (event + record via git).
+    const reparented = { ...stray, parent: claimedRoot.id, updated: fixture.env.now() };
+    await appendEvent(fixture.layout, fixture.env, {
+      type: CORE_EVENT_TYPES.itemUpdated,
+      actor: { kind: "agent", id: "codex" },
+      item: stray.id,
+      payload: { target: "item", record: reparented, body: "" },
+      session: newSessionSegmentId(fixture.env),
+    });
+    await writeItem(fixture.layout, reparented, "");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "claims.violation");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain(stray.id);
+    expect(findings[0]!.message).toContain(claimedRoot.id);
+    expect(findings[0]!.message).toContain("codex");
+    expect(findings[0]!.message).toContain("jim");
+  });
+
+  test("the reverse order — claim AFTER the reparent — stays clean", async () => {
+    const fixture = await setupFixture(dirs);
+    const futureRoot = await createItem(fixture, { name: "future-claimed-root" });
+    const stray = await createItem(fixture, { name: "stray" });
+
+    // Agent reparents first, while nothing is claimed (legitimate, mutate
+    // allows it locally too).
+    const reparented = { ...stray, parent: futureRoot.id, updated: fixture.env.now() };
+    await mutate(fixture.agent, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemUpdated,
+      frontmatter: reparented,
+      body: "",
+    });
+
+    // THEN the human claims the root.
+    const claimed = { ...futureRoot, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "claims.violation")).toEqual([]);
+  });
+
   test("conflicting claims after a merge — same item, different claimed_by, no handback — is an error", async () => {
     const fixture = await setupFixture(dirs);
     const item = await createItem(fixture);

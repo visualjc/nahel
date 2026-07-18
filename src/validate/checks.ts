@@ -484,11 +484,14 @@ function checkClaims(state: ParsedState): Finding[] {
   const claimedBy = new Map<string, string>();
   const parentOf = new Map<string, string | undefined>();
 
-  const coveringClaim = (
-    itemId: string,
+  // Mirrors mutate()'s findClaimOnChain: one chain walk with a seen-set
+  // shared across chains — a node a previous walk passed through without
+  // returning is proven claim-free upward.
+  const claimOnChain = (
+    startId: string | undefined,
+    seen: Set<string>,
   ): { id: string; claimant: string } | undefined => {
-    const seen = new Set<string>();
-    let current: string | undefined = itemId;
+    let current = startId;
     while (current !== undefined && !seen.has(current)) {
       seen.add(current);
       const claimant = claimedBy.get(current);
@@ -498,13 +501,27 @@ function checkClaims(state: ParsedState): Finding[] {
     return undefined;
   };
 
+  // Parity with mutate()'s findCoveringClaim (PR #12 review HIGH 4): BOTH
+  // parent chains are checked — the one the item had at event time and the
+  // one the mutation is bringing in (`incomingParent`) — so a journaled
+  // agent reparent INTO a claimed subtree cannot evade claims.violation.
+  const coveringClaim = (
+    itemId: string,
+    incomingParent: string | undefined,
+  ): { id: string; claimant: string } | undefined => {
+    const seen = new Set<string>();
+    return claimOnChain(itemId, seen) ?? claimOnChain(incomingParent, seen);
+  };
+
   for (const event of state.events) {
     const mutation = mutationRecord(event);
     if (mutation === undefined || "invalid" in mutation) continue;
 
     const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
     if (event.actor.kind === "agent") {
-      const claim = coveringClaim(targetItem);
+      const incomingParent =
+        mutation.target === "item" ? mutation.record.parent : undefined;
+      const claim = coveringClaim(targetItem, incomingParent);
       if (claim !== undefined) {
         const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
         findings.push({

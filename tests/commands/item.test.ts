@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { itemCommand } from "../../src/commands/item";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
@@ -574,5 +575,62 @@ describe("item — dispatch and help", () => {
     const { root, layout, env } = await setup();
     const id = await newItem(env, root);
     expect(await itemExists(layout, id)).toBe(true);
+  });
+});
+
+describe("item — ids validated before any path join (PR #12 review blocker 2)", () => {
+  // Verified escape: `nahel item update ../../PRODUCT --status x` reached the
+  // repo-root PRODUCT.md through the unvalidated itemPath join.
+  test("item update with a traversal id refuses and touches nothing outside nahel/items", async () => {
+    const { root, layout, env } = await setup();
+    const canary = "# canary constitution — must never be read as an item\n";
+    await writeFile(join(root, "PRODUCT.md"), canary);
+
+    const code = await itemCommand.run(
+      ["update", "../../PRODUCT", "--status", "in-progress"],
+      env,
+      root,
+    );
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    // The canary is untouched and nothing was journaled.
+    expect(await readFile(join(root, "PRODUCT.md"), "utf8")).toBe(canary);
+    expect(await journalEvents(layout)).toEqual([]);
+    expect(await listItems(layout)).toEqual([]);
+  });
+
+  test("item update with an absolute-ish id refuses with an invalid-id error", async () => {
+    const { root, layout, env } = await setup();
+    const code = await itemCommand.run(["update", "/tmp/evil", "--status", "done"], env, root);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("item new with a traversal --parent refuses with an invalid-id error", async () => {
+    const { root, layout, env } = await setup();
+    await writeFile(join(root, "PRODUCT.md"), "# canary\n");
+
+    const code = await itemCommand.run(
+      ["new", "feature", "sneaky", "direct", "--parent", "../../PRODUCT"],
+      env,
+      root,
+    );
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    expect(await listItems(layout)).toEqual([]);
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("item new with a traversal --depends-on refuses with an invalid-id error", async () => {
+    const { root, layout, env } = await setup();
+    const code = await itemCommand.run(
+      ["new", "feature", "sneaky", "direct", "--depends-on", "../../PRODUCT"],
+      env,
+      root,
+    );
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    expect(await listItems(layout)).toEqual([]);
   });
 });

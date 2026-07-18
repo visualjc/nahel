@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ensureLayout,
+  itemExists,
   itemPath,
   knowledgePaths,
   listItems,
@@ -12,6 +13,7 @@ import {
   readItem,
   readObservation,
   readRun,
+  runDir,
   runRecordPath,
   storeLayout,
   writeConfig,
@@ -146,6 +148,81 @@ describe("config", () => {
       },
     });
     expect(() => knowledgePaths(layout, config)).toThrow(/repo/);
+  });
+});
+
+describe("path hardening — ids validated before any join (PR #12 review blocker 2)", () => {
+  // Verified escape: `nahel item update ../../PRODUCT` read the repo-root
+  // PRODUCT.md through itemPath's unvalidated join. The path helpers are the
+  // single choke points, so they refuse any id failing ID_PATTERN.
+  const badIds = [
+    "../../PRODUCT",
+    "..",
+    "a/bcdefgh",
+    "/tmp/evil",
+    "ABCDEFGH", // uppercase — not in the id alphabet
+    "abc1234", // 7 chars
+    "",
+  ];
+
+  test("itemPath refuses traversal, absolute, and malformed ids", async () => {
+    const layout = storeLayout(await tempRoot());
+    for (const id of badIds) {
+      expect(() => itemPath(layout, id)).toThrow(/invalid item id/);
+    }
+  });
+
+  test("runDir and runRecordPath refuse invalid run ids", async () => {
+    const layout = storeLayout(await tempRoot());
+    for (const id of badIds) {
+      expect(() => runDir(layout, id)).toThrow(/invalid run id/);
+      expect(() => runRecordPath(layout, id)).toThrow(/invalid run id/);
+    }
+  });
+
+  test("observationPath refuses invalid observation ids", async () => {
+    const layout = storeLayout(await tempRoot());
+    for (const id of badIds) {
+      expect(() => observationPath(layout, id)).toThrow(/invalid observation id/);
+    }
+  });
+
+  test("readItem with a traversal id refuses BEFORE reading outside nahel/items", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    // Canary at the exact path ../../PRODUCT would reach from nahel/items.
+    await writeFile(join(root, "PRODUCT.md"), "# canary constitution\n");
+    expect(readItem(layout, "../../PRODUCT")).rejects.toThrow(/invalid item id/);
+  });
+
+  test("itemExists with an invalid id refuses instead of answering false", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await writeFile(join(root, "PRODUCT.md"), "# canary constitution\n");
+    // False would mislead callers into "not found" paths; the id itself is
+    // the error, and swallowing it hid the escape at the command layer.
+    expect(itemExists(layout, "../../PRODUCT")).rejects.toThrow(/invalid item id/);
+  });
+
+  test("readRun with a traversal id refuses even when a plant exists at the target", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    const env = seededEnv();
+    // Plant a schema-valid run.json OUTSIDE nahel/runs, reachable by traversal.
+    const plant = join(root, "plant");
+    await mkdir(plant, { recursive: true });
+    const planted = makeRun(env, makeFrontmatter(env).id);
+    await writeFile(join(plant, "run.json"), `${JSON.stringify(planted)}\n`);
+    expect(readRun(layout, "../../plant")).rejects.toThrow(/invalid run id/);
+  });
+
+  test("valid ids still resolve to their nahel/ paths", async () => {
+    const layout = storeLayout(await tempRoot());
+    expect(itemPath(layout, "abc123de")).toBe(join(layout.itemsDir, "abc123de.md"));
+    expect(runDir(layout, "abc123de")).toBe(join(layout.runsDir, "abc123de"));
+    expect(observationPath(layout, "abc123de")).toBe(
+      join(layout.observationsDir, "abc123de.md"),
+    );
   });
 });
 

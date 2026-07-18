@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Env } from "../../src/schema/env";
 import { journalEventSchema, type JournalEvent } from "../../src/schema/records";
 import { logCommand, type LogCommandContext } from "../../src/commands/log";
@@ -249,6 +251,35 @@ describe("nahel log — ref validation", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("zzzzzzzz");
     expect((await listSegments(layout)).active).toEqual([]);
+  });
+
+  // PR #12 review blocker 2: --item/--run are user input joined into store
+  // paths; traversal ids must be refused with an invalid-id error before any
+  // read or write, even when a plausible file exists at the escaped path.
+  test("--item with a traversal id refuses with an invalid-id error", async () => {
+    const { root, layout } = await makeStore();
+    await writeFile(join(root, "PRODUCT.md"), "# canary - not an item\n");
+    const result = await runLog(["note", "--item", "../../PRODUCT"], root);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("invalid item id");
+    expect((await listSegments(layout)).active).toEqual([]);
+  });
+
+  test("--run with a traversal id refuses; no segment lands outside nahel/journal", async () => {
+    const { root, layout } = await makeStore();
+    const env = seededEnv();
+    // Plant a valid run.json outside nahel/runs, reachable via `../../plant`.
+    await mkdir(join(root, "plant"), { recursive: true });
+    const planted = makeRun(env, makeFrontmatter(env).id);
+    await writeFile(join(root, "plant", "run.json"), `${JSON.stringify(planted)}\n`);
+
+    const result = await runLog(["note", "--run", "../../plant"], root, { env });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("invalid run id");
+    expect((await listSegments(layout)).active).toEqual([]);
+    // The escaped join normalizes run-../../plant.jsonl to a segment file
+    // nahel never minted — it must not exist.
+    expect(existsSync(join(layout.journalDir, "plant.jsonl"))).toBe(false);
   });
 
   test("an existing --item ref is carried on a non-run event", async () => {

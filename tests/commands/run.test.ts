@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { itemCommand } from "../../src/commands/item";
 import { runCommand } from "../../src/commands/run";
 import type { Env } from "../../src/schema/env";
@@ -17,7 +19,7 @@ import {
   type StoreLayout,
 } from "../../src/store/layout";
 import { rotateJournal } from "../../src/store/rotate";
-import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeFrontmatter, makeRun, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
  * `nahel run start|update|end` (PRD F3). Commands are exercised directly
@@ -438,5 +440,61 @@ describe("full lifecycle end-to-end — zero hand-edits (PRD F3)", () => {
     expect(lastItemEvent.payload["record"]).toEqual(frontmatter);
     const runEnded = events[events.length - 2]!;
     expect(runEnded.payload["record"]).toEqual(run);
+  });
+});
+
+describe("run — ids validated before any path join (PR #12 review blocker 2 + amendment)", () => {
+  /**
+   * The verified hot-state escape: plant a schema-valid run.json OUTSIDE the
+   * repo and address it with a traversal run id — the raw argv id must be
+   * refused before any read/write, and no state.json may appear at the plant.
+   */
+  async function plantOutsideRun(env: Env, root: string): Promise<{ dir: string; id: string }> {
+    const dir = await makeTempDir("nahel-plant-");
+    dirs.push(dir);
+    const planted = makeRun(env, makeFrontmatter(env).id);
+    await writeFile(join(dir, "run.json"), `${JSON.stringify(planted)}\n`);
+    // From nahel/runs, three levels up is the temp dir both roots live in.
+    return { dir, id: `../../../${basename(dir)}` };
+  }
+
+  test("run update with a traversal id refuses; no state.json outside nahel/runs", async () => {
+    const { root, layout, env } = await setup();
+    const plant = await plantOutsideRun(env, root);
+
+    const code = await runCommand.run(["update", plant.id, "--phase", "pwned"], env, root);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid run id");
+    expect(existsSync(join(plant.dir, "state.json"))).toBe(false);
+    // Nothing journaled, no run record materialized inside the repo either.
+    expect(await journalEvents(layout)).toEqual([]);
+    expect(await listRuns(layout)).toEqual([]);
+  });
+
+  test("run end with a traversal id refuses; no state.json outside nahel/runs", async () => {
+    const { root, layout, env } = await setup();
+    const plant = await plantOutsideRun(env, root);
+
+    const code = await runCommand.run(["end", plant.id, "success"], env, root);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid run id");
+    expect(existsSync(join(plant.dir, "state.json"))).toBe(false);
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("run update with an absolute-ish id refuses with an invalid-id error", async () => {
+    const { root, env } = await setup();
+    const code = await runCommand.run(["update", "/tmp/evil", "--phase", "x"], env, root);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid run id");
+  });
+
+  test("run start with a traversal item id refuses with an invalid-id error", async () => {
+    const { root, layout, env } = await setup();
+    await writeFile(join(root, "PRODUCT.md"), "# canary\n");
+    const code = await runCommand.run(["start", "../../PRODUCT"], env, root);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    expect(await listRuns(layout)).toEqual([]);
   });
 });

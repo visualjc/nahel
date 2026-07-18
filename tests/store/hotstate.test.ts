@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hotStatePath, readHotState, writeHotState } from "../../src/store/hotstate";
 import { ensureLayout, writeRun } from "../../src/store/layout";
@@ -19,8 +20,39 @@ async function setup() {
   const env = seededEnv();
   const run = makeRun(env, makeFrontmatter(env).id);
   await writeRun(layout, run);
-  return { layout, run };
+  return { root, layout, run };
 }
+
+describe("hot state — id validation (PR #12 review blocker 2 amendment)", () => {
+  // Verified escape: a schema-valid run.json planted outside nahel/runs plus
+  // a traversal run id made writeHotState write state.json outside the store.
+  test("hotStatePath refuses ids failing ID_PATTERN before any join", async () => {
+    const { layout } = await setup();
+    for (const id of ["../../evil", "..", "/tmp/evil", "ABCDEFGH", "abc", ""]) {
+      expect(() => hotStatePath(layout, id)).toThrow(/invalid run id/);
+    }
+  });
+
+  test("writeHotState with a traversal id refuses even when a plant exists at the target", async () => {
+    const { root, layout } = await setup();
+    const env = seededEnv();
+    // Plant: a valid run.json outside nahel/runs, reachable via `../../plant`.
+    const plant = join(root, "plant");
+    await mkdir(plant, { recursive: true });
+    const planted = makeRun(env, makeFrontmatter(env).id);
+    await writeFile(join(plant, "run.json"), `${JSON.stringify(planted)}\n`);
+
+    expect(
+      writeHotState(layout, "../../plant", { phase: "pwned", status: "active" }),
+    ).rejects.toThrow(/invalid run id/);
+    expect(existsSync(join(plant, "state.json"))).toBe(false);
+  });
+
+  test("readHotState with a traversal id refuses likewise", async () => {
+    const { layout } = await setup();
+    expect(readHotState(layout, "../../plant")).rejects.toThrow(/invalid run id/);
+  });
+});
 
 describe("hot state", () => {
   test("state.json lives at the run: nahel/runs/{id}/state.json", async () => {

@@ -535,3 +535,33 @@ describe("full intervention cycle end-to-end (PRD F9)", () => {
     expect(evidence["diff"]).toEqual([{ file: "app.txt", added: 1, deleted: 0 }]);
   });
 });
+
+describe("interventions — ids validated before any path join (PR #12 review blocker 2)", () => {
+  test("pause with a traversal run id refuses with an invalid-id error", async () => {
+    const { root, env } = await setup();
+    const code = await pauseCommand.run(["../../evil"], env, root);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid run id");
+  });
+
+  test("claim with a traversal item id refuses before touching anything", async () => {
+    const { root, layout, env } = await setup();
+    // PRODUCT.md sits at exactly the path ../../PRODUCT reaches from nahel/items.
+    const canary = "# canary constitution\n";
+    await writeFile(join(root, "PRODUCT.md"), canary);
+
+    const code = await claimCommand.run(["../../PRODUCT"], env, root, JIM);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("handback with a traversal item id refuses likewise", async () => {
+    const { root, layout, env } = await setup();
+    await writeFile(join(root, "PRODUCT.md"), "# canary\n");
+    const code = await handbackCommand.run(["../../PRODUCT"], env, root, JIM);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("invalid item id");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+});

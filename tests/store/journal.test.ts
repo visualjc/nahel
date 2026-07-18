@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { appendFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { journalEventSchema, type JournalEvent } from "../../src/schema/records";
@@ -68,6 +69,33 @@ describe("appendEvent — segment resolution", () => {
     );
     const raw = await readFile(sessionSegmentPath(layout, session), "utf8");
     expect(JSON.parse(raw.trim())).toEqual(event);
+  });
+
+  // PR #12 review blocker 2: run ids are user input (nahel log --run, run
+  // update argv) and were joined into the segment path unvalidated — a
+  // traversal id put the segment file outside nahel/journal.
+  test("runSegmentPath refuses ids failing ID_PATTERN before any join", async () => {
+    const layout = await setup();
+    for (const id of ["../../evil", "..", "/tmp/evil", "ABCDEFGH", "abc", ""]) {
+      expect(() => runSegmentPath(layout, id)).toThrow(/invalid run id/);
+    }
+  });
+
+  test("appendEvent with a traversal run ref refuses and writes nothing outside journal/", async () => {
+    const layout = await setup();
+    const env = seededEnv();
+    expect(
+      appendEvent(layout, env, {
+        type: "note",
+        actor,
+        run: "../../../evil",
+        payload: {},
+      }),
+    ).rejects.toThrow(/invalid run id/);
+    // The escaped join (`run-../../../evil.jsonl` normalizes above journal/)
+    // would have landed at nahel/evil.jsonl — must not exist.
+    expect(existsSync(join(layout.nahelDir, "evil.jsonl"))).toBe(false);
+    expect((await listSegments(layout)).active).toEqual([]);
   });
 
   test("a non-run event without a session is refused — every event needs a segment owner", async () => {

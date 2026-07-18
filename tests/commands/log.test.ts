@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Env } from "../../src/schema/env";
 import { journalEventSchema, type JournalEvent } from "../../src/schema/records";
 import { logCommand, type LogCommandContext } from "../../src/commands/log";
-import { listSegments, readJournal, SESSION_CLOSED_EVENT_TYPE } from "../../src/store/journal";
+import { appendEvent, listSegments, readJournal, SESSION_CLOSED_EVENT_TYPE } from "../../src/store/journal";
 import { ensureLayout, writeConfig, writeItem, writeRun, type StoreLayout } from "../../src/store/layout";
 import { makeConfig, makeFrontmatter, makeRun, makeTempDir, seededEnv } from "../store/helpers";
 
@@ -95,7 +95,7 @@ describe("nahel log — segment resolution", () => {
     expect(result.stdout).toContain(`run-${run.id}`);
   });
 
-  test("a non-run event lands in a writer-scoped session segment created on first use", async () => {
+  test("a non-run event lands in a writer-scoped session segment, closed and archived by the same invocation", async () => {
     const { root, layout } = await makeStore();
     expect((await listSegments(layout)).active).toEqual([]);
 
@@ -103,16 +103,20 @@ describe("nahel log — segment resolution", () => {
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
 
+    // log is single-use by design: it closes its own session segment after
+    // appending, so the segment is rotation-eligible and archived on the spot.
     const segments = await listSegments(layout);
-    expect(segments.active).toHaveLength(1);
-    expect(segments.active[0]).toMatch(/^session-[0-9a-z]{8}\.jsonl$/);
+    expect(segments.active).toEqual([]);
+    expect(segments.archived).toHaveLength(1);
+    expect(segments.archived[0]).toMatch(/^session-[0-9a-z]{8}\.jsonl$/);
 
     const events = await allEvents(layout);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
     expect(events[0]!.type).toBe("note");
     expect(events[0]!.run).toBeUndefined();
     expect(events[0]!.payload).toEqual({ text: "observed" });
-    expect(result.stdout).toContain(segments.active[0]!.replace(".jsonl", ""));
+    expect(events[1]!.type).toBe(SESSION_CLOSED_EVENT_TYPE);
+    expect(result.stdout).toContain(segments.archived[0]!.replace(".jsonl", ""));
   });
 
   test("separate invocations mint separate session segments — no two writers share an active segment", async () => {
@@ -124,9 +128,10 @@ describe("nahel log — segment resolution", () => {
     expect((await runLog(["note"], root, { env })).code).toBe(0);
 
     const segments = await listSegments(layout);
-    expect(segments.active).toHaveLength(2);
-    expect(new Set(segments.active).size).toBe(2);
-    for (const name of segments.active) {
+    expect(segments.active).toEqual([]);
+    expect(segments.archived).toHaveLength(2);
+    expect(new Set(segments.archived).size).toBe(2);
+    for (const name of segments.archived) {
       expect(name).toMatch(/^session-[0-9a-z]{8}\.jsonl$/);
     }
   });
@@ -201,8 +206,7 @@ describe("nahel log — event types (core set open to extension)", () => {
     expect(result.stderr).toContain("deploy.finished");
     expect(result.stderr).toContain("core");
     const events = await allEvents(layout);
-    expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe("deploy.finished");
+    expect(events.map((e) => e.type)).toEqual(["deploy.finished", SESSION_CLOSED_EVENT_TYPE]);
   });
 
   test("the store's session.closed marker is reserved — refused with an error, nothing written", async () => {
@@ -451,26 +455,102 @@ describe("nahel log — round-trip through the merged journal", () => {
       loggedIds.push(match![1]!);
     }
 
+    // The observations come back in invocation order; the store's
+    // session.closed markers interleave but never displace them.
     const merged = await allEvents(layout);
-    expect(merged.map((e) => e.id)).toEqual(loggedIds);
-    expect(merged.map((e) => e.type)).toEqual([
+    const observations = merged.filter((e) => e.type !== SESSION_CLOSED_EVENT_TYPE);
+    expect(observations.map((e) => e.id)).toEqual(loggedIds);
+    expect(observations.map((e) => e.type)).toEqual([
       "test.failed",
       "note",
       "decision.made",
       "assumption.logged",
       "review.requested",
     ]);
-    // Run-ref'd events share the run segment; non-run events each sit in
-    // their own session segment.
+    // Run-ref'd events share the run segment, which stays ACTIVE while the
+    // run is open; each non-run invocation's session segment is closed and
+    // archived by that invocation.
     const segments = await listSegments(layout);
-    expect(segments.active.filter((n) => n.startsWith("run-"))).toEqual([
-      `run-${run.id}.jsonl`,
-    ]);
-    expect(segments.active.filter((n) => n.startsWith("session-"))).toHaveLength(2);
+    expect(segments.active).toEqual([`run-${run.id}.jsonl`]);
+    expect(segments.archived.filter((n) => n.startsWith("session-"))).toHaveLength(2);
     // Every merged event is schema-valid.
     for (const event of merged) {
       expect(() => journalEventSchema.parse(event)).not.toThrow();
     }
+  });
+});
+
+describe("nahel log — session close + opportunistic rotation (PRD F1)", () => {
+  const human = { kind: "human", id: "maintainer" } as const;
+
+  test("the archived session segment carries the observation, then session.closed as its FINAL line, same actor", async () => {
+    const { root, layout } = await makeStore();
+    const result = await runLog(["note", "--data", "text=closing time"], root);
+    expect(result.code).toBe(0);
+
+    const { archived } = await listSegments(layout);
+    expect(archived).toHaveLength(1);
+    const raw = await readFile(join(layout.journalArchiveDir, archived[0]!), "utf8");
+    const lines = raw.split("\n").filter((line) => line.trim() !== "");
+    expect(lines).toHaveLength(2);
+    const [note, closed] = lines.map((line) => journalEventSchema.parse(JSON.parse(line)));
+    expect(note!.type).toBe("note");
+    expect(closed!.type).toBe(SESSION_CLOSED_EVENT_TYPE);
+    expect(closed!.actor).toEqual(human);
+    expect(closed!.seq).toBe(note!.seq + 1);
+  });
+
+  test("the sweep archives other provably-closed segments: an ended run's segment left behind", async () => {
+    const { root, layout } = await makeStore();
+    const env = seededEnv({ tickSeconds: 1 });
+    const item = makeFrontmatter(env, { name: "swept-item" });
+    await writeItem(layout, item, "body\n");
+    const endedRun = makeRun(env, item.id, { status: "ended", ended: env.now() });
+    await writeRun(layout, endedRun);
+    await appendEvent(layout, env, { type: "run.ended", actor: human, run: endedRun.id, payload: {} });
+    expect((await listSegments(layout)).active).toEqual([`run-${endedRun.id}.jsonl`]);
+
+    const result = await runLog(["note"], root, { env });
+    expect(result.code).toBe(0);
+
+    const segments = await listSegments(layout);
+    expect(segments.active).toEqual([]);
+    expect(segments.archived).toContain(`run-${endedRun.id}.jsonl`);
+    expect(segments.archived.filter((n) => n.startsWith("session-"))).toHaveLength(1);
+  });
+
+  test("a --run invocation sweeps eligible segments but never touches the ACTIVE run it wrote to", async () => {
+    const { root, layout } = await makeStore();
+    const env = seededEnv({ tickSeconds: 1 });
+    const item = makeFrontmatter(env, { name: "live-item" });
+    await writeItem(layout, item, "body\n");
+    const activeRun = makeRun(env, item.id);
+    await writeRun(layout, activeRun);
+    const endedRun = makeRun(env, item.id, { status: "ended", ended: env.now() });
+    await writeRun(layout, endedRun);
+    await appendEvent(layout, env, { type: "run.ended", actor: human, run: endedRun.id, payload: {} });
+
+    const result = await runLog(["note", "--run", activeRun.id], root, { env });
+    expect(result.code).toBe(0);
+
+    const segments = await listSegments(layout);
+    expect(segments.active).toEqual([`run-${activeRun.id}.jsonl`]);
+    expect(segments.archived).toEqual([`run-${endedRun.id}.jsonl`]);
+  });
+
+  test("history survives rotation: every logged event remains readable through the merged journal", async () => {
+    const { root, layout } = await makeStore();
+    const env = seededEnv({ tickSeconds: 1 });
+    for (const text of ["one", "two", "three"]) {
+      expect((await runLog(["note", "--data", `text=${text}`], root, { env })).code).toBe(0);
+    }
+    expect((await listSegments(layout)).active).toEqual([]);
+    const notes = (await allEvents(layout)).filter((e) => e.type === "note");
+    expect(notes.map((e) => e.payload)).toEqual([
+      { text: "one" },
+      { text: "two" },
+      { text: "three" },
+    ]);
   });
 });
 

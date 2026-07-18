@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFile, rm } from "node:fs/promises";
 import type { CommandContext } from "../../src/cli";
+import { logCommand } from "../../src/commands/log";
 import { progressCommand } from "../../src/commands/progress";
 import { generateId } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
-import { readJournal, runSegmentPath } from "../../src/store/journal";
+import { listSegments, readJournal, runSegmentPath } from "../../src/store/journal";
 import { ensureLayout, writeConfig } from "../../src/store/layout";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 import { buildPopulatedStore, FIXTURE_EVENT_TYPES, type PopulatedStore } from "../views/helpers";
@@ -270,4 +271,36 @@ describe("nahel progress — performance (PRD: <1s at thousands of events, strea
     },
     { timeout: 30_000 },
   );
+});
+
+describe("nahel progress — rotated segments (PRD F1)", () => {
+  test("the timeline still shows events whose segments were rotated into journal/archive/", async () => {
+    const root = await makeTempDir("nahel-progress-rotated-");
+    tempDirs.push(root);
+    const layout = await ensureLayout(root);
+    await writeConfig(layout, makeConfig());
+    const env = seededEnv({ tickSeconds: 1 });
+
+    for (const text of ["first-note", "second-note"]) {
+      const ctx: CommandContext = {
+        env,
+        cwd: root,
+        stdout: () => {},
+        stderr: () => {},
+      };
+      expect(await logCommand.run(["note", "--data", `text=${text}`], ctx)).toBe(0);
+    }
+
+    // log closed + archived its own segments: nothing active remains…
+    const segments = await listSegments(layout);
+    expect(segments.active).toEqual([]);
+    expect(segments.archived).toHaveLength(2);
+
+    // …and the timeline still carries every event, in order.
+    const result = await runProgress([], root);
+    expect(result.code).toBe(0);
+    const noteLines = result.stdout.split("\n").filter((line) => line.includes("note"));
+    expect(noteLines[0]).toContain("first-note");
+    expect(noteLines[1]).toContain("second-note");
+  });
 });

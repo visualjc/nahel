@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { CommandContext } from "../../src/cli";
+import { logCommand } from "../../src/commands/log";
 import { validateCommand } from "../../src/commands/validate";
+import { listSegments } from "../../src/store/journal";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import type { Finding } from "../../src/validate";
 import { itemPath } from "../../src/store/layout";
@@ -63,6 +65,27 @@ describe("nahel validate — the command", () => {
   test("a clean repo validates silently: exit 0, no output", async () => {
     const fixture = await setupFixture(dirs);
     await createItem(fixture);
+
+    const result = await runValidate([], fixture.root);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toEqual([]);
+    expect(result.stderr).toEqual([]);
+  });
+
+  test("stays clean (exit 0, no findings) after log-driven rotation archives segments", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    for (const text of ["one", "two"]) {
+      const ctx: CommandContext = {
+        env: fixture.env,
+        cwd: fixture.root,
+        stdout: () => {},
+        stderr: () => {},
+      };
+      expect(await logCommand.run(["note", "--data", `text=${text}`], ctx)).toBe(0);
+    }
+    // log closed + archived its own session segments.
+    expect((await listSegments(fixture.layout)).archived).toHaveLength(2);
 
     const result = await runValidate([], fixture.root);
     expect(result.code).toBe(0);

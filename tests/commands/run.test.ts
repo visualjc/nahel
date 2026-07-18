@@ -8,7 +8,14 @@ import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
 import { readHotState } from "../../src/store/hotstate";
-import { readJournal, runSegmentPath } from "../../src/store/journal";
+import {
+  appendEvent,
+  closeSession,
+  listSegments,
+  newSessionSegmentId,
+  readJournal,
+  runSegmentPath,
+} from "../../src/store/journal";
 import {
   ensureLayout,
   listRuns,
@@ -74,9 +81,15 @@ async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
   return events;
 }
 
-/** Parse every event line of one run segment file, in file order. */
+/**
+ * Parse every event line of one run segment file, in file order — from the
+ * active dir, or from journal/archive/ once `run end` has rotated it.
+ */
 async function segmentEvents(layout: StoreLayout, runId: string): Promise<JournalEvent[]> {
-  const raw = await readFile(runSegmentPath(layout, runId), "utf8");
+  const active = runSegmentPath(layout, runId);
+  const raw = await readFile(active, "utf8").catch(() =>
+    readFile(join(layout.journalArchiveDir, basename(active)), "utf8"),
+  );
   return raw
     .split("\n")
     .filter((line) => line.trim() !== "")
@@ -318,7 +331,7 @@ describe("run end", () => {
     expect(last.payload).toEqual({ target: "run", record: run });
   });
 
-  test("closes the run's journal segment: run.ended is its final event and rotation archives it", async () => {
+  test("closes AND archives the run's journal segment itself — rotation needs no separate pass", async () => {
     const { root, layout, env } = await setup();
     const itemId = await newItem(env, root);
     const runId = await startRun(env, root, itemId);
@@ -328,8 +341,40 @@ describe("run end", () => {
     expect((await rotateJournal(layout)).archived).toEqual([]);
 
     await runCommand.run(["end", runId, "failure"], env, root);
-    const { archived } = await rotateJournal(layout);
-    expect(archived).toEqual([`run-${runId}.jsonl`]);
+    const segments = await listSegments(layout);
+    expect(segments.archived).toContain(`run-${runId}.jsonl`);
+    expect(segments.active).not.toContain(`run-${runId}.jsonl`);
+    // Nothing left for a follow-up sweep: run end already rotated it.
+    expect((await rotateJournal(layout)).archived).toEqual([]);
+  });
+
+  test("opportunistically sweeps other provably-closed segments while ending a run", async () => {
+    const { root, layout, env } = await setup();
+    const runId = await startRun(env, root, await newItem(env, root));
+    // A closed-but-unarchived session segment left behind by an earlier writer.
+    const human = { kind: "human", id: "maintainer" } as const;
+    const session = newSessionSegmentId(env);
+    await appendEvent(layout, env, { type: "note", actor: human, payload: {}, session });
+    await closeSession(layout, env, human, session);
+
+    expect(await runCommand.run(["end", runId, "success"], env, root)).toBe(0);
+    const segments = await listSegments(layout);
+    expect(segments.archived).toContain(`run-${runId}.jsonl`);
+    expect(segments.archived).toContain(`session-${session}.jsonl`);
+    expect(segments.active).not.toContain(`session-${session}.jsonl`);
+  });
+
+  test("after end + rotation, the run's history stays readable through the merged journal", async () => {
+    const { root, layout, env } = await setup();
+    const runId = await startRun(env, root, await newItem(env, root));
+    await runCommand.run(["update", runId, "--phase", "working"], env, root);
+    expect(await runCommand.run(["end", runId, "success"], env, root)).toBe(0);
+
+    // The archived segment still tells the run's whole story via the merged read.
+    const types = (await journalEvents(layout))
+      .filter((event) => event.run === runId)
+      .map((event) => event.type);
+    expect(types).toEqual(["run.started", "run.updated", "run.ended"]);
   });
 
   test("refuses to end an already-ended run, changing nothing", async () => {

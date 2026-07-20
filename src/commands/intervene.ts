@@ -12,7 +12,7 @@ import {
 import { writeHotState } from "../store/hotstate";
 import { readJournal } from "../store/journal";
 import { listItems, listRuns, readItem, readRun, type StoreLayout } from "../store/layout";
-import { mutate, type StoreContext } from "../store/mutate";
+import { closeStoreContext, mutate, type StoreContext } from "../store/mutate";
 import {
   commandContext,
   execute,
@@ -147,6 +147,7 @@ async function pause(argv: string[], env: Env, cwd: string, actorOverride?: stri
     throw new UsageError(`run ${runId} is already paused`);
   }
   await pauseRun(ctx, run);
+  await closeStoreContext(ctx);
   return 0;
 }
 
@@ -189,6 +190,8 @@ async function claim(argv: string[], env: Env, cwd: string, actorOverride?: stri
       await pauseRun(ctx, run);
     }
   }
+  // ONE close for the whole multi-mutation lifecycle, after every mutation.
+  await closeStoreContext(ctx);
   return 0;
 }
 
@@ -245,6 +248,7 @@ async function handback(argv: string[], env: Env, cwd: string, actorOverride?: s
     body,
     extraPayload: { evidence },
   });
+  await closeStoreContext(ctx);
   return 0;
 }
 

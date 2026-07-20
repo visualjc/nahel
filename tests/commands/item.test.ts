@@ -5,7 +5,7 @@ import { itemCommand } from "../../src/commands/item";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { Config, JournalEvent } from "../../src/schema/records";
-import { readJournal } from "../../src/store/journal";
+import { readJournal, SESSION_CLOSED_EVENT_TYPE } from "../../src/store/journal";
 import {
   ensureLayout,
   itemExists,
@@ -123,8 +123,11 @@ describe("item new", () => {
     const { root, layout, env } = await setup();
     const id = await newItem(env, root);
 
+    // Two events: the mutation, then the invocation's session-close marker
+    // (the CLI closes its per-invocation session segment on success).
     const events = await journalEvents(layout);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
+    expect(events[1]!.type).toBe(SESSION_CLOSED_EVENT_TYPE);
     const event = events[0]!;
     expect(event.type).toBe("item.created");
     expect(event.actor).toEqual({ kind: "agent", id: "claude-code" });
@@ -317,9 +320,10 @@ describe("item update", () => {
     const id = await newItem(env, root);
     await itemCommand.run(["update", id, "--status", "blocked"], env, root);
 
+    // Each invocation journals its mutation plus its session-close marker.
     const events = await journalEvents(layout);
-    expect(events).toHaveLength(2);
-    const updated = events[1]!;
+    expect(events).toHaveLength(4);
+    const updated = events[2]!;
     expect(updated.type).toBe("item.updated");
     expect(updated.item).toBe(id);
     expect(updated.actor).toEqual({ kind: "agent", id: "claude-code" });
@@ -345,7 +349,8 @@ describe("item update", () => {
     expect(stderr()).toContain("finished");
     expect(stderr()).toContain("backlog, in-progress, blocked, in-review, done, dropped");
     expect((await readItem(layout, id)).frontmatter.status).toBe("backlog");
-    expect(await journalEvents(layout)).toHaveLength(1); // only item.created
+    // Only item.created and its session-close marker — the refusal wrote nothing.
+    expect(await journalEvents(layout)).toHaveLength(2);
   });
 
   test("rejects unknown flags by name (field typos never become silent state)", async () => {
@@ -354,7 +359,7 @@ describe("item update", () => {
     const code = await itemCommand.run(["update", id, "--priority", "high"], env, root);
     expect(code).toBe(1);
     expect(stderr()).toContain("--priority");
-    expect(await journalEvents(layout)).toHaveLength(1);
+    expect(await journalEvents(layout)).toHaveLength(2); // item.created + its close marker
   });
 
   test("fails actionably on an unknown item id", async () => {
@@ -410,10 +415,12 @@ describe("item update", () => {
       expect(after.frontmatter.parent).toBeUndefined();
       expect("parent" in after.frontmatter).toBe(false);
 
-      // Journaled like any mutation: the write-ahead payload IS the cleared record.
+      // Journaled like any mutation: the write-ahead payload IS the cleared
+      // record. The invocation's session-close marker follows it.
       const events = await journalEvents(layout);
-      const updated = events[events.length - 1]!;
+      const updated = events[events.length - 2]!;
       expect(updated.type).toBe("item.updated");
+      expect(events[events.length - 1]!.type).toBe(SESSION_CLOSED_EVENT_TYPE);
       expect(updated.payload["record"]).toEqual(after.frontmatter);
       expect("parent" in (updated.payload["record"] as Record<string, unknown>)).toBe(false);
     });
@@ -434,8 +441,9 @@ describe("item update", () => {
       const after = await readItem(layout, id);
       expect(after.frontmatter.depends_on).toEqual([]);
       expect(after.frontmatter.external_refs).toEqual([]);
+      // The mutation precedes the invocation's session-close marker.
       const events = await journalEvents(layout);
-      expect(events[events.length - 1]!.payload["record"]).toEqual(after.frontmatter);
+      expect(events[events.length - 2]!.payload["record"]).toEqual(after.frontmatter);
     });
 
     test("a clear flag counts as a change on its own — no 'nothing to update'", async () => {
@@ -461,8 +469,9 @@ describe("item update", () => {
         expect(stderr()).toContain(combo[combo.length - 1]!);
         expect(stderr()).toContain("mutually exclusive");
       }
-      // Refusals wrote nothing: only the two item.created events exist.
-      expect(await journalEvents(layout)).toHaveLength(2);
+      // Refusals wrote nothing: only the two item.created events and their
+      // invocations' session-close markers exist.
+      expect(await journalEvents(layout)).toHaveLength(4);
       const record = await readItem(layout, id);
       expect(record.frontmatter.parent).toBeUndefined();
       expect(record.frontmatter.depends_on).toEqual([]);
@@ -581,7 +590,8 @@ describe("item update", () => {
       const after = await readItem(layout, id);
       expect(after.frontmatter.status).toBe("backlog");
       expect(after.frontmatter.claimed_by).toBe("jim");
-      expect(await journalEvents(layout)).toHaveLength(1); // refusal journals nothing
+      // Refusal journals nothing: item.created + its close marker only.
+      expect(await journalEvents(layout)).toHaveLength(2);
     });
 
     test("creating an item under a claimed parent is refused for agents", async () => {
@@ -597,7 +607,7 @@ describe("item update", () => {
       );
       expect(code).toBe(1);
       expect(stderr()).toContain("jim");
-      expect(await journalEvents(layout)).toHaveLength(1);
+      expect(await journalEvents(layout)).toHaveLength(2); // item.created + close marker
     });
 
     test("moving an unclaimed item under a claimed parent via --parent is refused for agents", async () => {
@@ -614,9 +624,9 @@ describe("item update", () => {
       expect(stderr()).toContain("handback");
 
       // Refusal writes nothing: parent unchanged, no journal event beyond the
-      // two item.created events.
+      // two item.created events and their invocations' close markers.
       expect((await readItem(layout, id)).frontmatter.parent).toBeUndefined();
-      expect(await journalEvents(layout)).toHaveLength(2);
+      expect(await journalEvents(layout)).toHaveLength(4);
     });
 
     test("a human config actor passes the claim check", async () => {

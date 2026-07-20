@@ -40,11 +40,19 @@ export interface PopulatedStore {
  * order equals this order.
  */
 export const FIXTURE_EVENT_TYPES = [
+  // Every item-mutating CLI invocation closes its own session segment, so a
+  // session.closed marker follows each one (run-scoped invocations write to
+  // run segments, which close via run end instead).
   "item.created", // demo-epic
+  "session.closed",
   "item.created", // task-alpha
+  "session.closed",
   "item.created", // task-beta
+  "session.closed",
   "item.created", // solo-chore
+  "session.closed",
   "item.updated", // task-beta → in-progress
+  "session.closed",
   "run.started", // active run (task-beta)
   "run.updated", // active run → building
   "run.started", // ended run (task-alpha)
@@ -52,7 +60,8 @@ export const FIXTURE_EVENT_TYPES = [
   "note", // logged against task-alpha
   "session.closed", // the store's marker: log closed its own session segment
   "test.failed", // logged against the active run (run ref only, no item ref)
-  "item.claimed", // task-alpha claimed by human:jim via mutate() — the newest event
+  "item.claimed", // task-alpha claimed by human:jim via raw mutate() — the newest
+  // event; a store-level context has no CLI lifecycle, so no close follows.
 ] as const;
 
 /**

@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Env } from "../schema/env";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
@@ -12,10 +13,12 @@ import {
 import { resolveActor } from "./actor";
 import {
   appendEvent,
+  closeSession,
   latestCandidates,
   listSegments,
   mergeSegments,
   newSessionSegmentId,
+  sessionSegmentPath,
 } from "./journal";
 import {
   itemExists,
@@ -27,6 +30,7 @@ import {
   writeRun,
   type StoreLayout,
 } from "./layout";
+import { rotateJournal } from "./rotate";
 
 /**
  * The mutation choke point (epic architecture decision): EVERY item/run
@@ -76,6 +80,31 @@ export async function createStoreContext(
     actor: resolveActor(config.actor, options.actorOverride),
     session: options.session ?? newSessionSegmentId(env),
   };
+}
+
+/**
+ * End one invocation's store lifecycle: if the context's session segment
+ * received events (item mutations land there; run mutations go to the run's
+ * own segment, which closes via run end), append the session.closed marker as
+ * its final line so rotation can prove it closed, then run the opportunistic
+ * archive sweep (PRD F1: rotation enforced by the CLI). The per-invocation
+ * session id is otherwise unrecoverable, so an unclosed segment would stay
+ * active forever. Called once per SUCCESSFUL command lifecycle — never on
+ * error paths, where a close must not mask the original failure; a
+ * crash-abandoned segment stays active for validate to report. The segment
+ * file exists only if something was appended to it, so existence is the
+ * "was this session used" test. session.closed is not a mutation type:
+ * replay and validation ignore it as a lifecycle marker.
+ */
+export async function closeStoreContext(ctx: StoreContext): Promise<void> {
+  const used = await stat(sessionSegmentPath(ctx.layout, ctx.session)).then(
+    () => true,
+    () => false,
+  );
+  if (used) {
+    await closeSession(ctx.layout, ctx.env, ctx.actor, ctx.session);
+  }
+  await rotateJournal(ctx.layout);
 }
 
 /** A state change, as data — the event payload carries all of it. */

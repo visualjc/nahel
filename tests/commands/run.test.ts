@@ -202,7 +202,8 @@ describe("run start", () => {
     expect(stderr()).toContain("handback");
     expect(await listRuns(layout)).toEqual([]);
     await expect(segmentEvents(layout, "zzzzzzzz")).rejects.toThrow(); // and obviously no segment
-    expect(await journalEvents(layout)).toHaveLength(1); // only item.created
+    // Only item.created and its invocation's session-close marker.
+    expect(await journalEvents(layout)).toHaveLength(2);
   });
 
   test("rejects extra positionals and unknown flags", async () => {
@@ -468,12 +469,15 @@ describe("full lifecycle end-to-end — zero hand-edits (PRD F3)", () => {
     const events = await journalEvents(layout);
     expect(events.map((event) => event.type)).toEqual([
       "item.created",
+      "session.closed", // each item-mutating invocation closes its session segment
       "run.started",
       "item.updated",
+      "session.closed",
       "run.updated",
       "run.updated",
       "run.ended",
       "item.updated",
+      "session.closed",
     ]);
     for (const event of events) {
       expect(event.actor).toEqual({ kind: "agent", id: "claude-code" });
@@ -481,9 +485,9 @@ describe("full lifecycle end-to-end — zero hand-edits (PRD F3)", () => {
 
     // Write-ahead payloads are complete: the final events reproduce the disk
     // records exactly (replay needs no other source).
-    const lastItemEvent = events[events.length - 1]!;
+    const lastItemEvent = events[events.length - 2]!;
     expect(lastItemEvent.payload["record"]).toEqual(frontmatter);
-    const runEnded = events[events.length - 2]!;
+    const runEnded = events[events.length - 3]!;
     expect(runEnded.payload["record"]).toEqual(run);
   });
 });

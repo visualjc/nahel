@@ -10,7 +10,12 @@ import {
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { itemExists, readItem, type StoreLayout } from "../store/layout";
-import { createStoreContext, mutate, type StoreContext } from "../store/mutate";
+import {
+  closeStoreContext,
+  createStoreContext,
+  mutate,
+  type StoreContext,
+} from "../store/mutate";
 
 /**
  * `nahel item` — the work-item write surface (PRD F3). Commands are thin:
@@ -194,6 +199,7 @@ async function itemNew(
     frontmatter,
     body: "",
   });
+  await closeStoreContext(ctx);
   console.log(frontmatter.id);
   return 0;
 }
@@ -313,6 +319,7 @@ async function itemUpdate(
     frontmatter: next,
     body,
   });
+  await closeStoreContext(ctx);
   return 0;
 }
 

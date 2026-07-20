@@ -134,12 +134,16 @@ describe("cli entry point — NAHEL_ACTOR environment contract", () => {
         const id = stdout.trim();
         expect(id.length).toBeGreaterThan(0);
 
+        // The mutation, then the invocation's session-close marker — both
+        // carrying the actor the environment variable resolved.
         const events: JournalEvent[] = [];
         for await (const event of readJournal(layout)) events.push(event);
-        expect(events).toHaveLength(1);
+        expect(events).toHaveLength(2);
         expect(events[0]!.type).toBe("item.created");
         expect(events[0]!.item).toBe(id);
         expect(events[0]!.actor).toEqual(expected);
+        expect(events[1]!.type).toBe("session.closed");
+        expect(events[1]!.actor).toEqual(expected);
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -164,7 +168,7 @@ describe("cli entry point — NAHEL_ACTOR environment contract", () => {
 
       const events: JournalEvent[] = [];
       for await (const event of readJournal(layout)) events.push(event);
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(2); // item.created + the session-close marker
       expect(events[0]!.item).toBe(id);
       expect(events[0]!.actor).toEqual({ kind: "agent", id: "claude-code" });
     } finally {

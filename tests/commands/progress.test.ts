@@ -112,10 +112,11 @@ describe("nahel progress — filters", () => {
     const result = await runProgress(["--item", store.epicId], store.root);
     expect(result.code).toBe(0);
     const lines = result.stdout.split("\n");
-    // solo-chore's creation is outside the subtree, and session.closed carries
-    // no item or run ref; everything else is inside, including the
-    // run-ref-only test.failed event.
-    expect(lines).toHaveLength(FIXTURE_EVENT_TYPES.length - 2);
+    // solo-chore's creation is outside the subtree, and the session.closed
+    // markers carry no item or run ref; everything else is inside, including
+    // the run-ref-only test.failed event.
+    const excluded = FIXTURE_EVENT_TYPES.filter((type) => type === "session.closed").length + 1;
+    expect(lines).toHaveLength(FIXTURE_EVENT_TYPES.length - excluded);
     expect(result.stdout).not.toContain(store.soloChoreId);
     expect(result.stdout).toContain("test.failed");
     expect(result.stdout).toContain("run.ended");

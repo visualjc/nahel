@@ -229,8 +229,9 @@ describe("claim", () => {
     expect(frontmatter.claimed_by).toBe("jim");
     expect(frontmatter.created < frontmatter.updated).toBe(true);
 
+    // The invocation's session-close marker follows the mutation.
     const events = await journalEvents(layout);
-    const claimed = events[events.length - 1]!;
+    const claimed = events[events.length - 2]!;
     expect(claimed.type).toBe("item.claimed");
     expect(claimed.item).toBe(itemId);
     expect(claimed.actor).toEqual({ kind: "human", id: "jim" });
@@ -418,8 +419,9 @@ describe("handback", () => {
     expect(frontmatter.claimed_by).toBeUndefined();
     expect("claimed_by" in frontmatter).toBe(false);
 
+    // The invocation's session-close marker follows the mutation.
     const events = await journalEvents(layout);
-    const handback = events[events.length - 1]!;
+    const handback = events[events.length - 2]!;
     expect(handback.type).toBe("item.handback");
     expect(handback.item).toBe(itemId);
     expect(handback.actor).toEqual({ kind: "human", id: "jim" });
@@ -519,14 +521,20 @@ describe("full intervention cycle end-to-end (PRD F9)", () => {
     expect((await readItem(layout, epic)).frontmatter.claimed_by).toBeUndefined();
     expect(await runCommand.run(["start", task], env, root)).toBe(0);
 
+    // Each item-mutating invocation appends its session-close marker after
+    // its mutations; run-scoped invocations (run start) close via run end.
     const types = (await journalEvents(layout)).map((event) => event.type);
     expect(types).toEqual([
       "item.created", // epic
+      "session.closed",
       "item.created", // task
+      "session.closed",
       "run.started",
       "item.claimed",
-      "run.paused",
+      "run.paused", // still inside the claim invocation — ONE close after both
+      "session.closed",
       "item.handback",
+      "session.closed",
       "run.started", // agent resumed
     ]);
     const handback = (await journalEvents(layout)).find((e) => e.type === "item.handback")!;

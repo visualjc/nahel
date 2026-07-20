@@ -1,4 +1,4 @@
-import { rename } from "node:fs/promises";
+import { access, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { listSegments, readLastEvent, SESSION_CLOSED_EVENT_TYPE } from "./journal";
 import { readRun, type StoreLayout } from "./layout";
@@ -52,7 +52,20 @@ export async function rotateJournal(layout: StoreLayout): Promise<RotationResult
         ? await sessionSegmentIsClosed(path)
         : false;
     if (closed) {
-      await rename(path, join(layout.journalArchiveDir, name));
+      const destination = join(layout.journalArchiveDir, name);
+      try {
+        await rename(path, destination);
+      } catch (error) {
+        // Concurrent sweepers race between listSegments() and rename(): the
+        // loser's source is gone. That is only success if the segment really
+        // reached the archive — otherwise the error is real and must surface.
+        try {
+          await access(destination);
+        } catch {
+          throw error;
+        }
+        continue;
+      }
       archived.push(name);
     }
   }

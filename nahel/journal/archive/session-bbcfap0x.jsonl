@@ -1,0 +1,2 @@
+{"id":"vydskqq4","ts":"2026-07-21T18:21:13Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"y273p9tq","payload":{"target":"item","record":{"id":"y273p9tq","name":"phase-1-core-loop","type":"feature","status":"backlog","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-21T18:21:13Z","updated":"2026-07-21T18:21:13Z"},"body":""}}
+{"id":"e7sqpd2h","ts":"2026-07-21T18:21:13Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

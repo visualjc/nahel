@@ -1,0 +1,2 @@
+{"id":"jfjx8bv3","ts":"2026-07-21T18:19:54Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"jim"},"item":"d8sa37p8","payload":{"target":"item","record":{"id":"d8sa37p8","name":"phase-1-prd","type":"plan","status":"done","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-21T18:01:25Z","updated":"2026-07-21T18:19:54Z"},"body":""}}
+{"id":"tnr9029t","ts":"2026-07-21T18:19:54Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"jim"},"payload":{}}

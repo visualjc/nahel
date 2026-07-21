@@ -1,0 +1,2 @@
+{"id":"06dye9bt","ts":"2026-07-21T18:21:14Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"y273p9tq","payload":{"summary":"Epic decomposition of docs/prds/phase-1-core-loop.md (approved). Children map 1:1 to F-requirements. PRD path reference in frontmatter awaits the F1 schema field; this note is the interim link. Jim directed AFK build orchestrated by Claude session."}}
+{"id":"nv3zjkzg","ts":"2026-07-21T18:21:14Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -929,6 +929,21 @@ describe("validate — rotation and compaction overdue (warnings, thresholds fro
     expect(aged[0]!.message).toContain("30");
   });
 
+  test("the workflow the warning names exists as a valid canonical doc (nahel/workflows/compact.md)", async () => {
+    // The fix message is a pointer; a pointer at nothing is a lie. Prove the
+    // repo ships the compact workflow with valid frontmatter.
+    const path = join(import.meta.dir, "../../nahel/workflows/compact.md");
+    const { readFrontmatterFile } = await import("../../src/store/frontmatter");
+    const { parseWorkflowDoc } = await import("../../src/install/workflow");
+    const { frontmatter, body } = await readFrontmatterFile(path);
+    const parsed = parseWorkflowDoc("compact.md", frontmatter);
+    expect(parsed.name).toBe("compact");
+    expect(parsed.description.length).toBeGreaterThan(0);
+    // The procedure drives exactly the CLI mechanics validate points at.
+    expect(body).toContain("nahel observe");
+    expect(body).toContain("nahel distill");
+  });
+
   test("a malformed distilled.json is a schema error and mutes the compaction check (no double report)", async () => {
     const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);

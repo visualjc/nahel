@@ -1,0 +1,2 @@
+{"id":"vxmdrnvc","ts":"2026-07-21T18:21:54Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"6ytwzt64","payload":{"target":"item","record":{"id":"6ytwzt64","name":"f3-responsibility-routing","type":"feature","status":"in-progress","lane":"epic-lite","parent":"y273p9tq","depends_on":[],"external_refs":[],"created":"2026-07-21T18:21:13Z","updated":"2026-07-21T18:21:54Z"},"body":""}}
+{"id":"gxmeakha","ts":"2026-07-21T18:21:54Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

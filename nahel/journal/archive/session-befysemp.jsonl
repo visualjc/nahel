@@ -1,0 +1,2 @@
+{"id":"c3v95887","ts":"2026-07-21T18:21:54Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"ekv79ymj","payload":{"target":"item","record":{"id":"ekv79ymj","name":"f2-run-contract-doctor","type":"feature","status":"in-progress","lane":"epic-lite","parent":"y273p9tq","depends_on":[],"external_refs":[],"created":"2026-07-21T18:21:13Z","updated":"2026-07-21T18:21:54Z"},"body":""}}
+{"id":"qeqteaqt","ts":"2026-07-21T18:21:54Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

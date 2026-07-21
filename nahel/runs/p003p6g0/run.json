@@ -1,0 +1,12 @@
+{
+  "id": "p003p6g0",
+  "item": "ekv79ymj",
+  "actor": {
+    "kind": "agent",
+    "id": "claude-code"
+  },
+  "lane": "epic-lite",
+  "phase": "implementing",
+  "status": "active",
+  "started": "2026-07-21T18:21:54Z"
+}

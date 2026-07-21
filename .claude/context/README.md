@@ -34,10 +34,9 @@ When fully initialized, this directory contains:
 Use these commands to manage your project context:
 
 ### Initialize Context
-```bash
-/context:create
-```
-Analyzes your project and creates initial context documentation. Use this when:
+
+Context creation is now the mining half of the nahel inception workflow
+(`nahel/workflows/inception.md`). Use it when:
 - Starting a new project
 - Adding context to an existing project
 - Major project restructuring
@@ -52,10 +51,9 @@ Loads all context information for a new agent session. Use this when:
 - Getting up to speed on project status
 
 ### Update Context
-```bash
-/context:update
-```
-Updates context documentation to reflect current project state. Use this:
+
+Context refresh is now the nahel compact workflow
+(`nahel/workflows/compact.md`). Use it:
 - At the end of development sessions
 - After completing major features
 - When project direction changes
@@ -63,10 +61,10 @@ Updates context documentation to reflect current project state. Use this:
 
 ## Context Workflow
 
-1. **Project Start**: Run `/context:create` to establish baseline documentation
+1. **Project Start**: Run the nahel inception workflow (`nahel/workflows/inception.md`) to establish baseline documentation
 2. **Session Start**: Run `/context:prime` to load current context
 3. **Development**: Work on your project with full context awareness
-4. **Session End**: Run `/context:update` to capture changes and progress
+4. **Session End**: Run the nahel compact workflow (`nahel/workflows/compact.md`) to capture changes and progress
 
 ## Benefits
 
@@ -92,4 +90,4 @@ The context system integrates with:
 - **Documentation**: Complements existing project documentation
 - **Team Collaboration**: Provides shared understanding across contributors
 
-Start with `/context:create` to initialize your project's knowledge base!
+Start with the nahel inception workflow (`nahel/workflows/inception.md`) to initialize your project's knowledge base!

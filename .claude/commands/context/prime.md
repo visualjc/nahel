@@ -14,7 +14,7 @@ Do not bother the user with preflight checks progress ("I'm not going to ..."). 
 ### 1. Context Availability Check
 - Run: `ls -la .claude/context/ 2>/dev/null`
 - If directory doesn't exist or is empty:
-  - Tell user: "❌ No context found. Please run /context:create first to establish project context."
+  - Tell user: "❌ No context found. Run the nahel inception workflow (nahel/workflows/inception.md) first to establish project context."
   - Exit gracefully
 - Count available context files: `ls -1 .claude/context/*.md 2>/dev/null | wc -l`
 - Report: "📁 Found {count} context files to load"
@@ -126,7 +126,7 @@ If some files fail to load:
 - Continue with available context
 - Clearly note what's missing
 - Suggest remediation:
-  - "Missing technical context - run /context:create to rebuild"
+  - "Missing technical context - run the nahel inception workflow (nahel/workflows/inception.md) to rebuild"
   - "Progress file corrupted - run /context:update to refresh"
 
 ### 7. Performance Optimization

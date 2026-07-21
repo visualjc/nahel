@@ -75,6 +75,33 @@ describe("nahel status — human output", () => {
     expect(lines.find((line) => line.includes("plain-item"))).not.toContain("prd=");
   });
 
+  test("an item with an investigation shows investigation=<path> in the tree (status is the detailed view, F5)", async () => {
+    const root = await makeTempDir("nahel-status-investigation-");
+    tempDirs.push(root);
+    const layout = await ensureLayout(root);
+    await writeConfig(layout, makeConfig());
+    const env = seededEnv();
+    await writeItem(
+      layout,
+      makeFrontmatter(env, {
+        name: "bug-item",
+        type: "bug",
+        investigation: "docs/investigations/auth-500.md",
+      }),
+      "",
+    );
+    await writeItem(layout, makeFrontmatter(env, { name: "plain-item" }), "");
+
+    const result = await runStatus([], root);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    const lines = result.stdout.split("\n");
+    expect(lines.find((line) => line.includes("bug-item"))).toContain(
+      "investigation=docs/investigations/auth-500.md",
+    );
+    expect(lines.find((line) => line.includes("plain-item"))).not.toContain("investigation=");
+  });
+
   test("an empty initialized store renders cleanly with exit 0", async () => {
     const root = await makeTempDir("nahel-status-empty-");
     tempDirs.push(root);

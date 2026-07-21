@@ -42,10 +42,13 @@ async function runStatus(argv: string[], ctx: CommandContext): Promise<number> {
     // pointer instead of rendering a misleadingly empty tree.
     await readConfig(layout);
     const snapshot = await loadSnapshot(layout);
-    // status is the DETAILED view: item lines include prd=<path> (F1);
-    // brief composes the terse default rendering and stays unchanged.
+    // status is the DETAILED view: item lines include prd=<path> (F1) and
+    // investigation=<path> (F5); brief composes the terse default rendering
+    // and stays unchanged.
     ctx.stdout(
-      flags.json ? JSON.stringify(snapshot, null, 2) : renderStatus(snapshot, { showPrd: true }),
+      flags.json
+        ? JSON.stringify(snapshot, null, 2)
+        : renderStatus(snapshot, { showPrd: true, showInvestigation: true }),
     );
     return 0;
   } catch (error) {

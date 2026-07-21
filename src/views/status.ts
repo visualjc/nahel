@@ -15,11 +15,13 @@ function runPhase(entry: RunSnapshot): string {
 
 /**
  * Rendering knobs. `showPrd` adds `prd=<path>` to item lines that carry one
- * (F1, ADR-0013) — `nahel status` is the detailed view and turns it on; the
- * default stays terse so brief's composed item-statuses section is unchanged.
+ * (F1, ADR-0013) and `showInvestigation` adds `investigation=<path>` (F5) —
+ * `nahel status` is the detailed view and turns both on; the defaults stay
+ * terse so brief's composed item-statuses section is unchanged.
  */
 export interface RenderStatusOptions {
   showPrd?: boolean;
+  showInvestigation?: boolean;
 }
 
 function itemLine(
@@ -37,6 +39,9 @@ function itemLine(
     `id=${item.id}`,
   ];
   if (options.showPrd === true && item.prd !== undefined) parts.push(`prd=${item.prd}`);
+  if (options.showInvestigation === true && item.investigation !== undefined) {
+    parts.push(`investigation=${item.investigation}`);
+  }
   if (item.claimed_by !== undefined) parts.push(`claimed_by=${item.claimed_by}`);
   if (item.parent !== undefined && !knownIds.has(item.parent)) {
     parts.push(`parent=${item.parent} (missing)`);

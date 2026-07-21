@@ -24,7 +24,9 @@ import { commandContext, execute, UsageError, type Command } from "./item";
  * tasks, and PRDs — into the current nahel store. Every created item is an
  * ordinary mutation through the store's mutate() choke point (write-ahead
  * journaled for free, PRD F8.3); PRDs relocate into `docs/prds/` with their
- * status stripped and lifted onto the owning item (ADR-0013). The SOURCE repo
+ * status stripped and preserved in the journal — the item keeps the epic's
+ * execution status, and a divergent PRD status is journaled as a conflict
+ * note (ADR-0013 as amended). The SOURCE repo
  * is read-only — nothing under it is ever written. Re-running is idempotent:
  * an item already present (matched by github ref, else parent+slug) is skipped
  * with a journaled count, so a partial earlier run completes without
@@ -132,7 +134,7 @@ export function preserveTimestamp(raw: unknown, env: Env): string {
 export const IMPORT_COMPLETED_EVENT_TYPE = "import.completed";
 /** A per-anomaly note: unmappable status, github-mapping mismatch, dropped dependency, unreferenced PRD. */
 export const IMPORT_NOTE_EVENT_TYPE = "import.note";
-/** A PRD relocated into docs/prds/, recording the status stripped and lifted onto the owning item. */
+/** A PRD relocated into docs/prds/, its stripped status preserved in this event (ADR-0013 as amended). */
 export const IMPORT_PRD_RELOCATED_EVENT_TYPE = "import.prd-relocated";
 
 // ---------------------------------------------------------------------------
@@ -155,8 +157,10 @@ const USAGE = `usage:
   nahel import --from-ccpm [--source <repo-root>]
     Migrate a ccpm project (epics, tasks, PRDs) into this nahel store. Every
     created item is an ordinary journaled mutation; PRDs relocate into
-    docs/prds/ with their status stripped and lifted onto the owning item
-    (ADR-0013). The source repo is read-only. Re-running is idempotent:
+    docs/prds/ with their status stripped and preserved in the journal; a
+    divergent PRD status is journaled as a conflict note while the item keeps
+    the epic's execution status (ADR-0013 as amended). The source repo is
+    read-only. Re-running is idempotent:
     already-imported items (matched by github ref, else parent+slug) are
     skipped, so a partial earlier run completes without duplication.
       --source: the ccpm repo root to read (default: this repo)`;
@@ -346,6 +350,7 @@ async function relocateResolvedPrd(
   relocatedBasenames: Set<string>,
   owningItem: string,
   owningStatus: WorkItemStatus,
+  epicRawStatus: string | undefined,
 ): Promise<void> {
   relocatedBasenames.add(resolved.fileBasename);
   const { dest, wrote } = await relocatePrd(
@@ -380,8 +385,9 @@ async function relocateResolvedPrd(
           kind: "prd-status-conflict",
           prd_status: resolved.prdStatus,
           prd_mapped: prdMapped,
+          epic_status: epicRawStatus ?? null,
           item_status: owningStatus,
-          resolution: "epic status wins (execution over authoring)",
+          resolution: "epic status wins (execution over authoring, ADR-0013 as amended)",
         },
         owningItem,
       );
@@ -505,6 +511,9 @@ async function importEpic(
       relocatedBasenames,
       epicId,
       owningStatus,
+      typeof epic.frontmatter["status"] === "string"
+        ? (epic.frontmatter["status"] as string)
+        : undefined,
     );
   }
 

@@ -397,7 +397,9 @@ describe("nahel import — PRD/epic status conflict note (Finding 2 / PR #13)", 
 
   test("epic in-progress + PRD complete map to DIFFERENT universal statuses → a prd-status-conflict note names both; epic status still wins on the item", async () => {
     const { root, layout } = await destStore();
-    const source = await sourceWith("in-progress", "complete");
+    // Raw "started" maps to in-progress — the payload must carry BOTH raw
+    // originals and BOTH mapped values (ADR-0013 as amended).
+    const source = await sourceWith("started", "complete");
     await importCommand.run(["--from-ccpm", "--source", source], seededEnv(), root);
 
     const items = [...(await allItems(layout)).values()];
@@ -412,6 +414,7 @@ describe("nahel import — PRD/epic status conflict note (Finding 2 / PR #13)", 
     expect(note!.item).toBe(epic.id);
     expect(note!.payload["prd_status"]).toBe("complete");
     expect(note!.payload["prd_mapped"]).toBe("done");
+    expect(note!.payload["epic_status"]).toBe("started");
     expect(note!.payload["item_status"]).toBe("in-progress");
   });
 

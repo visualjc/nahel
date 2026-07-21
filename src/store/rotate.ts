@@ -1,4 +1,4 @@
-import { access, rename } from "node:fs/promises";
+import { access, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { listSegments, readLastEvent, SESSION_CLOSED_EVENT_TYPE } from "./journal";
 import { readRun, type StoreLayout } from "./layout";
@@ -52,6 +52,9 @@ export async function rotateJournal(layout: StoreLayout): Promise<RotationResult
         ? await sessionSegmentIsClosed(path)
         : false;
     if (closed) {
+      // Git never materializes empty directories, so a fresh clone made while
+      // the archive was empty has no journal/archive/ at all.
+      await mkdir(layout.journalArchiveDir, { recursive: true });
       const destination = join(layout.journalArchiveDir, name);
       try {
         await rename(path, destination);

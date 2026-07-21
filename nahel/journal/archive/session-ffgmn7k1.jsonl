@@ -1,0 +1,2 @@
+{"id":"kv1hy9xs","ts":"2026-07-21T16:27:27Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"33b2j3kq","payload":{"target":"item","record":{"id":"33b2j3kq","name":"install-shim-dir-eisdir-on-prune","type":"bug","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T16:27:27Z","updated":"2026-07-21T16:27:27Z"},"body":""}}
+{"id":"jnxwfr6d","ts":"2026-07-21T16:27:27Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -151,6 +151,21 @@ describe("rotateJournal — closed segments only", () => {
     expect((await rotateJournal(layout)).archived).toEqual([]);
   });
 
+  test("fresh clone: archives into a missing archive dir (git never materializes empty dirs)", async () => {
+    const layout = await setup();
+    const env = seededEnv({ tickSeconds: 1 });
+    const session = newSessionSegmentId(env);
+    await appendEvent(layout, env, { type: "note", actor, payload: {}, session });
+    await closeSession(layout, env, actor, session);
+    // A clone of a repo whose archive was empty at commit time has no
+    // journal/archive directory at all — rotation must still succeed.
+    await rm(layout.journalArchiveDir, { recursive: true, force: true });
+
+    const result = await rotateJournal(layout);
+    expect(result.archived).toEqual([`session-${session}.jsonl`]);
+    expect((await listSegments(layout)).archived).toEqual([`session-${session}.jsonl`]);
+  });
+
   test("ignores files that are not journal segments", async () => {
     const layout = await setup();
     await writeFile(join(layout.journalDir, "README.txt"), "not a segment\n");

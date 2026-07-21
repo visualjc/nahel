@@ -1,0 +1,2 @@
+{"id":"2ydhrd62","ts":"2026-07-21T16:27:27Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"549mqgsd","payload":{"target":"item","record":{"id":"549mqgsd","name":"journal-archive-dir-missing-on-fresh-clone","type":"bug","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T16:18:44Z","updated":"2026-07-21T16:27:27Z"},"body":""}}
+{"id":"rxz6rztb","ts":"2026-07-21T16:27:27Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

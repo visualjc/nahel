@@ -1,0 +1,2 @@
+{"id":"sgg0xwct","ts":"2026-07-21T16:27:28Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"2q3nej3j","payload":{"target":"item","record":{"id":"2q3nej3j","name":"unborn-head-claim-error-message","type":"chore","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T16:27:28Z","updated":"2026-07-21T16:27:28Z"},"body":""}}
+{"id":"fgkzp6s6","ts":"2026-07-21T16:27:28Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -123,6 +123,50 @@ export const contractSchema = z.strictObject({
 });
 export type Contract = z.infer<typeof contractSchema>;
 
+const commitShaField = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/, "must be a 40-char lowercase hex commit SHA");
+
+/**
+ * One pinned skill source in `skills.yaml` (PRD F7, ADR-0009): a git `repo`
+ * (owner/name shorthand, a git URL, or a local path), the `ref` (branch/tag)
+ * to pin, and the `use` list of skill names to place. `kind` is implicitly
+ * markdown in v1 — there is deliberately NO kind field. Skill names are slugs
+ * because restore turns each into a path component under .claude/skills/.
+ */
+export const skillsManifestEntrySchema = z.strictObject({
+  repo: nonEmptyString("skills repo"),
+  ref: nonEmptyString("skills ref"),
+  use: z.array(slugField).min(1, "use must list at least one skill name"),
+});
+export type SkillsManifestEntry = z.infer<typeof skillsManifestEntrySchema>;
+
+/** `skills.yaml` — the manifest of pinned skill sources (PRD F7). */
+export const skillsManifestSchema = z.strictObject({
+  skills: z.array(skillsManifestEntrySchema),
+});
+export type SkillsManifest = z.infer<typeof skillsManifestSchema>;
+
+/**
+ * One resolved entry in `skills.lock` (PRD F7): the source `repo` and its
+ * declared `ref`, the exact commit `sha` that ref resolved to at lock time,
+ * and the `skills` names that were placed. Comparing lock.ref to the
+ * manifest's ref is what makes drift detectable without a network round-trip.
+ */
+export const skillsLockEntrySchema = z.strictObject({
+  repo: nonEmptyString("skills lock repo"),
+  ref: nonEmptyString("skills lock ref"),
+  sha: commitShaField,
+  skills: z.array(slugField),
+});
+export type SkillsLockEntry = z.infer<typeof skillsLockEntrySchema>;
+
+/** `skills.lock` — the pinned resolution of every manifest source (PRD F7). */
+export const skillsLockSchema = z.strictObject({
+  entries: z.array(skillsLockEntrySchema),
+});
+export type SkillsLock = z.infer<typeof skillsLockSchema>;
+
 /**
  * One responsibility's routing (PRD F3, ADR-0015): the agent CLI and/or model
  * to prefer. At least one of the two must be set — an empty entry routes

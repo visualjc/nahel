@@ -1,0 +1,2 @@
+{"id":"2380hp9c","ts":"2026-07-21T20:49:05Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"jj24rytb","payload":{"target":"item","record":{"id":"jj24rytb","name":"f9-scaffolding-retirement","type":"chore","status":"in-review","lane":"direct","parent":"y273p9tq","depends_on":["mtxrxqcd"],"external_refs":[],"created":"2026-07-21T18:21:14Z","updated":"2026-07-21T20:49:05Z"},"body":""}}
+{"id":"aee6m4zf","ts":"2026-07-21T20:49:05Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

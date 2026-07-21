@@ -59,8 +59,8 @@ done
 # Suggestions
 echo ""
 echo "💡 Next Actions:"
-[ $backlog -gt 0 ] && echo "  • Parse backlog PRDs to epics: /pm:prd-parse <name>"
+[ $backlog -gt 0 ] && echo "  • Parse backlog PRDs to epics via the nahel prd-parse workflow (nahel/workflows/prd-parse.md)"
 [ $in_progress -gt 0 ] && echo "  • Check progress on active PRDs: /pm:epic-status <name>"
-[ $total -eq 0 ] && echo "  • Create your first PRD: /pm:prd-new <name>"
+[ $total -eq 0 ] && echo "  • Create your first PRD via the nahel prd-new workflow (nahel/workflows/prd-new.md)"
 
 exit 0

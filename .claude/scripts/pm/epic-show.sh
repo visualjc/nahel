@@ -71,7 +71,7 @@ done
 
 if [ $task_count -eq 0 ]; then
   echo "  No tasks created yet"
-  echo "  Run: /pm:epic-decompose $epic_name"
+  echo "  Decompose it via the nahel epic-decompose workflow (nahel/workflows/epic-decompose.md)"
 fi
 
 echo ""
@@ -84,7 +84,7 @@ echo "  Closed: $closed_count"
 # Next actions
 echo ""
 echo "💡 Actions:"
-[ $task_count -eq 0 ] && echo "  • Decompose into tasks: /pm:epic-decompose $epic_name"
+[ $task_count -eq 0 ] && echo "  • Decompose into tasks via the nahel epic-decompose workflow (nahel/workflows/epic-decompose.md)"
 [ -z "$github" ] && [ $task_count -gt 0 ] && echo "  • Sync to GitHub: /pm:epic-sync $epic_name"
 [ -n "$github" ] && [ "$status" != "completed" ] && echo "  • Start work: /pm:epic-start $epic_name"
 

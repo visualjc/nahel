@@ -5,7 +5,7 @@ PRD_DIR=$(.claude/scripts/pm/resolve-prd-dir.sh --ensure) || exit 1
 
 # Check for PRD files
 if ! ls "$PRD_DIR"/*.md >/dev/null 2>&1; then
-  echo "📁 No PRDs found. Create your first PRD with: /pm:prd-new <feature-name>"
+  echo "📁 No PRDs found. Create your first PRD via the nahel prd-new workflow (nahel/workflows/prd-new.md)"
   exit 0
 fi
 

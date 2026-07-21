@@ -4,12 +4,12 @@ echo ""
 echo ""
 
 if [ ! -d ".claude/epics" ]; then
-  echo "📁 No epics directory found. Create your first epic with: /pm:prd-parse <feature-name>"
+  echo "📁 No epics directory found. Create your first epic via the nahel prd-parse workflow (nahel/workflows/prd-parse.md)"
   exit 0
 fi
 epic_dirs=$(ls -d .claude/epics/*/ 2>/dev/null || true)
 if [ -z "$epic_dirs" ]; then
-  echo "📁 No epics found. Create your first epic with: /pm:prd-parse <feature-name>"
+  echo "📁 No epics found. Create your first epic via the nahel prd-parse workflow (nahel/workflows/prd-parse.md)"
   exit 0
 fi
 

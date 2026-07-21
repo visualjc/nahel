@@ -81,7 +81,7 @@ After loading context files:
 
 **If context is incomplete:**
 - Inform user which files are missing
-- Suggest running `/context:update` to refresh context
+- Suggest running the nahel compact workflow (nahel/workflows/compact.md) to refresh context
 - Continue with partial context but note limitations
 
 ### 5. Loading Summary
@@ -127,7 +127,7 @@ If some files fail to load:
 - Clearly note what's missing
 - Suggest remediation:
   - "Missing technical context - run the nahel inception workflow (nahel/workflows/inception.md) to rebuild"
-  - "Progress file corrupted - run /context:update to refresh"
+  - "Progress file corrupted - run the nahel compact workflow (nahel/workflows/compact.md) to refresh"
 
 ### 7. Performance Optimization
 

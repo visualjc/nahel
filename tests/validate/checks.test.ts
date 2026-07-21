@@ -376,6 +376,54 @@ describe("validate — referential integrity", () => {
   });
 });
 
+describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
+  test("an item whose prd path has no file on disk is a WARNING (never an error) naming item and path", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, { prd: "docs/prds/ghost.md" });
+
+    const findings = await validateStore(fixture.layout);
+    const missing = findingsFor(findings, "item.prd-missing");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]!.severity).toBe("warning");
+    expect(missing[0]!.message).toContain(item.id);
+    expect(missing[0]!.message).toContain("docs/prds/ghost.md");
+    expect(missing[0]!.fix).toContain("prd-new");
+    // Merge-safe (ADR-0012): the missing document degrades nothing else —
+    // the store is otherwise fully valid, so no errors exist at all.
+    expect(findings.filter((finding) => finding.severity === "error")).toHaveLength(0);
+  });
+
+  test("an item whose prd path exists on disk produces no finding", async () => {
+    const fixture = await setupFixture(dirs);
+    await mkdir(join(fixture.root, "docs", "prds"), { recursive: true });
+    await writeFile(
+      join(fixture.root, "docs", "prds", "real.md"),
+      "---\nname: real\ncreated: 2026-07-16T12:00:00Z\nupdated: 2026-07-16T12:00:00Z\n---\n\n# real\n",
+    );
+    await createItem(fixture, { prd: "docs/prds/real.md" });
+
+    expect(findingsFor(await validateStore(fixture.layout), "item.prd-missing")).toHaveLength(0);
+  });
+
+  test("items without a prd field produce no finding (the field is optional)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    expect(findingsFor(await validateStore(fixture.layout), "item.prd-missing")).toHaveLength(0);
+  });
+
+  test("each item with the same missing prd path warns once, at its own record", async () => {
+    const fixture = await setupFixture(dirs);
+    const a = await createItem(fixture, { name: "plan-author", type: "plan", prd: "docs/prds/x.md" });
+    const b = await createItem(fixture, { name: "feature-ref", prd: "docs/prds/x.md" });
+
+    const missing = findingsFor(await validateStore(fixture.layout), "item.prd-missing");
+    expect(missing).toHaveLength(2);
+    const ids = missing.map((finding) => finding.message).join("\n");
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+  });
+});
+
 describe("validate — circular references", () => {
   test("a parent cycle is detected and reported once with the cycle path", async () => {
     const fixture = await setupFixture(dirs);

@@ -101,6 +101,13 @@ export interface ValidationInput {
    * skipped (the count threshold needs no clock).
    */
   now?: string;
+  /**
+   * Existence on disk of every schema-valid `prd` path any item references,
+   * keyed by the path as written (repo-relative) — collected by index.ts so
+   * the checks stay pure (F1, ADR-0013). Optional: without it the
+   * item.prd-missing warning is skipped (same pattern as `now`).
+   */
+  prdPresence?: Record<string, boolean>;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
@@ -538,6 +545,29 @@ function checkRefs(state: ParsedState): Finding[] {
         });
       }
     }
+  }
+  return findings;
+}
+
+/**
+ * PRD reference existence (F1, ADR-0013): an item's `prd` path should name a
+ * document on disk, but a missing one is a WARNING, never an error — knowledge
+ * documents can legitimately arrive by a later merge (ADR-0012 merge-safe
+ * state). Skipped entirely when the collector supplied no presence data.
+ */
+function checkPrdRefs(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.prdPresence;
+  if (presence === undefined) return findings;
+  for (const { record, path } of state.items.values()) {
+    if (record.prd === undefined || presence[record.prd] !== false) continue;
+    findings.push({
+      severity: "warning",
+      check: "item.prd-missing",
+      path,
+      message: `item ${record.id} references PRD ${record.prd}, which does not exist on disk`,
+      fix: "author the document (prd-new workflow) or fix the item's prd path — a PRD may arrive by a later merge",
+    });
   }
   return findings;
 }
@@ -1224,6 +1254,7 @@ export function validate(input: ValidationInput): Finding[] {
   const { state, findings } = parseState(input);
   findings.push(
     ...checkRefs(state),
+    ...checkPrdRefs(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),

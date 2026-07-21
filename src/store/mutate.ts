@@ -3,10 +3,12 @@ import { join } from "node:path";
 import type { Env } from "../schema/env";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
 import {
+  observationFrontmatterSchema,
   runSchema,
   workItemFrontmatterSchema,
   type Actor,
   type JournalEvent,
+  type ObservationFrontmatter,
   type Run,
   type WorkItemFrontmatter,
 } from "../schema/records";
@@ -24,9 +26,11 @@ import {
   itemExists,
   readConfig,
   readItem,
+  readObservation,
   readRun,
   storeLayout,
   writeItem,
+  writeObservation,
   writeRun,
   type StoreLayout,
 } from "./layout";
@@ -123,7 +127,19 @@ export type Mutation =
        */
       extraPayload?: Record<string, unknown>;
     }
-  | { target: "run"; eventType: string; run: Run };
+  | { target: "run"; eventType: string; run: Run }
+  /**
+   * Observation creation (`nahel observe`, PRD F6): journaled write-ahead
+   * like every mutation. Observations ref no item or run — provenance lives
+   * in the record's `sources` (journal event ids) — so the event lands in
+   * the writer's session segment and claims never cover it.
+   */
+  | {
+      target: "observation";
+      eventType: string;
+      frontmatter: ObservationFrontmatter;
+      body: string;
+    };
 
 export interface MutationResult {
   /** The write-ahead journal event recording this mutation. */
@@ -184,7 +200,7 @@ async function findCoveringClaim(
 export const MUTATION_PAYLOAD_KEYS = ["target", "record", "body"] as const;
 
 function mutationEventFields(mutation: Mutation): {
-  item: string;
+  item?: string;
   run?: string;
   payload: Record<string, unknown>;
 } {
@@ -199,10 +215,20 @@ function mutationEventFields(mutation: Mutation): {
       },
     };
   }
+  if (mutation.target === "run") {
+    return {
+      item: mutation.run.item,
+      run: mutation.run.id,
+      payload: { target: "run", record: mutation.run },
+    };
+  }
+  // Observations carry no item/run refs — sources in the record are the link.
   return {
-    item: mutation.run.item,
-    run: mutation.run.id,
-    payload: { target: "run", record: mutation.run },
+    payload: {
+      target: "observation",
+      record: mutation.frontmatter,
+      body: mutation.body,
+    },
   };
 }
 
@@ -215,11 +241,14 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
   const record =
     mutation.target === "item"
       ? workItemFrontmatterSchema.parse(mutation.frontmatter)
-      : runSchema.parse(mutation.run);
+      : mutation.target === "run"
+        ? runSchema.parse(mutation.run)
+        : observationFrontmatterSchema.parse(mutation.frontmatter);
 
   // Claim enforcement: agents may not mutate a claimed item or anything in a
-  // claimed subtree. Humans pass — the claim is theirs.
-  if (ctx.actor.kind === "agent") {
+  // claimed subtree. Humans pass — the claim is theirs. Observations touch no
+  // item, so no claim can cover them.
+  if (ctx.actor.kind === "agent" && mutation.target !== "observation") {
     const targetItem = mutation.target === "item" ? mutation.frontmatter.id : mutation.run.item;
     const incomingParent =
       mutation.target === "item" ? mutation.frontmatter.parent : undefined;
@@ -238,7 +267,7 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
   const event = await appendEvent(ctx.layout, ctx.env, {
     type: mutation.eventType,
     actor: ctx.actor,
-    item: fields.item,
+    ...(fields.item === undefined ? {} : { item: fields.item }),
     ...(fields.run === undefined ? { session: ctx.session } : { run: fields.run }),
     payload: fields.payload,
   });
@@ -247,15 +276,17 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
   // materializes exactly what the event already records.
   if (mutation.target === "item") {
     await writeItem(ctx.layout, record as WorkItemFrontmatter, mutation.body);
-  } else {
+  } else if (mutation.target === "run") {
     await writeRun(ctx.layout, record as Run);
+  } else {
+    await writeObservation(ctx.layout, record as ObservationFrontmatter, mutation.body);
   }
   return { event };
 }
 
 /** One record materialized by replayPending. */
 export interface RepairedRecord {
-  target: "item" | "run";
+  target: "item" | "run" | "observation";
   id: string;
   /** The mutation event whose payload was replayed. */
   eventId: string;
@@ -270,6 +301,12 @@ interface PendingItem {
 interface PendingRun {
   event: JournalEvent;
   record: Run;
+}
+
+interface PendingObservation {
+  event: JournalEvent;
+  record: ObservationFrontmatter;
+  body: string;
 }
 
 /**
@@ -289,6 +326,7 @@ interface PendingRun {
 export async function replayPending(layout: StoreLayout): Promise<RepairedRecord[]> {
   const itemFinalists = new Map<string, PendingItem[]>();
   const runFinalists = new Map<string, PendingRun[]>();
+  const observationFinalists = new Map<string, PendingObservation[]>();
 
   const segments = await listSegments(layout);
   const paths = [
@@ -299,6 +337,7 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     // Per segment, append order is causal order: later overwrites earlier.
     const segmentItems = new Map<string, PendingItem>();
     const segmentRuns = new Map<string, PendingRun>();
+    const segmentObservations = new Map<string, PendingObservation>();
     for await (const event of mergeSegments([path])) {
       // Mutations are identified by event TYPE (the choke point's core
       // mutation types), never by payload shape — a mutation-shaped payload
@@ -318,6 +357,15 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
       } else if (payload["target"] === "run" && payload["record"] !== undefined) {
         const record = runSchema.parse(payload["record"]);
         segmentRuns.set(record.id, { event, record });
+      } else if (payload["target"] === "observation" && payload["record"] !== undefined) {
+        const record = observationFrontmatterSchema.parse(payload["record"]);
+        const body = payload["body"];
+        if (typeof body !== "string") {
+          throw new Error(
+            `mutation event ${event.id} has an observation payload without a string body — cannot replay`,
+          );
+        }
+        segmentObservations.set(record.id, { event, record, body });
       }
     }
     for (const [id, pending] of segmentItems) {
@@ -325,6 +373,9 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     }
     for (const [id, pending] of segmentRuns) {
       runFinalists.set(id, [...(runFinalists.get(id) ?? []), pending]);
+    }
+    for (const [id, pending] of segmentObservations) {
+      observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), pending]);
     }
   }
 
@@ -374,6 +425,29 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
       const pending = candidates[candidates.length - 1]!;
       await writeRun(layout, pending.record);
       repaired.push({ target: "run", id, eventId: pending.event.id });
+    }
+  }
+  for (const [id, finalists] of [...observationFinalists.entries()].sort(([a], [b]) =>
+    a < b ? -1 : 1,
+  )) {
+    let current: Awaited<ReturnType<typeof readObservation>> | undefined;
+    try {
+      current = await readObservation(layout, id);
+    } catch {
+      current = undefined;
+    }
+    const candidates = latestCandidates(finalists);
+    const inSync =
+      current !== undefined &&
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(current!.frontmatter) === JSON.stringify(candidate.record) &&
+          current!.body === candidate.body,
+      );
+    if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
+      await writeObservation(layout, pending.record, pending.body);
+      repaired.push({ target: "observation", id, eventId: pending.event.id });
     }
   }
   return repaired;

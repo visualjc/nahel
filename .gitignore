@@ -15,3 +15,9 @@ dist/
 # Ephemeral scaffolding run state — never project state (constitution: .claude/ is tooling-only)
 .claude/state/
 .claude/context/
+
+# F7 skills dependency (ADR-0009): the clone cache and the restored skill
+# symlinks are ENVIRONMENT — `nahel skills restore` reproduces them from
+# skills.lock, so they never travel via git.
+.nahel-skills/
+.claude/skills/

@@ -39,8 +39,8 @@ export interface Snapshot {
  */
 const MISSING_HOT_STATE = /has no hot state yet/;
 
-/** Deterministic order: primary timestamp, ties broken by id. */
-function chronological<T>(key: (value: T) => readonly [string, string]) {
+/** Deterministic order: primary timestamp, ties broken by id (brief reuses it for observations). */
+export function chronological<T>(key: (value: T) => readonly [string, string]) {
   return (a: T, b: T): number => {
     const [tsA, idA] = key(a);
     const [tsB, idB] = key(b);

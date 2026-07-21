@@ -4,15 +4,24 @@ import { join } from "node:path";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import { generateId } from "../../src/schema/id";
 import { hotStatePath } from "../../src/store/hotstate";
-import { appendEvent, newSessionSegmentId, sessionSegmentPath } from "../../src/store/journal";
 import {
+  appendEvent,
+  listSegments,
+  newSessionSegmentId,
+  readJournal,
+  sessionSegmentPath,
+} from "../../src/store/journal";
+import {
+  addDistilled,
   itemPath,
+  observationPath,
   runRecordPath,
   writeItem,
   writeObservation,
   writeRun,
 } from "../../src/store/layout";
-import { mutate } from "../../src/store/mutate";
+import { closeStoreContext, mutate, replayPending } from "../../src/store/mutate";
+import { makeObservation } from "../store/helpers";
 import { validateStore } from "../../src/validate";
 import {
   createItem,
@@ -205,6 +214,55 @@ describe("validate — schema validity of every record", () => {
     expect(missing[0]!.fix).toContain("nahel init");
   });
 
+  test("a malformed run contract is reported as a schema.config error (PRD F2.1)", async () => {
+    const fixture = await setupFixture(dirs);
+    // A contract missing the required `seed` command is malformed.
+    await writeFile(
+      fixture.layout.configPath,
+      [
+        "knowledge:",
+        "  product: PRODUCT.md",
+        "  context: CONTEXT.md",
+        "  adr: docs/adr",
+        "actor:",
+        "  kind: agent",
+        "  id: claude-code",
+        "contract:",
+        "  launch: bun run dev",
+        "  test: bun test",
+        "",
+      ].join("\n"),
+    );
+    const findings = findingsFor(await validateStore(fixture.layout), "schema.config");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain("contract.seed");
+  });
+
+  test("a routing section with a non-enum responsibility is a schema.config error (PRD F3.1)", async () => {
+    const fixture = await setupFixture(dirs);
+    await writeFile(
+      fixture.layout.configPath,
+      [
+        "knowledge:",
+        "  product: PRODUCT.md",
+        "  context: CONTEXT.md",
+        "  adr: docs/adr",
+        "actor:",
+        "  kind: agent",
+        "  id: claude-code",
+        "routing:",
+        "  testing:",
+        "    agent: codex",
+        "",
+      ].join("\n"),
+    );
+    const findings = findingsFor(await validateStore(fixture.layout), "schema.config");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain("testing");
+  });
+
   test("malformed journal lines are reported with segment and line number", async () => {
     const fixture = await setupFixture(dirs);
     const segment = sessionSegmentPath(fixture.layout, "s0s0s0s0");
@@ -315,6 +373,264 @@ describe("validate — referential integrity", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]!.severity).toBe("error");
     expect(findings[0]!.message).toContain("zzzzzzzz");
+  });
+});
+
+describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
+  test("an item whose prd path has no file on disk is a WARNING (never an error) naming item and path", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, { prd: "docs/prds/ghost.md" });
+
+    const findings = await validateStore(fixture.layout);
+    const missing = findingsFor(findings, "item.prd-missing");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]!.severity).toBe("warning");
+    expect(missing[0]!.message).toContain(item.id);
+    expect(missing[0]!.message).toContain("docs/prds/ghost.md");
+    expect(missing[0]!.fix).toContain("prd-new");
+    // Merge-safe (ADR-0012): the missing document degrades nothing else —
+    // the store is otherwise fully valid, so no errors exist at all.
+    expect(findings.filter((finding) => finding.severity === "error")).toHaveLength(0);
+  });
+
+  test("an item whose prd path exists on disk produces no finding", async () => {
+    const fixture = await setupFixture(dirs);
+    await mkdir(join(fixture.root, "docs", "prds"), { recursive: true });
+    await writeFile(
+      join(fixture.root, "docs", "prds", "real.md"),
+      "---\nname: real\ncreated: 2026-07-16T12:00:00Z\nupdated: 2026-07-16T12:00:00Z\n---\n\n# real\n",
+    );
+    await createItem(fixture, { prd: "docs/prds/real.md" });
+
+    expect(findingsFor(await validateStore(fixture.layout), "item.prd-missing")).toHaveLength(0);
+  });
+
+  test("items without a prd field produce no finding (the field is optional)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    expect(findingsFor(await validateStore(fixture.layout), "item.prd-missing")).toHaveLength(0);
+  });
+
+  test("each item with the same missing prd path warns once, at its own record", async () => {
+    const fixture = await setupFixture(dirs);
+    const a = await createItem(fixture, { name: "plan-author", type: "plan", prd: "docs/prds/x.md" });
+    const b = await createItem(fixture, { name: "feature-ref", prd: "docs/prds/x.md" });
+
+    const missing = findingsFor(await validateStore(fixture.layout), "item.prd-missing");
+    expect(missing).toHaveLength(2);
+    const ids = missing.map((finding) => finding.message).join("\n");
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+  });
+});
+
+describe("validate — PRD-approval consistency (item.prd-unapproved, ADR-0013)", () => {
+  test("an active feature referencing a PRD whose authoring plan item is not done WARNS, naming both ids", async () => {
+    const fixture = await setupFixture(dirs);
+    // The revoked-approval window: the plan authored (and had approved) the
+    // PRD, then `item update --status backlog --reopen` revoked its done while
+    // the feature was already in flight. The check sees only current state —
+    // a non-done plan item authoring a PRD an active feature depends on.
+    const plan = await createItem(fixture, {
+      name: "auth-plan",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/auth.md",
+    });
+    const feature = await createItem(fixture, {
+      name: "auth-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/auth.md",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "item.prd-unapproved");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(feature.id);
+    expect(findings[0]!.message).toContain(feature.id);
+    expect(findings[0]!.message).toContain(plan.id);
+    expect(findings[0]!.message).toContain("docs/prds/auth.md");
+    expect(findings[0]!.message).toContain("not done");
+    expect(findings[0]!.fix).toContain("done");
+  });
+
+  test("multiple non-done plan items authoring the same PRD are all named, sorted, in one finding", async () => {
+    const fixture = await setupFixture(dirs);
+    const p1 = await createItem(fixture, {
+      name: "plan-one",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/multi.md",
+    });
+    const p2 = await createItem(fixture, {
+      name: "plan-two",
+      type: "plan",
+      status: "in-review",
+      prd: "docs/prds/multi.md",
+    });
+    const feature = await createItem(fixture, {
+      name: "multi-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/multi.md",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "item.prd-unapproved");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(feature.id);
+    const sorted = [p1.id, p2.id].sort();
+    expect(findings[0]!.message).toContain(`${sorted[0]}, ${sorted[1]}`);
+  });
+
+  test("a PRD whose authoring plan item IS done produces no finding (approved)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, {
+      name: "ok-plan",
+      type: "plan",
+      status: "done",
+      prd: "docs/prds/ok.md",
+    });
+    await createItem(fixture, {
+      name: "ok-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/ok.md",
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.prd-unapproved"),
+    ).toHaveLength(0);
+  });
+
+  test("a PRD with NO authoring plan item stays quiet (ccpm-imported epic shape)", async () => {
+    const fixture = await setupFixture(dirs);
+    // A ccpm-imported epic carries a `prd` path but has no `plan` item that
+    // authored it — imports must never warn. No plan item shares the path.
+    await createItem(fixture, {
+      name: "imported-epic",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/imported.md",
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.prd-unapproved"),
+    ).toHaveLength(0);
+  });
+
+  test("a done or dropped feature referencing a revoked PRD is exempt (finished work is history)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, {
+      name: "hist-plan",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/hist.md",
+    });
+    await createItem(fixture, {
+      name: "done-feature",
+      type: "feature",
+      status: "done",
+      prd: "docs/prds/hist.md",
+    });
+    await createItem(fixture, {
+      name: "dropped-feature",
+      type: "feature",
+      status: "dropped",
+      prd: "docs/prds/hist.md",
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.prd-unapproved"),
+    ).toHaveLength(0);
+  });
+
+  test("the finding is a warning — validate never fails on it, and the result is deterministic", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, {
+      name: "det-plan",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/det.md",
+    });
+    await createItem(fixture, {
+      name: "det-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/det.md",
+    });
+
+    const first = await validateStore(fixture.layout);
+    const second = await validateStore(fixture.layout);
+    expect(second).toEqual(first);
+    // Never an error — warning severity only.
+    expect(findingsFor(first, "item.prd-unapproved").every((f) => f.severity === "warning")).toBe(
+      true,
+    );
+    expect(first.filter((f) => f.severity === "error")).toHaveLength(0);
+  });
+});
+
+describe("validate — investigation references (item.investigation-missing, F5)", () => {
+  test("an item whose investigation path has no file on disk is a WARNING (never an error) naming item and path", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, {
+      type: "bug",
+      investigation: "docs/investigations/ghost.md",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    const missing = findingsFor(findings, "item.investigation-missing");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]!.severity).toBe("warning");
+    expect(missing[0]!.message).toContain(item.id);
+    expect(missing[0]!.message).toContain("docs/investigations/ghost.md");
+    expect(missing[0]!.fix).toContain("bug-lane");
+    // Merge-safe (ADR-0012): the missing document degrades nothing else —
+    // the store is otherwise fully valid, so no errors exist at all.
+    expect(findings.filter((finding) => finding.severity === "error")).toHaveLength(0);
+  });
+
+  test("an item whose investigation path exists on disk produces no finding", async () => {
+    const fixture = await setupFixture(dirs);
+    await mkdir(join(fixture.root, "docs", "investigations"), { recursive: true });
+    await writeFile(
+      join(fixture.root, "docs", "investigations", "real.md"),
+      "# investigation: real\n\nsymptoms, repro status, hypotheses, root cause\n",
+    );
+    await createItem(fixture, { type: "bug", investigation: "docs/investigations/real.md" });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.investigation-missing"),
+    ).toHaveLength(0);
+  });
+
+  test("items without an investigation field produce no finding (the field is optional)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.investigation-missing"),
+    ).toHaveLength(0);
+  });
+
+  test("each item with the same missing investigation path warns once, at its own record", async () => {
+    const fixture = await setupFixture(dirs);
+    const a = await createItem(fixture, {
+      name: "bug-a",
+      type: "bug",
+      investigation: "docs/investigations/x.md",
+    });
+    const b = await createItem(fixture, {
+      name: "bug-b",
+      type: "bug",
+      investigation: "docs/investigations/x.md",
+    });
+
+    const missing = findingsFor(await validateStore(fixture.layout), "item.investigation-missing");
+    expect(missing).toHaveLength(2);
+    const ids = missing.map((finding) => finding.message).join("\n");
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
   });
 });
 
@@ -755,16 +1071,155 @@ describe("validate — rotation and compaction overdue (warnings, thresholds fro
     expect(findings[0]!.fix).toBeDefined();
   });
 
-  test("journal growth past the configured compaction threshold warns (ADR-0004 semantic-maintenance debt)", async () => {
-    const fixture = await setupFixture(dirs, {
-      validate: { compaction_overdue_events: 1 },
-    });
+  test("un-distilled archived events at or past compaction.max_events warn, naming the compact workflow (F6.2)", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);
+    // Close this invocation's session segment and let the sweep archive it.
+    await closeStoreContext(fixture.agent);
+    expect((await listSegments(fixture.layout)).archived).toHaveLength(1);
 
     const findings = findingsFor(await validateStore(fixture.layout), "compaction.overdue");
     expect(findings).toHaveLength(1);
     expect(findings[0]!.severity).toBe("warning");
-    expect(findings[0]!.fix).toBeDefined();
+    expect(findings[0]!.message).toContain("un-distilled");
+    expect(findings[0]!.fix).toContain("nahel/workflows/compact.md");
+    expect(findings[0]!.fix).toContain("nahel observe");
+    expect(findings[0]!.fix).toContain("nahel distill");
+  });
+
+  test("segments with markers in distilled/ stop counting: marking the archive distilled clears the warning", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await createItem(fixture);
+    await closeStoreContext(fixture.agent);
+    const { archived } = await listSegments(fixture.layout);
+    await addDistilled(fixture.layout, archived);
+
+    const findings = findingsFor(await validateStore(fixture.layout), "compaction.overdue");
+    expect(findings).toEqual([]);
+  });
+
+  test("active-segment events are never compaction debt (only the archive is distillable)", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await createItem(fixture); // events sit in the still-active session segment
+
+    const findings = findingsFor(await validateStore(fixture.layout), "compaction.overdue");
+    expect(findings).toEqual([]);
+  });
+
+  test("age past compaction.max_age_days warns even when the count is small — and distilling clears it", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_age_days: 30 } });
+    await createItem(fixture); // events at 2026-07-16
+    await closeStoreContext(fixture.agent);
+
+    // 35 days later: over the 30-day threshold.
+    const overdue = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-08-20T12:00:00Z" }),
+      "compaction.overdue",
+    );
+    expect(overdue).toHaveLength(1);
+    expect(overdue[0]!.severity).toBe("warning");
+    expect(overdue[0]!.message).toContain("day");
+    expect(overdue[0]!.fix).toContain("nahel/workflows/compact.md");
+
+    // 4 days later: quiet.
+    const fresh = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-07-20T12:00:00Z" }),
+      "compaction.overdue",
+    );
+    expect(fresh).toEqual([]);
+
+    // Distilled: quiet regardless of age.
+    await addDistilled(fixture.layout, (await listSegments(fixture.layout)).archived);
+    const distilled = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-08-20T12:00:00Z" }),
+      "compaction.overdue",
+    );
+    expect(distilled).toEqual([]);
+  });
+
+  test("without an injected now the age check is skipped; the count threshold still enforces", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_age_days: 1 } });
+    await createItem(fixture);
+    await closeStoreContext(fixture.agent);
+
+    expect(findingsFor(await validateStore(fixture.layout), "compaction.overdue")).toEqual([]);
+  });
+
+  test("shipped defaults: 200 un-distilled archived events or 30 days of age (PRD F6.2)", async () => {
+    const fixture = await setupFixture(dirs);
+    // Raw-seed one archived segment with exactly 199 valid note events.
+    const lines: string[] = [];
+    for (let seq = 0; seq < 199; seq++) {
+      lines.push(rawEventLine({ id: generateId(fixture.env), seq }).trimEnd());
+    }
+    const name = `session-${generateId(fixture.env)}.jsonl`;
+    await writeFile(join(fixture.layout.journalArchiveDir, name), `${lines.join("\n")}\n`);
+
+    const now = "2026-07-20T12:00:00Z"; // 4 days after the seeded events
+    const under = findingsFor(
+      await validateStore(fixture.layout, { now }),
+      "compaction.overdue",
+    );
+    expect(under).toEqual([]);
+
+    // One more event tips the count to 200.
+    await writeFile(
+      join(fixture.layout.journalArchiveDir, name),
+      `${lines.join("\n")}\n${rawEventLine({ id: generateId(fixture.env), seq: 199 })}`,
+    );
+    const atCount = findingsFor(
+      await validateStore(fixture.layout, { now }),
+      "compaction.overdue",
+    );
+    expect(atCount).toHaveLength(1);
+    expect(atCount[0]!.message).toContain("200");
+
+    // Age alone: 31 days after the oldest event, count back under threshold.
+    await writeFile(
+      join(fixture.layout.journalArchiveDir, name),
+      `${rawEventLine({ id: generateId(fixture.env), seq: 0 })}`,
+    );
+    const aged = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-08-16T12:00:01Z" }),
+      "compaction.overdue",
+    );
+    expect(aged).toHaveLength(1);
+    expect(aged[0]!.message).toContain("30");
+  });
+
+  test("the workflow the warning names exists as a valid canonical doc (nahel/workflows/compact.md)", async () => {
+    // The fix message is a pointer; a pointer at nothing is a lie. Prove the
+    // repo ships the compact workflow with valid frontmatter.
+    const path = join(import.meta.dir, "../../nahel/workflows/compact.md");
+    const { readFrontmatterFile } = await import("../../src/store/frontmatter");
+    const { parseWorkflowDoc } = await import("../../src/install/workflow");
+    const { frontmatter, body } = await readFrontmatterFile(path);
+    const parsed = parseWorkflowDoc("compact.md", frontmatter);
+    expect(parsed.name).toBe("compact");
+    expect(parsed.description.length).toBeGreaterThan(0);
+    // The procedure drives exactly the CLI mechanics validate points at.
+    expect(body).toContain("nahel observe");
+    expect(body).toContain("nahel distill");
+  });
+
+  test("a stray non-segment file in distilled/ is a schema error; well-formed markers still count", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await createItem(fixture);
+    await closeStoreContext(fixture.agent);
+    await addDistilled(fixture.layout, (await listSegments(fixture.layout)).archived);
+    await writeFile(join(fixture.layout.distilledDir, "stray.txt"), "");
+
+    // The stray file is reported per name; markers are independent files, so
+    // it does not poison the rest — the real markers still count and the
+    // fully-distilled archive owes no compaction debt.
+    const findings = await validateStore(fixture.layout);
+    const schema = findingsFor(findings, "schema.distilled");
+    expect(schema).toHaveLength(1);
+    expect(schema[0]!.severity).toBe("error");
+    expect(schema[0]!.path).toBe(fixture.layout.distilledDir);
+    expect(schema[0]!.message).toContain("stray.txt");
+    expect(schema[0]!.fix).toContain("remove the stray file");
+    expect(findingsFor(findings, "compaction.overdue")).toEqual([]);
   });
 
   test("sane defaults: a small clean store warns about neither", async () => {
@@ -889,12 +1344,66 @@ describe("validate — mutation detection keys on event type, not payload shape"
   });
 });
 
+describe("validate — observation mutations flow through the choke point (PRD F6)", () => {
+  test("a journaled observation validates clean; losing the record is journal.divergence and repair heals it", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+
+    // Provenance: cite the item-creation event this same store journaled.
+    const sourceId = (await Array.fromAsync(readJournal(fixture.layout)))[0]!.id;
+    const observation = makeObservation(fixture.env, [sourceId]);
+    await mutate(fixture.agent, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter: observation,
+      body: "one durable fact\n",
+    });
+    expect(await validateStore(fixture.layout)).toEqual([]);
+
+    // The write-ahead crash window: journal ahead, record gone.
+    await rm(observationPath(fixture.layout, observation.id));
+    const findings = findingsFor(await validateStore(fixture.layout), "journal.divergence");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain(observation.id);
+    expect(findings[0]!.message).toContain("observation");
+
+    const repaired = await replayPending(fixture.layout);
+    expect(repaired.map((r) => r.target)).toEqual(["observation"]);
+    expect(await validateStore(fixture.layout)).toEqual([]);
+    expect(item.id).toBe(item.id); // provenance item still present
+  });
+
+  test("an agent observation.created never trips claims.violation — claims cover items, not observations", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+    const claimed = { ...item, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    const observation = makeObservation(fixture.env, []);
+    await mutate(fixture.agent, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter: observation,
+      body: "observed while the item was claimed\n",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "claims.violation")).toEqual([]);
+    expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+  });
+});
+
 describe("validate — finding shape and determinism", () => {
   test("findings order errors before warnings and is identical across calls", async () => {
-    const fixture = await setupFixture(dirs, {
-      validate: { compaction_overdue_events: 1 },
-    });
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     const orphan = await createItem(fixture);
+    await closeStoreContext(fixture.agent); // archived events: the compaction warning
     await writeItem(fixture.layout, { ...orphan, parent: "zzzzzzzz" }, "");
 
     const first = await validateStore(fixture.layout);

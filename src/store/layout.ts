@@ -1,14 +1,20 @@
-import { mkdir, readdir, readFile, realpath, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
   configSchema,
+  distilledSchema,
   observationFrontmatterSchema,
   runSchema,
+  skillsLockSchema,
+  skillsManifestSchema,
   workItemFrontmatterSchema,
   type Config,
+  type Distilled,
   type ObservationFrontmatter,
   type Run,
+  type SkillsLock,
+  type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { requireValidId } from "../schema/id";
@@ -30,7 +36,16 @@ export interface StoreLayout {
   runsDir: string;
   journalDir: string;
   journalArchiveDir: string;
+  /**
+   * `nahel/journal/distilled/` — one EMPTY marker file per fully distilled
+   * archived segment, named exactly after it (PRD F6). The name is the datum.
+   */
+  distilledDir: string;
   observationsDir: string;
+  /** `skills.yaml` — the pinned-skill manifest, at the repo root (PRD F7). */
+  skillsManifestPath: string;
+  /** `skills.lock` — the resolved manifest, at the repo root (PRD F7). */
+  skillsLockPath: string;
 }
 
 /** Compute the layout paths for a repo root (no filesystem access). */
@@ -45,7 +60,10 @@ export function storeLayout(root: string): StoreLayout {
     runsDir: join(nahelDir, "runs"),
     journalDir,
     journalArchiveDir: join(journalDir, "archive"),
+    distilledDir: join(journalDir, "distilled"),
     observationsDir: join(nahelDir, "observations"),
+    skillsManifestPath: join(root, "skills.yaml"),
+    skillsLockPath: join(root, "skills.lock"),
   };
 }
 
@@ -334,4 +352,91 @@ export async function writeObservation(
 ): Promise<void> {
   const valid = observationFrontmatterSchema.parse(frontmatter);
   await writeFrontmatterFile(observationPath(layout, valid.id), valid, body);
+}
+
+/**
+ * Raw filenames in `nahel/journal/distilled/`, sorted; [] when the dir is
+ * absent (nothing distilled yet — git cannot track an empty dir, so a fresh
+ * clone has none). validate's tolerant read consumes this so a stray file is
+ * REPORTED as a finding rather than crashing the read pass (PRD F6/F8).
+ */
+export async function listDistilledMarkers(layout: StoreLayout): Promise<string[]> {
+  const entries = await readdir(layout.distilledDir).catch((error) => {
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [] as string[];
+    throw error;
+  });
+  return entries.sort();
+}
+
+/**
+ * Read and validate the distilled segment list; [] when no markers exist.
+ * Sorted — membership is the meaning (union semantics, ADR-0012), and each
+ * member is its own marker FILE, so readdir is already a set.
+ */
+export async function readDistilled(layout: StoreLayout): Promise<Distilled> {
+  return distilledSchema.parse(await listDistilledMarkers(layout));
+}
+
+/**
+ * Mark segments distilled: validate the names, then create one EMPTY marker
+ * file per NEW name under `nahel/journal/distilled/` (mkdir on demand — the
+ * dir may not exist on a fresh clone, rotate.ts's archive-dir precedent).
+ * Purely additive and per-segment: disjoint distills touch disjoint files, so
+ * concurrent invocations cannot lose each other's marks and two worktrees
+ * distilling different segments merge as a plain directory union (ADR-0012
+ * merge-safe state). A re-run with no new names writes nothing at all (the
+ * compaction acceptance bar: re-running changes nothing).
+ */
+export async function addDistilled(
+  layout: StoreLayout,
+  names: readonly string[],
+): Promise<{ distilled: Distilled; added: string[] }> {
+  const valid = distilledSchema.parse(names);
+  const existing = new Set(await readDistilled(layout));
+  const added = [...new Set(valid)].filter((name) => !existing.has(name)).sort();
+  const distilled = [...existing, ...added].sort();
+  if (added.length > 0) {
+    await mkdir(layout.distilledDir, { recursive: true });
+    for (const name of added) {
+      // The marker is empty — the NAME is the datum, so creating a file that
+      // already exists is byte-identical (idempotence at the file level).
+      await writeFile(join(layout.distilledDir, name), "");
+    }
+  }
+  return { distilled, added };
+}
+
+/**
+ * Raw text of `skills.yaml`; null when absent (a repo may declare no skills).
+ * validate's tolerant read consumes this so a malformed manifest is REPORTED
+ * as a finding rather than crashing the read pass (PRD F7/F8).
+ */
+export async function readSkillsManifestText(layout: StoreLayout): Promise<string | null> {
+  return readTextFile(layout.skillsManifestPath);
+}
+
+/** Read and validate `skills.yaml`; null when the manifest is absent. */
+export async function readSkillsManifest(layout: StoreLayout): Promise<SkillsManifest | null> {
+  const text = await readSkillsManifestText(layout);
+  if (text === null) return null;
+  return skillsManifestSchema.parse(YAML.parse(text));
+}
+
+/** Raw text of `skills.lock`; null when absent (validate's tolerant read). */
+export async function readSkillsLockText(layout: StoreLayout): Promise<string | null> {
+  return readTextFile(layout.skillsLockPath);
+}
+
+/** Read and validate `skills.lock`; null when the lockfile is absent. */
+export async function readSkillsLock(layout: StoreLayout): Promise<SkillsLock | null> {
+  const text = await readSkillsLockText(layout);
+  if (text === null) return null;
+  return skillsLockSchema.parse(JSON.parse(text));
+}
+
+/** Validate and atomically write `skills.lock`. */
+export async function writeSkillsLock(layout: StoreLayout, lock: SkillsLock): Promise<void> {
+  const valid = skillsLockSchema.parse(lock);
+  await writeFileAtomic(layout.skillsLockPath, `${JSON.stringify(valid, null, 2)}\n`);
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { rm, writeFile } from "node:fs/promises";
 import type { CommandContext } from "../../src/cli";
 import { briefCommand } from "../../src/commands/brief";
-import { itemPath, knowledgePaths, readConfig } from "../../src/store/layout";
+import { itemPath, knowledgePaths, readConfig, writeConfig } from "../../src/store/layout";
 import { GOAL_HEADING, HARD_CONSTRAINTS_HEADING } from "../../src/templates/product";
 import { composeBrief } from "../../src/views/brief";
 import { makeTempDir, seededEnv } from "../store/helpers";
@@ -80,6 +80,34 @@ describe("nahel brief — happy path", () => {
     expect(result.stdout).toContain("finding:");
     expect(result.stdout).toContain("PRODUCT.md");
     expect(result.stdout).toContain("== validate warnings ==");
+  });
+});
+
+describe("nahel brief — responsibility routing (PRD F3, ADR-0015)", () => {
+  test("a committed routing map surfaces from disk with zero local config, exit 0", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    await writeProduct(store);
+    const config = await readConfig(store.layout);
+    await writeConfig(store.layout, {
+      ...config,
+      routing: {
+        implementation: { agent: "claude-code", model: "claude-opus-4" },
+        review: { model: "gpt-5" },
+      },
+    });
+    const result = await runBrief([], store.root);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("== responsibility routing ==");
+    expect(result.stdout).toContain("implementation: agent=claude-code model=claude-opus-4");
+    expect(result.stdout).toContain("review: model=gpt-5");
+  });
+
+  test("a config with no routing section produces no routing block", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    await writeProduct(store);
+    const result = await runBrief([], store.root);
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain("== responsibility routing ==");
   });
 });
 

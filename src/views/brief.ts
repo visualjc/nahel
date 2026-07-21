@@ -1,8 +1,19 @@
-import type { Config, JournalEvent, WorkItemFrontmatter } from "../schema/records";
-import { knowledgePaths, readTextFile, type StoreLayout } from "../store/layout";
+import type {
+  Config,
+  JournalEvent,
+  ObservationFrontmatter,
+  WorkItemFrontmatter,
+} from "../schema/records";
+import {
+  knowledgePaths,
+  listObservations,
+  readObservation,
+  readTextFile,
+  type StoreLayout,
+} from "../store/layout";
 import { GOAL_HEADING, HARD_CONSTRAINTS_HEADING } from "../templates/product";
 import { collectProgress, renderProgress } from "./progress";
-import { loadSnapshot, type Snapshot } from "./snapshot";
+import { chronological, loadSnapshot, type Snapshot } from "./snapshot";
 import { renderStatus } from "./status";
 
 /**
@@ -44,6 +55,13 @@ export interface BriefInputs {
   productPath: string;
   contextPath: string;
   adrPath: string;
+  /** Responsibility routing map from config, or undefined when unconfigured. */
+  routing?: Config["routing"];
+  /**
+   * Observation records, oldest → newest (created → id), for the active
+   * repro-waivers section (F5). Optional: absent renders no waiver block.
+   */
+  observations?: readonly ObservationFrontmatter[];
   /** Validate warning lines from the injected source. */
   warnings: readonly string[];
 }
@@ -132,6 +150,62 @@ function knowledgeBody(inputs: BriefInputs): string {
   ].join("\n");
 }
 
+/**
+ * Optional routing section body (PRD F3, ADR-0015): each CONFIGURED
+ * responsibility on its own line with its agent/model, in the schema's enum
+ * order. Null when nothing is configured — the section is then omitted
+ * entirely, so an unconfigured project's brief carries zero routing noise.
+ */
+function routingBody(routing: Config["routing"]): string | null {
+  if (routing === undefined) return null;
+  const lines: string[] = [];
+  for (const responsibility of ["architecture", "implementation", "review", "default"] as const) {
+    const entry = routing[responsibility];
+    if (entry === undefined) continue;
+    const parts: string[] = [];
+    if (entry.agent !== undefined) parts.push(`agent=${entry.agent}`);
+    if (entry.model !== undefined) parts.push(`model=${entry.model}`);
+    lines.push(`${responsibility}: ${parts.join(" ")}`);
+  }
+  return lines.length === 0 ? null : lines.join("\n");
+}
+
+/** The observation tag that marks a repro waiver (F5.3, bug-lane workflow). */
+export const REPRO_WAIVER_TAG = "repro-waiver";
+
+/**
+ * Optional active-repro-waivers section body (PRD F5.3): every observation
+ * tagged `repro-waiver` whose referenced bug is still live. A waiver on a
+ * done or dropped item is history, not an alert; a waiver whose item ref is
+ * missing or absent cannot be PROVEN closed, so it stays surfaced, marked —
+ * never silently skipped (hard constraint 6). Null when no waiver is active,
+ * so a waiver-free brief carries zero noise (the routing-section precedent).
+ */
+function waiversBody(
+  observations: readonly ObservationFrontmatter[] | undefined,
+  items: readonly WorkItemFrontmatter[],
+): string | null {
+  if (observations === undefined) return null;
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const lines: string[] = [];
+  for (const observation of observations) {
+    if (!observation.tags.includes(REPRO_WAIVER_TAG)) continue;
+    const label = observation.name ?? observation.id;
+    if (observation.item === undefined) {
+      lines.push(`waiver: ${label} id=${observation.id} item=none`);
+      continue;
+    }
+    const item = byId.get(observation.item);
+    if (item === undefined) {
+      lines.push(`waiver: ${label} id=${observation.id} item=${observation.item} (missing)`);
+      continue;
+    }
+    if (item.status === "done" || item.status === "dropped") continue;
+    lines.push(`waiver: ${label} id=${observation.id} item=${item.id}`);
+  }
+  return lines.length === 0 ? null : lines.join("\n");
+}
+
 /** Section 5 body: claims, blocked items, paused runs — or an explicit none. */
 function decisionsBody(snapshot: Snapshot): string {
   const lines: string[] = [];
@@ -192,15 +266,27 @@ function assemble(
     statusSection = renderStatus(inputs.snapshot);
   }
 
-  return [
+  const sections = [
     "nahel brief",
     `== constitution (${inputs.productPath}) ==\n${constitution}`,
     `== knowledge & canonical truth ==\n${knowledgeBody(inputs)}`,
+  ];
+  // Optional, right after knowledge: advisory routing map when configured.
+  const routing = routingBody(inputs.routing);
+  if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
+  sections.push(
     `== item statuses ==\n${statusSection}`,
     `== recent activity (newest last) ==\n${activityBody(inputs.events, keptEvents)}`,
     `== pending human decisions ==\n${decisionsBody(inputs.snapshot)}`,
+  );
+  // Optional, right after decisions: active repro waivers (F5) — a live
+  // waiver is an alert the next session must see; none configured, no noise.
+  const waivers = waiversBody(inputs.observations, inputs.snapshot.items);
+  if (waivers !== null) sections.push(`== active repro waivers ==\n${waivers}`);
+  sections.push(
     `== validate warnings ==\n${inputs.warnings.length === 0 ? "none" : inputs.warnings.join("\n")}`,
-  ].join("\n\n");
+  );
+  return sections.join("\n\n");
 }
 
 /** Largest value in [lo, hi] whose assembly fits the budget; -1 when none does. */
@@ -265,6 +351,13 @@ export async function composeBrief(
   const snapshot = await loadSnapshot(layout);
   const events = await collectProgress(layout);
   const productText = await readTextFile((await knowledgePaths(layout, config)).product);
+  // Observations feed the active-repro-waivers section (F5), in the same
+  // deterministic created → id order the snapshot gives items.
+  const observations: ObservationFrontmatter[] = [];
+  for (const id of await listObservations(layout)) {
+    observations.push((await readObservation(layout, id)).frontmatter);
+  }
+  observations.sort(chronological((observation) => [observation.created, observation.id]));
   const warnings = await warningsSource(layout);
   return renderBrief({
     snapshot,
@@ -273,6 +366,8 @@ export async function composeBrief(
     productPath: config.knowledge.product,
     contextPath: config.knowledge.context,
     adrPath: config.knowledge.adr,
+    routing: config.routing,
+    observations,
     warnings,
   });
 }

@@ -15,13 +15,13 @@ Push epic and tasks to GitHub as issues.
 
 ```bash
 # Verify epic exists
-test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. Run: /pm:prd-parse $ARGUMENTS"
+test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. New work is authored via the nahel prd-parse workflow (nahel/workflows/prd-parse.md); this command serves pre-existing ccpm epics only"
 
 # Count task files
 ls .claude/epics/$ARGUMENTS/*.md 2>/dev/null | grep -v epic.md | wc -l
 ```
 
-If no tasks found: "❌ No tasks to sync. Run: /pm:epic-decompose $ARGUMENTS"
+If no tasks found: "❌ No tasks to sync. Decompose the epic via the nahel epic-decompose workflow (nahel/workflows/epic-decompose.md)"
 
 ## Instructions
 
@@ -488,7 +488,7 @@ fi
 echo ""
 echo "Next steps:"
 echo "  - Start execution: /pm:epic-start ${ARGUMENTS}"
-echo "  - Or work on single issue: /pm:issue-start {issue_number}"
+echo "  - Or advance a single task via the nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)"
 echo "  - View epic: https://github.com/${repo}/issues/${epic_number}"
 ```
 

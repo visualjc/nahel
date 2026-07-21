@@ -129,7 +129,7 @@ Diagnosis-first workflow for `bug` work items, integrating the diagnosing-bugs a
 Real scope, not scaffolding: migrate Jim's live ccpm projects (speed-count-game first).
 
 - **F8.1** Map ccpm epics/tasks to work items: types, statuses onto the universal enum, `parent` hierarchy, `depends_on`, GitHub issue numbers into `external_refs: [{provider: github, id}]`.
-- **F8.2** Relocate `.claude/prds/*` → `docs/prds/`; strip each PRD's `status` field and lift it onto the migrated owning work item (ADR-0013 consequence).
+- **F8.2** Relocate `.claude/prds/*` → `docs/prds/`; strip each PRD's `status` field and preserve it in the journaled relocation event — the item keeps the epic's execution status, and a divergent PRD status is journaled as an explicit conflict note (ADR-0013 as amended 2026-07-21).
 - **F8.3** Import is journaled (every created item is an ordinary CLI mutation) and idempotent enough to re-run after a partial failure without duplicating items.
 - **F8.4** Post-import `nahel validate` passes; `nahel brief` on the migrated project is coherent.
 

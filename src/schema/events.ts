@@ -14,6 +14,7 @@ export const CORE_EVENT_TYPES = {
   runPaused: "run.paused",
   itemClaimed: "item.claimed",
   itemHandback: "item.handback",
+  observationCreated: "observation.created",
   note: "note",
 } as const;
 
@@ -37,4 +38,5 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.runUpdated,
   CORE_EVENT_TYPES.runEnded,
   CORE_EVENT_TYPES.runPaused,
+  CORE_EVENT_TYPES.observationCreated,
 ]);

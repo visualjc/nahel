@@ -18,7 +18,7 @@ Decompose epic into tasks and sync to GitHub in one operation.
 Check that epic exists and hasn't been processed:
 ```bash
 # Epic must exist
-test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. Run: /pm:prd-parse $ARGUMENTS"
+test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. New work is authored via the nahel prd-parse workflow (nahel/workflows/prd-parse.md); this command serves pre-existing ccpm epics only"
 
 # Check for existing tasks
 if ls .claude/epics/$ARGUMENTS/[0-9]*.md 2>/dev/null | grep -q .; then
@@ -37,14 +37,14 @@ fi
 
 ### 2. Execute Decompose
 
-Simply run the decompose command:
+Decompose the epic via the canonical nahel workflow:
 ```
-Running: /pm:epic-decompose $ARGUMENTS
+Following: nahel/workflows/epic-decompose.md for $ARGUMENTS
 ```
 
 This will:
 - Read the epic
-- Create task files (using parallel agents if appropriate)
+- Create session-sized child tasks
 - Update epic with task summary
 
 ### 3. Execute Sync
@@ -75,15 +75,15 @@ Step 2: GitHub Sync ✓
 
 Ready for development!
   Start work: /pm:epic-start $ARGUMENTS
-  Or single task: /pm:issue-start {task_number}
+  Or advance a single task via the nahel task-lifecycle workflow
 ```
 
 ## Important Notes
 
 This is simply a convenience wrapper that runs:
-1. `/pm:epic-decompose` 
+1. the nahel epic-decompose workflow (`nahel/workflows/epic-decompose.md`)
 2. `/pm:epic-sync`
 
-Both commands handle their own error checking, parallel execution, and validation. This command just orchestrates them in sequence.
+Both steps handle their own error checking and validation. This command just orchestrates them in sequence.
 
 Use this when you're confident the epic is ready and want to go from epic to GitHub issues in one step.

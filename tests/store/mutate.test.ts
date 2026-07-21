@@ -3,14 +3,30 @@ import { readFile, rm } from "node:fs/promises";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import type { WorkItemFrontmatter } from "../../src/schema/records";
 import { newSessionSegmentId, runSegmentPath, sessionSegmentPath } from "../../src/store/journal";
-import { ensureLayout, readItem, readRun, writeConfig, writeItem } from "../../src/store/layout";
+import {
+  ensureLayout,
+  observationPath,
+  readItem,
+  readObservation,
+  readRun,
+  writeConfig,
+  writeItem,
+} from "../../src/store/layout";
 import {
   ClaimViolationError,
   createStoreContext,
   mutate,
+  replayPending,
   type StoreContext,
 } from "../../src/store/mutate";
-import { makeConfig, makeFrontmatter, makeRun, makeTempDir, seededEnv } from "./helpers";
+import {
+  makeConfig,
+  makeFrontmatter,
+  makeObservation,
+  makeRun,
+  makeTempDir,
+  seededEnv,
+} from "./helpers";
 
 let dirs: string[] = [];
 
@@ -274,5 +290,99 @@ describe("mutate — claim enforcement (cooperative guardrail, PRD F9)", () => {
     expect(
       readFile(sessionSegmentPath(layout, ctx.session), "utf8"),
     ).rejects.toThrow();
+  });
+});
+
+describe("mutate — observation mutations (PRD F6)", () => {
+  test("an observation mutation appends observation.created to the session segment, then writes the record", async () => {
+    const { layout, env, ctx } = await setup();
+    // Provenance: a real journaled event to cite.
+    const item = makeFrontmatter(env);
+    const { event: source } = await mutate(ctx, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemCreated,
+      frontmatter: item,
+      body: "",
+    });
+
+    const frontmatter = makeObservation(env, [source.id]);
+    const { event } = await mutate(ctx, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter,
+      body: "The distilled fact.\n",
+    });
+
+    // Event: session segment (observations ref no run), full mutation payload,
+    // no item/run refs — provenance lives in the record's sources.
+    const raw = await readFile(sessionSegmentPath(layout, ctx.session), "utf8");
+    const lines = raw.trim().split("\n");
+    expect(JSON.parse(lines[lines.length - 1]!)).toEqual(event);
+    expect(event.type).toBe("observation.created");
+    expect(event.item).toBeUndefined();
+    expect(event.run).toBeUndefined();
+    expect(event.payload).toEqual({
+      target: "observation",
+      record: frontmatter,
+      body: "The distilled fact.\n",
+    });
+
+    // Record materialized.
+    const record = await readObservation(layout, frontmatter.id);
+    expect(record.frontmatter).toEqual(frontmatter);
+    expect(record.body).toBe("The distilled fact.\n");
+  });
+
+  test("an invalid observation is refused before anything touches disk", async () => {
+    const { layout, env, ctx } = await setup();
+    const bad = { ...makeObservation(env, []), sources: ["not an id"] };
+    expect(
+      mutate(ctx, {
+        target: "observation",
+        eventType: CORE_EVENT_TYPES.observationCreated,
+        frontmatter: bad,
+        body: "",
+      }),
+    ).rejects.toThrow();
+    expect(readFile(sessionSegmentPath(layout, ctx.session), "utf8")).rejects.toThrow();
+  });
+
+  test("claims never block observations — an agent distills while items are claimed", async () => {
+    const { layout, env, ctx } = await setup();
+    const claimed = makeFrontmatter(env, { name: "claimed-item", claimed_by: "jim" });
+    await writeItem(ctx.layout, claimed, "");
+
+    const frontmatter = makeObservation(env, []);
+    await mutate(ctx, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter,
+      body: "a fact\n",
+    });
+    expect((await readObservation(layout, frontmatter.id)).body).toBe("a fact\n");
+  });
+
+  test("replayPending materializes an observation the write-ahead crash window lost", async () => {
+    const { layout, env, ctx } = await setup();
+    const frontmatter = makeObservation(env, []);
+    await mutate(ctx, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter,
+      body: "the fact the crash lost\n",
+    });
+    // Simulate the crash window: the journal is ahead, the record is gone.
+    await rm(observationPath(layout, frontmatter.id));
+
+    const repaired = await replayPending(layout);
+    expect(repaired).toEqual([
+      { target: "observation", id: frontmatter.id, eventId: expect.any(String) },
+    ]);
+    const record = await readObservation(layout, frontmatter.id);
+    expect(record.frontmatter).toEqual(frontmatter);
+    expect(record.body).toBe("the fact the crash lost\n");
+
+    // Idempotent: a healed store replays nothing.
+    expect(await replayPending(layout)).toEqual([]);
   });
 });

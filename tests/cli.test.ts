@@ -102,6 +102,62 @@ describe("cli dispatch", () => {
   });
 });
 
+describe("cli entry point — nahel doctor env contract (PRD F2, ADR-0014)", () => {
+  // The env-presence check lives at the entry point: cli.ts is the single
+  // reader of the ambient process environment, injecting only a presence
+  // predicate. This exercises the real wiring end-to-end by spawning the CLI,
+  // proving the missing-vs-incomplete exit-code branch AND that a "clone plus
+  // a filled .env" passes. The var name is unlikely to collide with the shell.
+  const VAR = "NAHEL_DOCTOR_TEST_VAR";
+  const contract = { launch: "l", seed: "s", test: "t", env: [VAR], healthcheck: "exit 0" };
+
+  async function spawnDoctor(
+    withContract: boolean,
+    varValue: string | undefined,
+  ): Promise<{ code: number; stdout: string }> {
+    const root = await makeTempDir("nahel-cli-doctor-");
+    try {
+      const layout = await ensureLayout(root);
+      await writeConfig(layout, withContract ? makeConfig({ contract }) : makeConfig());
+      const env = { ...process.env };
+      delete env[VAR];
+      if (varValue !== undefined) env[VAR] = varValue;
+      const proc = Bun.spawn(
+        ["bun", "run", join(import.meta.dir, "../src/cli.ts"), "doctor"],
+        { cwd: root, env, stderr: "pipe" },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      const code = await proc.exited;
+      return { code, stdout };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  test("no contract section exits 2 (contract missing)", async () => {
+    const result = await spawnDoctor(false, undefined);
+    expect(result.code).toBe(2);
+    expect(result.stdout).toContain("contract missing");
+  });
+
+  test("contract present but the named var unset exits 3 (env incomplete)", async () => {
+    const result = await spawnDoctor(true, undefined);
+    expect(result.code).toBe(3);
+    expect(result.stdout).toContain(VAR);
+  });
+
+  test("an empty value is not a filled secret — still exits 3", async () => {
+    const result = await spawnDoctor(true, "");
+    expect(result.code).toBe(3);
+  });
+
+  test("a filled var plus a passing healthcheck exits 0 (contract OK)", async () => {
+    const result = await spawnDoctor(true, "postgres://localhost/app");
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("contract OK");
+  });
+});
+
 describe("cli entry point — NAHEL_ACTOR environment contract", () => {
   // The env var contract lives at the entry point: cli.ts is the single
   // ambient-process reader, so the variable is exercised end-to-end here by

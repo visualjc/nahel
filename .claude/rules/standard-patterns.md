@@ -33,7 +33,7 @@ Don't repeat full instructions - just reference `/rules/datetime.md` once.
 Keep them short and actionable:
 ```markdown
 ❌ {What failed}: {Exact solution}
-Example: "❌ Epic not found: Run /pm:prd-parse feature-name"
+Example: "❌ Epic not found: Run /pm:epic-list to see available epics"
 ```
 
 ## Standard Output Formats
@@ -81,7 +81,7 @@ fi
 # Resolve PRD directory (repo-relative)
 PRD_DIR=$(.claude/scripts/pm/resolve-prd-dir.sh 2>/dev/null)
 
-# If empty (no env/config), prompt once in interactive flows (e.g., prd-new):
+# If empty (no env/config), prompt once in interactive flows (e.g., prd-edit):
 # 1) .claude/prds (back-compat), 2) docs/prds (recommended), 3) custom
 # Persist choice to .claude/.ccpmrc as PRD_DIR and create the directory.
 ```

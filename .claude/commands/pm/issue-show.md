@@ -77,7 +77,7 @@ If task file exists, show progress:
 ### 7. Quick Actions
 ```
 🚀 Quick Actions:
-   Start work: /pm:issue-start $ARGUMENTS
+   Start work: nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)
    Sync updates: /pm:issue-sync $ARGUMENTS
    Add comment: gh issue comment #$ARGUMENTS --body "your comment"
    View in browser: gh issue view #$ARGUMENTS --web

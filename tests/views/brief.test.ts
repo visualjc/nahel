@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { rm, writeFile } from "node:fs/promises";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
@@ -17,7 +17,7 @@ import {
 import { collectProgress, renderProgress } from "../../src/views/progress";
 import { loadSnapshot } from "../../src/views/snapshot";
 import { renderStatus } from "../../src/views/status";
-import { makeFrontmatter, makeRun, seededEnv } from "../store/helpers";
+import { makeFrontmatter, makeObservation, makeRun, seededEnv } from "../store/helpers";
 import { buildPopulatedStore, type PopulatedStore } from "./helpers";
 
 /**
@@ -281,6 +281,210 @@ describe("renderBrief — pending human decisions", () => {
   test("with nothing pending the section says none explicitly", () => {
     const brief = renderBrief(makeInputs());
     expect(brief).toContain("== pending human decisions ==\nnone");
+  });
+});
+
+describe("renderBrief — responsibility routing (PRD F3, ADR-0015)", () => {
+  test("absent routing renders no routing block at all (zero noise)", () => {
+    const brief = renderBrief(makeInputs());
+    expect(brief).not.toContain("== responsibility routing ==");
+  });
+
+  test("a configured routing map is surfaced, each responsibility with its agent/model", () => {
+    const brief = renderBrief(
+      makeInputs({
+        routing: {
+          architecture: { agent: "codex", model: "gpt-5" },
+          implementation: { model: "claude-opus-4" },
+          review: { agent: "codex" },
+          default: { agent: "claude-code", model: "claude-sonnet-4" },
+        },
+      }),
+    );
+    const section = brief.split("== responsibility routing ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("architecture: agent=codex model=gpt-5");
+    expect(section).toContain("implementation: model=claude-opus-4");
+    expect(section).toContain("review: agent=codex");
+    expect(section).toContain("default: agent=claude-code model=claude-sonnet-4");
+  });
+
+  test("the routing block sits after knowledge and before item statuses", () => {
+    const brief = renderBrief(makeInputs({ routing: { implementation: { agent: "codex" } } }));
+    const knowledge = brief.indexOf("== knowledge & canonical truth ==");
+    const routing = brief.indexOf("== responsibility routing ==");
+    const statuses = brief.indexOf("== item statuses ==");
+    expect(knowledge).toBeGreaterThanOrEqual(0);
+    expect(routing).toBeGreaterThan(knowledge);
+    expect(statuses).toBeGreaterThan(routing);
+  });
+
+  test("only configured responsibilities appear — an empty map stays silent", () => {
+    const oneLine = renderBrief(makeInputs({ routing: { review: { model: "gpt-5" } } }));
+    const section = oneLine.split("== responsibility routing ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("review: model=gpt-5");
+    expect(section).not.toContain("architecture");
+    expect(section).not.toContain("implementation");
+    expect(section).not.toContain("default");
+    // A present-but-empty routing object has nothing to route → no block.
+    expect(renderBrief(makeInputs({ routing: {} }))).not.toContain(
+      "== responsibility routing ==",
+    );
+  });
+
+  test("composeBrief threads config.routing through to the rendered brief", async () => {
+    const store = await populatedWithProduct();
+    const config = await readConfig(store.layout);
+    const brief = await composeBrief(store.layout, {
+      ...config,
+      routing: { implementation: { agent: "claude-code", model: "claude-opus-4" } },
+    });
+    expect(brief).toContain("== responsibility routing ==");
+    expect(brief).toContain("implementation: agent=claude-code model=claude-opus-4");
+  });
+});
+
+describe("renderBrief — active repro waivers (F5)", () => {
+  test("no repro-waiver observations → no waiver block at all (zero noise)", () => {
+    const env = seededEnv();
+    const plain = makeObservation(env, ["kqm3vx7t"], { name: "plain-fact", tags: ["auth"] });
+    const brief = renderBrief(makeInputs({ observations: [plain] }));
+    expect(brief).not.toContain("== active repro waivers ==");
+    expect(renderBrief(makeInputs())).not.toContain("== active repro waivers ==");
+  });
+
+  test("a waiver on a live bug is surfaced with observation id and item ref", () => {
+    const env = seededEnv();
+    const bug = makeFrontmatter(env, { name: "auth-500", type: "bug", status: "in-progress" });
+    const waiver = makeObservation(env, ["kqm3vx7t"], {
+      name: "repro-waived-auth-500",
+      tags: ["repro-waiver"],
+      item: bug.id,
+    });
+    const brief = renderBrief(
+      makeInputs({ snapshot: { items: [bug], runs: [] }, observations: [waiver] }),
+    );
+    const section = brief.split("== active repro waivers ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain(`waiver: repro-waived-auth-500 id=${waiver.id} item=${bug.id}`);
+  });
+
+  test("a waiver whose bug is done or dropped is inactive — no section", () => {
+    const env = seededEnv();
+    for (const status of ["done", "dropped"] as const) {
+      const bug = makeFrontmatter(env, { name: `closed-${status}`, type: "bug", status });
+      const waiver = makeObservation(env, ["kqm3vx7t"], {
+        name: "repro-waived-closed",
+        tags: ["repro-waiver"],
+        item: bug.id,
+      });
+      const brief = renderBrief(
+        makeInputs({ snapshot: { items: [bug], runs: [] }, observations: [waiver] }),
+      );
+      expect(brief).not.toContain("== active repro waivers ==");
+    }
+  });
+
+  test("a waiver whose item ref is missing or absent cannot be proven closed — surfaced, marked", () => {
+    const env = seededEnv();
+    const dangling = makeObservation(env, ["kqm3vx7t"], {
+      name: "repro-waived-dangling",
+      tags: ["repro-waiver"],
+      item: "zzzzzzzz",
+    });
+    const itemless = makeObservation(env, ["kqm3vx7t"], {
+      name: "repro-waived-itemless",
+      tags: ["repro-waiver"],
+    });
+    const brief = renderBrief(makeInputs({ observations: [dangling, itemless] }));
+    const section = brief.split("== active repro waivers ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain(`waiver: repro-waived-dangling id=${dangling.id} item=zzzzzzzz (missing)`);
+    expect(section).toContain(`waiver: repro-waived-itemless id=${itemless.id} item=none`);
+  });
+
+  test("only waivers on live items survive the filter when both live and closed exist", () => {
+    const env = seededEnv();
+    const liveBug = makeFrontmatter(env, { name: "live-bug", type: "bug", status: "blocked" });
+    const doneBug = makeFrontmatter(env, { name: "done-bug", type: "bug", status: "done" });
+    const liveWaiver = makeObservation(env, ["kqm3vx7t"], {
+      name: "repro-waived-live",
+      tags: ["repro-waiver"],
+      item: liveBug.id,
+    });
+    const closedWaiver = makeObservation(env, ["kqm3vx7t"], {
+      name: "repro-waived-done",
+      tags: ["repro-waiver"],
+      item: doneBug.id,
+    });
+    const brief = renderBrief(
+      makeInputs({
+        snapshot: { items: [liveBug, doneBug], runs: [] },
+        observations: [liveWaiver, closedWaiver],
+      }),
+    );
+    const section = brief.split("== active repro waivers ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("repro-waived-live");
+    expect(section).not.toContain("repro-waived-done");
+  });
+
+  test("the waiver block sits after pending human decisions and before validate warnings", () => {
+    const env = seededEnv();
+    const bug = makeFrontmatter(env, { name: "pos-bug", type: "bug", status: "in-progress" });
+    const waiver = makeObservation(env, ["kqm3vx7t"], {
+      name: "repro-waived-pos",
+      tags: ["repro-waiver"],
+      item: bug.id,
+    });
+    const brief = renderBrief(
+      makeInputs({ snapshot: { items: [bug], runs: [] }, observations: [waiver] }),
+    );
+    const decisions = brief.indexOf("== pending human decisions ==");
+    const waivers = brief.indexOf("== active repro waivers ==");
+    const warnings = brief.indexOf("== validate warnings ==");
+    expect(decisions).toBeGreaterThanOrEqual(0);
+    expect(waivers).toBeGreaterThan(decisions);
+    expect(warnings).toBeGreaterThan(waivers);
+  });
+
+  test("composeBrief surfaces a real waiver written via nahel observe --item, and drops it once the bug closes", async () => {
+    const store = await populatedWithProduct();
+    // Cite a real journal event as provenance (observe verifies sources).
+    const [firstEvent] = await collectProgress(store.layout);
+    const { observeCommand } = await import("../../src/commands/observe");
+    const logs: string[] = [];
+    const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(args.join(" "));
+    });
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await observeCommand.run(
+        [
+          "repro-waived-task-beta",
+          "--item",
+          store.taskBetaId,
+          "--data",
+          `sources=${firstEvent!.id}`,
+          "--data",
+          "body=Repro waived: failed attempts documented in the investigation.",
+          "--data",
+          'tags=["repro-waiver"]',
+        ],
+        store.env,
+        store.root,
+      );
+      expect(code).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    const active = await briefOf(store);
+    expect(active).toContain("== active repro waivers ==");
+    expect(active).toContain(`repro-waived-task-beta`);
+    expect(active).toContain(`item=${store.taskBetaId}`);
+
+    // Close the bug through the store (task-beta is in-progress → done).
+    const bug = await readItem(store.layout, store.taskBetaId);
+    await writeItem(store.layout, { ...bug.frontmatter, status: "done" }, bug.body);
+    expect(await briefOf(store)).not.toContain("== active repro waivers ==");
   });
 });
 

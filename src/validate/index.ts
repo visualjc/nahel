@@ -1,16 +1,21 @@
 import { join } from "node:path";
 import { ID_PATTERN } from "../schema/id";
+import { workItemFrontmatterSchema } from "../schema/records";
 import { readFrontmatterFile } from "../store/frontmatter";
 import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
 import {
   itemPath,
+  listDistilledMarkers,
   listItems,
   listObservations,
   listRuns,
   observationPath,
   readConfigText,
   readRunRecordText,
+  readSkillsLockText,
+  readSkillsManifestText,
+  readTextFile,
   runRecordPath,
   type StoreLayout,
 } from "../store/layout";
@@ -31,7 +36,8 @@ import {
  */
 
 export {
-  DEFAULT_COMPACTION_OVERDUE_EVENTS,
+  DEFAULT_COMPACTION_MAX_AGE_DAYS,
+  DEFAULT_COMPACTION_MAX_EVENTS,
   DEFAULT_ROTATION_OVERDUE_SEGMENTS,
   validate,
 } from "./checks";
@@ -60,23 +66,76 @@ async function collectFrontmatterRecord(
 }
 
 /**
+ * Existence on disk of every schema-valid document path the given item field
+ * references, keyed by the path as written (repo-relative).
+ */
+async function collectDocPresence(
+  layout: StoreLayout,
+  input: ValidationInput,
+  field: "prd" | "investigation",
+): Promise<Record<string, boolean>> {
+  const docField = workItemFrontmatterSchema.shape[field];
+  const presence: Record<string, boolean> = {};
+  for (const raw of input.items) {
+    const parsed = docField.safeParse(raw.frontmatter?.[field]);
+    if (!parsed.success || parsed.data === undefined || parsed.data in presence) continue;
+    try {
+      presence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      presence[parsed.data] = false;
+    }
+  }
+  return presence;
+}
+
+/**
  * Collect everything validate checks in one tolerant store read pass:
  * raw config text, raw item/run/observation records, hot state, and the
  * per-line journal segment scan. Deterministically ordered (ids sorted).
  */
-export async function collectValidationInput(layout: StoreLayout): Promise<ValidationInput> {
+export async function collectValidationInput(
+  layout: StoreLayout,
+  options: ValidateOptions = {},
+): Promise<ValidationInput> {
   const input: ValidationInput = {
     configPath: layout.configPath,
     items: [],
     runs: [],
     observations: [],
     segments: await scanSegments(layout),
+    skillsManifestPath: layout.skillsManifestPath,
+    skillsLockPath: layout.skillsLockPath,
+    distilledDir: layout.distilledDir,
+    ...(options.now === undefined ? {} : { now: options.now }),
   };
 
   try {
     input.configText = await readConfigText(layout);
   } catch (error) {
     input.configError = errorMessage(error);
+  }
+
+  // Skills manifest/lock are OPTIONAL: a null read means absent (no finding);
+  // only a real read failure becomes an error the checks report (PRD F7).
+  try {
+    const text = await readSkillsManifestText(layout);
+    if (text !== null) input.skillsManifestText = text;
+  } catch (error) {
+    input.skillsManifestError = errorMessage(error);
+  }
+  try {
+    const text = await readSkillsLockText(layout);
+    if (text !== null) input.skillsLockText = text;
+  } catch (error) {
+    input.skillsLockError = errorMessage(error);
+  }
+  // Distilled markers are OPTIONAL too: an absent dir lists as [] (nothing
+  // distilled yet); only a real readdir failure becomes an error finding.
+  try {
+    input.distilledMarkers = await listDistilledMarkers(layout);
+  } catch (error) {
+    input.distilledError = errorMessage(error);
   }
 
   // Ids below come from readdir (single path components — they cannot
@@ -105,6 +164,15 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
     }
     input.observations.push(await collectFrontmatterRecord(id, observationPath(layout, id)));
   }
+
+  // Knowledge-document presence (prd: F1/ADR-0013; investigation: F5): stat
+  // each schema-valid path once so the pure item.*-missing checks judge
+  // existence from data. Only paths the schema field accepts are touched —
+  // the hardened fields (repo-relative, no traversal) are what prove the
+  // read stays inside the repo; anything else is already a schema.item
+  // finding, not a path to probe.
+  input.prdPresence = await collectDocPresence(layout, input, "prd");
+  input.investigationPresence = await collectDocPresence(layout, input, "investigation");
 
   for (const id of (await listRuns(layout)).sort()) {
     if (!ID_PATTERN.test(id)) {
@@ -141,7 +209,19 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
   return input;
 }
 
+/**
+ * Collector knobs. `now` is the caller's clock reading (env.now() format),
+ * threaded into the input as data — the compaction AGE threshold (PRD F6.2)
+ * needs it and is skipped when absent; no check ever reads a clock itself.
+ */
+export interface ValidateOptions {
+  now?: string;
+}
+
 /** One-call integrity check: collect the store scan, run every check. */
-export async function validateStore(layout: StoreLayout): Promise<Finding[]> {
-  return validate(await collectValidationInput(layout));
+export async function validateStore(
+  layout: StoreLayout,
+  options: ValidateOptions = {},
+): Promise<Finding[]> {
+  return validate(await collectValidationInput(layout, options));
 }

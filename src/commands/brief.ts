@@ -17,12 +17,15 @@ const USAGE = "usage: nahel brief";
 /**
  * VALIDATE-WARNINGS SEAM (#9 integration, wired at merge): the brief surfaces
  * every validate finding, errors first (validateStore sorts deterministically),
- * as `severity: [check] message` lines.
+ * as `severity: [check] message` lines. The clock reading feeds the compaction
+ * age threshold (PRD F6.2) as data.
  */
-const warningsSource: BriefWarningsSource = async (layout) =>
-  (await validateStore(layout)).map(
-    (finding) => `${finding.severity}: [${finding.check}] ${finding.message}`,
-  );
+const warningsSource =
+  (now: string): BriefWarningsSource =>
+  async (layout) =>
+    (await validateStore(layout, { now })).map(
+      (finding) => `${finding.severity}: [${finding.check}] ${finding.message}`,
+    );
 
 function parseFlags(argv: string[]): void {
   let positionals: string[];
@@ -48,7 +51,7 @@ async function runBrief(argv: string[], ctx: CommandContext): Promise<number> {
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of briefing an agent on a repo that has no state.
     const config = await readConfig(layout);
-    ctx.stdout(await composeBrief(layout, config, warningsSource));
+    ctx.stdout(await composeBrief(layout, config, warningsSource(ctx.env.now())));
     return 0;
   } catch (error) {
     ctx.stderr(`❌ ${error instanceof Error ? error.message : String(error)}`);

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   ACTOR_KINDS,
+  GOVERNANCE_MODES,
+  INCEPTION_TIERS,
   LANES,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
@@ -40,5 +42,13 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
 
   test("run statuses cover the run lifecycle: active|paused|ended", () => {
     expect([...RUN_STATUSES]).toEqual(["active", "paused", "ended"]);
+  });
+
+  test("inception tiers are exactly seed|standard|full (full recorded now, workflow deferred)", () => {
+    expect([...INCEPTION_TIERS]).toEqual(["seed", "standard", "full"]);
+  });
+
+  test("governance modes are exactly human|delegated", () => {
+    expect([...GOVERNANCE_MODES]).toEqual(["human", "delegated"]);
   });
 });

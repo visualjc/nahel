@@ -265,6 +265,27 @@ describe("nahel install --agent claude", () => {
     expect(await listMarkdownDocs(shimDir(root))).toEqual([]);
   });
 
+  test("the repo's committed workflow docs all install — the four F1 feature-lane shims appear", async () => {
+    const root = await makeRepo();
+    // Copy the REAL shipped docs (nahel/workflows/) into the temp repo: this
+    // proves the committed docs are installable, not just synthetic ones.
+    const source = join(import.meta.dir, "../../nahel/workflows");
+    for (const file of await listMarkdownDocs(source)) {
+      await writeWorkflow(root, file, await readFile(join(source, file), "utf8"));
+    }
+
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+
+    const shims = await readdir(shimDir(root));
+    for (const shim of ["prd-new.md", "prd-parse.md", "epic-decompose.md", "task-lifecycle.md"]) {
+      expect(shims).toContain(shim);
+      const content = await readFile(join(shimDir(root), shim), "utf8");
+      expect(content).toContain(`nahel/workflows/${shim}`);
+    }
+  });
+
   test("uninitialized repo: exit 1 pointing at `nahel init`", async () => {
     const root = await makeTempDir("nahel-install-uninit-");
     tempDirs.push(root);

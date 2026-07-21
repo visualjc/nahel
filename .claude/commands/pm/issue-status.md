@@ -63,7 +63,7 @@ Use clear visual indicators:
 Based on status, suggest actions:
 ```
 🚀 Suggested Actions:
-   - Start work: /pm:issue-start $ARGUMENTS
+   - Start work: nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)
    - Sync updates: /pm:issue-sync $ARGUMENTS
    - Close issue: gh issue close #$ARGUMENTS
    - Reopen issue: gh issue reopen #$ARGUMENTS

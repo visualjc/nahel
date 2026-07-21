@@ -80,6 +80,52 @@ describe("renderStatus — work-item tree", () => {
   });
 });
 
+describe("renderStatus — prd paths (F1, ADR-0013)", () => {
+  test("with showPrd, an item carrying a prd renders prd=<path>; items without stay terse", () => {
+    const env = seededEnv();
+    const withPrd = makeFrontmatter(env, { name: "prd-item", prd: "docs/prds/auth.md" });
+    const without = makeFrontmatter(env, { name: "plain-item" });
+    const rendered = renderStatus({ items: [withPrd, without], runs: [] }, { showPrd: true });
+    const lines = rendered.split("\n");
+    expect(lines.find((line) => line.includes("prd-item"))).toContain("prd=docs/prds/auth.md");
+    expect(lines.find((line) => line.includes("plain-item"))).not.toContain("prd=");
+  });
+
+  test("default rendering never shows prd — brief's composed item-statuses section stays terse", () => {
+    const env = seededEnv();
+    const withPrd = makeFrontmatter(env, { name: "prd-item", prd: "docs/prds/auth.md" });
+    expect(renderStatus({ items: [withPrd], runs: [] })).not.toContain("prd=");
+  });
+});
+
+describe("renderStatus — investigation paths (F5)", () => {
+  test("with showInvestigation, an item carrying one renders investigation=<path>; items without stay terse", () => {
+    const env = seededEnv();
+    const bug = makeFrontmatter(env, {
+      name: "bug-item",
+      type: "bug",
+      investigation: "docs/investigations/auth-500.md",
+    });
+    const without = makeFrontmatter(env, { name: "plain-item" });
+    const rendered = renderStatus({ items: [bug, without], runs: [] }, { showInvestigation: true });
+    const lines = rendered.split("\n");
+    expect(lines.find((line) => line.includes("bug-item"))).toContain(
+      "investigation=docs/investigations/auth-500.md",
+    );
+    expect(lines.find((line) => line.includes("plain-item"))).not.toContain("investigation=");
+  });
+
+  test("default rendering never shows investigation — brief's composed item-statuses section stays terse", () => {
+    const env = seededEnv();
+    const bug = makeFrontmatter(env, {
+      name: "bug-item",
+      type: "bug",
+      investigation: "docs/investigations/auth-500.md",
+    });
+    expect(renderStatus({ items: [bug], runs: [] })).not.toContain("investigation=");
+  });
+});
+
 describe("renderStatus — runs", () => {
   test("open runs are listed with item ref, phase, status, and start time; ended runs are not", async () => {
     const store = await buildPopulatedStore(tempDirs);

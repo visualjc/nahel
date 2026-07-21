@@ -159,32 +159,6 @@ export CCPM_WORKTREE_MODE=false
 
 ---
 
-### /pm:epic-decompose
-
-**PARALLEL_MODE=true:**
-- Uses Task tool to create all task files in parallel
-- Fast for large epics
-
-**PARALLEL_MODE=false:**
-- Creates task files sequentially
-- Shows progress for each task
-
----
-
-### /pm:issue-start
-
-**PARALLEL_MODE=true:**
-- Launches multiple agents for streams (A, B, C)
-- All streams work concurrently
-
-**PARALLEL_MODE=false:**
-- Lists available streams
-- Asks: "Which stream to work on? (A/B/C or 'done')"
-- Works on selected stream
-- Prompts: "Stream {X} complete. Continue? (yes/no/review)"
-
----
-
 ## Workflow Comparison
 
 | Aspect | Agentic (default) | Human-in-the-loop |
@@ -206,8 +180,8 @@ echo "PARALLEL_MODE=false" >> .claude/.ccpmrc
 echo "WORKTREE_MODE=false" >> .claude/.ccpmrc
 
 # Start new epic (will use new config)
-/pm:prd-parse feature-name
-/pm:epic-decompose feature-name
+# Author it via the nahel workflows (nahel/workflows/prd-parse.md,
+# nahel/workflows/epic-decompose.md), then:
 /pm:epic-sync feature-name
 ```
 
@@ -225,7 +199,7 @@ echo "WORKTREE_MODE=false" >> .claude/.ccpmrc
 
 **Cause**: Using `WORKTREE_MODE=false` but not on the correct branch
 
-**Solution**: Run `git checkout epic/{name}` before `/pm:epic-start` or `/pm:issue-start`
+**Solution**: Run `git checkout epic/{name}` before `/pm:epic-start`
 
 ### Worktree hook not working
 

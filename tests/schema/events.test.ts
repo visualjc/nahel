@@ -22,6 +22,7 @@ describe("schema/events", () => {
       runPaused: "run.paused",
       itemClaimed: "item.claimed",
       itemHandback: "item.handback",
+      observationCreated: "observation.created",
       note: "note",
     });
   });

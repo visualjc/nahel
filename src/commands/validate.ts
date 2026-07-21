@@ -51,7 +51,9 @@ async function runValidate(argv: string[], ctx: CommandContext): Promise<number>
     if (flags.repair) {
       repaired = await replayPending(layout);
     }
-    const findings = await validateStore(layout);
+    // The clock crosses into the pure checks as data: the compaction age
+    // threshold (PRD F6.2) compares event timestamps against this reading.
+    const findings = await validateStore(layout, { now: ctx.env.now() });
     const errors = findings.filter((finding) => finding.severity === "error").length;
 
     if (flags.json) {

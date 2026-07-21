@@ -2,13 +2,18 @@ import YAML from "yaml";
 import type { z } from "zod";
 import {
   configSchema,
+  distilledSchema,
   observationFrontmatterSchema,
   runSchema,
+  skillsLockSchema,
+  skillsManifestSchema,
   workItemFrontmatterSchema,
   type Config,
   type JournalEvent,
   type ObservationFrontmatter,
   type Run,
+  type SkillsLock,
+  type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
@@ -78,12 +83,50 @@ export interface ValidationInput {
   runs: RawRunRecord[];
   observations: RawFrontmatterRecord[];
   segments: SegmentScan[];
+  /** `skills.yaml` — undefined text means absent (a repo may use no skills). */
+  skillsManifestPath: string;
+  skillsManifestText?: string;
+  skillsManifestError?: string;
+  /** `skills.lock` — undefined text means absent. */
+  skillsLockPath: string;
+  skillsLockText?: string;
+  skillsLockError?: string;
+  /**
+   * `nahel/journal/distilled/` — one empty marker file per distilled archived
+   * segment. `distilledMarkers` is the raw filename listing ([] covers the
+   * absent-dir case: nothing distilled yet); `distilledError` a readdir
+   * failure.
+   */
+  distilledDir: string;
+  distilledMarkers?: string[];
+  distilledError?: string;
+  /**
+   * The collector's clock reading (env.now() format), injected as DATA so the
+   * checks stay pure. Optional: without it the compaction AGE threshold is
+   * skipped (the count threshold needs no clock).
+   */
+  now?: string;
+  /**
+   * Existence on disk of every schema-valid `prd` path any item references,
+   * keyed by the path as written (repo-relative) — collected by index.ts so
+   * the checks stay pure (F1, ADR-0013). Optional: without it the
+   * item.prd-missing warning is skipped (same pattern as `now`).
+   */
+  prdPresence?: Record<string, boolean>;
+  /**
+   * Existence on disk of every schema-valid `investigation` path any item
+   * references (F5), collected exactly like prdPresence. Optional: without it
+   * the item.investigation-missing warning is skipped.
+   */
+  investigationPresence?: Record<string, boolean>;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
 export const DEFAULT_ROTATION_OVERDUE_SEGMENTS = 5;
-/** Default compaction-debt threshold: total journal events (ADR-0004). */
-export const DEFAULT_COMPACTION_OVERDUE_EVENTS = 1000;
+/** Default compaction-debt threshold: un-distilled archived events (PRD F6.2). */
+export const DEFAULT_COMPACTION_MAX_EVENTS = 200;
+/** Default compaction-debt threshold: age in days of the oldest un-distilled archived event. */
+export const DEFAULT_COMPACTION_MAX_AGE_DAYS = 30;
 
 /** The records that parsed cleanly — what the integrity checks run over. */
 interface ParsedState {
@@ -95,10 +138,23 @@ interface ParsedState {
   runs: Map<string, { record: Run; path: string }>;
   /** Ids with a run directory on disk, valid or not. */
   runDirs: Set<string>;
-  observations: Map<string, { record: ObservationFrontmatter; path: string }>;
+  observations: Map<string, { record: ObservationFrontmatter; body: string; path: string }>;
   /** Every valid event across all segments, in the ts → seq → id total order. */
   events: JournalEvent[];
   eventIds: Set<string>;
+  /** Parsed skills.yaml / skills.lock (undefined when absent or malformed). */
+  skillsManifest: SkillsManifest | undefined;
+  skillsLock: SkillsLock | undefined;
+  /**
+   * Distilled archived segment names (PRD F6): the well-formed marker
+   * filenames in `nahel/journal/distilled/`. Empty when the dir is absent;
+   * undefined only when the dir itself is unreadable (reported as
+   * schema.distilled), which mutes the compaction check rather than
+   * reporting over state it could not see. A stray non-segment filename is
+   * its own schema.distilled finding but does not poison the other markers —
+   * each marker is an independent file.
+   */
+  distilled: Set<string> | undefined;
 }
 
 function zodIssues(error: z.ZodError): string {
@@ -126,6 +182,9 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     observations: new Map(),
     events: [],
     eventIds: new Set(),
+    skillsManifest: undefined,
+    skillsLock: undefined,
+    distilled: undefined,
   };
 
   // Config.
@@ -169,6 +228,120 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     }
   }
 
+  // Skills manifest (skills.yaml, PRD F7). Absent is fine (undefined text);
+  // present-but-malformed is a schema error, so drift can trust what parsed.
+  if (input.skillsManifestError !== undefined) {
+    findings.push({
+      severity: "error",
+      check: "schema.skills-manifest",
+      path: input.skillsManifestPath,
+      message: `skills.yaml is unreadable: ${input.skillsManifestError}`,
+      fix: RESTORE_FIX,
+    });
+  } else if (input.skillsManifestText !== undefined) {
+    let parsed: unknown;
+    let yamlError: string | undefined;
+    try {
+      parsed = YAML.parse(input.skillsManifestText);
+    } catch (error) {
+      yamlError = errorMessage(error);
+    }
+    if (yamlError !== undefined) {
+      findings.push({
+        severity: "error",
+        check: "schema.skills-manifest",
+        path: input.skillsManifestPath,
+        message: `skills.yaml is not parseable YAML: ${yamlError}`,
+        fix: RESTORE_FIX,
+      });
+    } else {
+      const result = skillsManifestSchema.safeParse(parsed);
+      if (result.success) state.skillsManifest = result.data;
+      else {
+        findings.push({
+          severity: "error",
+          check: "schema.skills-manifest",
+          path: input.skillsManifestPath,
+          message: `skills.yaml is invalid: ${zodIssues(result.error)}`,
+          fix: RESTORE_FIX,
+        });
+      }
+    }
+  }
+
+  // Skills lockfile (skills.lock, PRD F7): JSON, same absent/malformed rules.
+  if (input.skillsLockError !== undefined) {
+    findings.push({
+      severity: "error",
+      check: "schema.skills-lock",
+      path: input.skillsLockPath,
+      message: `skills.lock is unreadable: ${input.skillsLockError}`,
+      fix: RESTORE_FIX,
+    });
+  } else if (input.skillsLockText !== undefined) {
+    let parsed: unknown;
+    let jsonError: string | undefined;
+    try {
+      parsed = JSON.parse(input.skillsLockText);
+    } catch (error) {
+      jsonError = errorMessage(error);
+    }
+    if (jsonError !== undefined) {
+      findings.push({
+        severity: "error",
+        check: "schema.skills-lock",
+        path: input.skillsLockPath,
+        message: `skills.lock is not parseable JSON: ${jsonError}`,
+        fix: "run `nahel skills lock` to regenerate it (or restore skills.lock from git)",
+      });
+    } else {
+      const result = skillsLockSchema.safeParse(parsed);
+      if (result.success) state.skillsLock = result.data;
+      else {
+        findings.push({
+          severity: "error",
+          check: "schema.skills-lock",
+          path: input.skillsLockPath,
+          message: `skills.lock is invalid: ${zodIssues(result.error)}`,
+          fix: "run `nahel skills lock` to regenerate it (or restore skills.lock from git)",
+        });
+      }
+    }
+  }
+
+  // Distilled markers (nahel/journal/distilled/, PRD F6): one empty file per
+  // distilled archived segment, the name being the datum; an absent dir means
+  // nothing distilled yet (an empty listing). Markers are independent files,
+  // so a stray non-segment filename is reported per name while the
+  // well-formed markers still count; only an unreadable dir mutes the
+  // compaction check (nothing could be seen at all).
+  if (input.distilledError !== undefined) {
+    findings.push({
+      severity: "error",
+      check: "schema.distilled",
+      path: input.distilledDir,
+      message: `distilled marker directory is unreadable: ${input.distilledError}`,
+      fix: RESTORE_FIX,
+    });
+  } else {
+    const markers = new Set<string>();
+    for (const name of input.distilledMarkers ?? []) {
+      const result = distilledSchema.element.safeParse(name);
+      if (result.success) {
+        markers.add(result.data);
+      } else {
+        findings.push({
+          severity: "error",
+          check: "schema.distilled",
+          path: input.distilledDir,
+          message: `distilled marker ${JSON.stringify(name)} is not an archived segment filename: ${zodIssues(result.error)}`,
+          fix: "remove the stray file — `nahel distill` keeps one empty marker file per distilled segment, named exactly after it",
+        });
+      }
+    }
+    state.distilled = markers;
+  }
+
   // Items and observations share the frontmatter-record shape.
   const frontmatterKinds = [
     {
@@ -185,7 +358,7 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
       raws: input.observations,
       schema: observationFrontmatterSchema,
       keep: (raw: RawFrontmatterRecord, record: ObservationFrontmatter) =>
-        state.observations.set(record.id, { record, path: raw.path }),
+        state.observations.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
     },
   ] as const;
   for (const kind of frontmatterKinds) {
@@ -379,6 +552,109 @@ function checkRefs(state: ParsedState): Finding[] {
   return findings;
 }
 
+/**
+ * Knowledge-document reference existence: an item's document path (`prd`,
+ * `investigation`) should name a file on disk, but a missing one is a
+ * WARNING, never an error — knowledge documents can legitimately arrive by a
+ * later merge (ADR-0012 merge-safe state). Skipped entirely when the
+ * collector supplied no presence data for that field.
+ */
+function checkDocRefs(
+  state: ParsedState,
+  presence: Record<string, boolean> | undefined,
+  field: "prd" | "investigation",
+  check: string,
+  what: string,
+  fix: string,
+): Finding[] {
+  const findings: Finding[] = [];
+  if (presence === undefined) return findings;
+  for (const { record, path } of state.items.values()) {
+    const doc = record[field];
+    if (doc === undefined || presence[doc] !== false) continue;
+    findings.push({
+      severity: "warning",
+      check,
+      path,
+      message: `item ${record.id} references ${what} ${doc}, which does not exist on disk`,
+      fix,
+    });
+  }
+  return findings;
+}
+
+/** PRD reference existence (F1, ADR-0013). */
+function checkPrdRefs(state: ParsedState): Finding[] {
+  return checkDocRefs(
+    state,
+    state.input.prdPresence,
+    "prd",
+    "item.prd-missing",
+    "PRD",
+    "author the document (prd-new workflow) or fix the item's prd path — a PRD may arrive by a later merge",
+  );
+}
+
+/** Investigation reference existence (F5). */
+function checkInvestigationRefs(state: ParsedState): Finding[] {
+  return checkDocRefs(
+    state,
+    state.input.investigationPresence,
+    "investigation",
+    "item.investigation-missing",
+    "investigation",
+    "author the document (bug-lane workflow) or fix the item's investigation path — it may arrive by a later merge",
+  );
+}
+
+/**
+ * PRD-approval consistency (ADR-0013 + its 2026-07-21 amendment): a PRD file
+ * carries no status — its approval lifecycle lives on the authoring `plan`
+ * item, where done = approved, and `prd-parse` gates epic creation on that.
+ * But `item update --status backlog --reopen` can revoke a plan item's done
+ * AFTER feature items referencing the same PRD are already in flight, and
+ * nothing else detects that drift. So: an ACTIVE non-plan item referencing a
+ * `prd` whose authoring plan item(s) exist but none is done is a WARNING
+ * (approval missing or revoked). A ccpm-imported epic carries a `prd` but has
+ * NO plan item authoring it — no plan item shares the path, so imports stay
+ * quiet. Finished work (the referencing item itself done or dropped) pointing
+ * at a since-revoked PRD is history, not drift, so it is exempt; every active
+ * status (backlog, in-progress, blocked, in-review) warns. A warning, never an
+ * error — this never fails `nahel validate`.
+ */
+function checkPrdApproval(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  // PRD path → the authoring plan items' ids and whether any of them is done.
+  const plansByPrd = new Map<string, { ids: string[]; anyDone: boolean }>();
+  for (const { record } of state.items.values()) {
+    if (record.type !== "plan" || record.prd === undefined) continue;
+    const entry = plansByPrd.get(record.prd) ?? { ids: [], anyDone: false };
+    entry.ids.push(record.id);
+    entry.anyDone = entry.anyDone || record.status === "done";
+    plansByPrd.set(record.prd, entry);
+  }
+
+  for (const { record, path } of state.items.values()) {
+    if (record.type === "plan" || record.prd === undefined) continue;
+    if (record.status === "done" || record.status === "dropped") continue;
+    const plans = plansByPrd.get(record.prd);
+    if (plans === undefined || plans.anyDone) continue;
+    // Sort so the id listing (and thus the message) is deterministic.
+    const ids = [...plans.ids].sort().join(", ");
+    findings.push({
+      severity: "warning",
+      check: "item.prd-unapproved",
+      path,
+      message:
+        `item ${record.id} references ${record.prd} whose authoring plan item ${ids} ` +
+        `is not done (approval missing or revoked)`,
+      fix: "flip the authoring plan item to done once the PRD is approved (the prd-parse gate), or pause the feature work until then",
+    });
+  }
+  return findings;
+}
+
 /** Circular parent / depends_on detection; each cycle reported once. */
 function checkCycles(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -450,7 +726,8 @@ function checkCycles(state: ParsedState): Finding[] {
 type Mutation =
   | { target: "item"; record: WorkItemFrontmatter; body: string }
   | { target: "run"; record: Run }
-  | { target: "item" | "run"; invalid: string };
+  | { target: "observation"; record: ObservationFrontmatter; body: string }
+  | { target: "item" | "run" | "observation"; invalid: string };
 
 /**
  * Parse a mutation event's payload record, when the event is a mutation.
@@ -477,10 +754,23 @@ function mutationRecord(event: JournalEvent): Mutation | undefined {
     if (!result.success) return { target: "run", invalid: zodIssues(result.error) };
     return { target: "run", record: result.data };
   }
+  if (payload["target"] === "observation") {
+    const result = observationFrontmatterSchema.safeParse(payload["record"]);
+    if (!result.success) return { target: "observation", invalid: zodIssues(result.error) };
+    const body = payload["body"];
+    if (typeof body !== "string") {
+      return { target: "observation", invalid: "payload body is not a string" };
+    }
+    return { target: "observation", record: result.data, body };
+  }
   // A core mutation type whose payload lacks the target/record replay fields:
   // the choke point always writes them, so this event cannot be replayed.
   return {
-    target: event.type.startsWith("item.") ? "item" : "run",
+    target: event.type.startsWith("item.")
+      ? "item"
+      : event.type.startsWith("observation.")
+        ? "observation"
+        : "run",
     invalid: "payload carries no target/record mutation fields",
   };
 }
@@ -530,6 +820,8 @@ function checkClaims(state: ParsedState): Finding[] {
   for (const event of state.events) {
     const mutation = mutationRecord(event);
     if (mutation === undefined || "invalid" in mutation) continue;
+    // Observations touch no item — no claim can cover them (mutate() parity).
+    if (mutation.target === "observation") continue;
 
     const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
     if (event.actor.kind === "agent") {
@@ -697,12 +989,19 @@ function checkDivergence(state: ParsedState): Finding[] {
 
   type ItemFinalist = { event: JournalEvent; record: WorkItemFrontmatter; body: string };
   type RunFinalist = { event: JournalEvent; record: Run };
+  type ObservationFinalist = {
+    event: JournalEvent;
+    record: ObservationFrontmatter;
+    body: string;
+  };
   const itemFinalists = new Map<string, ItemFinalist[]>();
   const runFinalists = new Map<string, RunFinalist[]>();
+  const observationFinalists = new Map<string, ObservationFinalist[]>();
   for (const segment of state.input.segments) {
     // Per segment, event order is causal order: later overwrites earlier.
     const segmentItems = new Map<string, ItemFinalist>();
     const segmentRuns = new Map<string, RunFinalist>();
+    const segmentObservations = new Map<string, ObservationFinalist>();
     for (const event of segment.events) {
       const mutation = mutationRecord(event);
       if (mutation === undefined || "invalid" in mutation) continue;
@@ -712,8 +1011,14 @@ function checkDivergence(state: ParsedState): Finding[] {
           record: mutation.record,
           body: mutation.body,
         });
-      } else {
+      } else if (mutation.target === "run") {
         segmentRuns.set(mutation.record.id, { event, record: mutation.record });
+      } else {
+        segmentObservations.set(mutation.record.id, {
+          event,
+          record: mutation.record,
+          body: mutation.body,
+        });
       }
     }
     for (const [id, finalist] of segmentItems) {
@@ -721,6 +1026,9 @@ function checkDivergence(state: ParsedState): Finding[] {
     }
     for (const [id, finalist] of segmentRuns) {
       runFinalists.set(id, [...(runFinalists.get(id) ?? []), finalist]);
+    }
+    for (const [id, finalist] of segmentObservations) {
+      observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), finalist]);
     }
   }
 
@@ -765,6 +1073,29 @@ function checkDivergence(state: ParsedState): Finding[] {
         ...(disk === undefined ? {} : { path: disk.path }),
         message:
           `run ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
+          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
+        fix: repairFix,
+      });
+    }
+  }
+  for (const [id, finalists] of observationFinalists) {
+    const disk = state.observations.get(id);
+    const candidates = latestCandidates(finalists);
+    const inSync =
+      disk !== undefined &&
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
+          disk.body === candidate.body,
+      );
+    if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
+      findings.push({
+        severity: "error",
+        check: "journal.divergence",
+        ...(disk === undefined ? {} : { path: disk.path }),
+        message:
+          `observation ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
           `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
         fix: repairFix,
       });
@@ -820,17 +1151,44 @@ function checkHotState(state: ParsedState): Finding[] {
   return findings;
 }
 
+const TIMESTAMP_PARTS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
+
+/**
+ * Seconds since the Unix epoch for a schema-format UTC timestamp, computed
+ * with plain calendar arithmetic (days-from-civil) — the validate layer is
+ * pure and touches no ambient clock or date machinery. Undefined when the
+ * string is not in the schema's timestamp format.
+ */
+function epochSeconds(timestamp: string): number | undefined {
+  const parts = TIMESTAMP_PARTS.exec(timestamp);
+  if (parts === null) return undefined;
+  const [, year, month, day, hour, minute, second] = parts.map(Number) as number[];
+  const shiftedYear = month! <= 2 ? year! - 1 : year!;
+  const era = Math.floor(shiftedYear / 400);
+  const yearOfEra = shiftedYear - era * 400;
+  const dayOfYear = Math.floor((153 * (month! + (month! > 2 ? -3 : 9)) + 2) / 5) + day! - 1;
+  const dayOfEra =
+    yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
+  const epochDays = era * 146097 + dayOfEra - 719468;
+  return epochDays * 86400 + hour! * 3600 + minute! * 60 + second!;
+}
+
+const COMPACT_FIX =
+  "run the compact workflow (nahel/workflows/compact.md): distill facts with `nahel observe`, then mark the covered segments with `nahel distill <segment>...`";
+
 /**
  * Maintenance-debt warnings (ADR-0004: validate flags overdue semantic
- * maintenance). Thresholds come from config's optional `validate` block,
- * with sane defaults.
+ * maintenance). Rotation debt is closed-but-unarchived segments (threshold
+ * from config's `validate` block); compaction debt is UN-DISTILLED ARCHIVED
+ * events — events in archived segments with no marker in
+ * nahel/journal/distilled/ — over
+ * the `compaction` section's count/age thresholds (PRD F6.2). The age leg
+ * needs the injected clock reading and is skipped without one.
  */
 function checkMaintenance(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
   const rotationThreshold =
     state.config?.validate?.rotation_overdue_segments ?? DEFAULT_ROTATION_OVERDUE_SEGMENTS;
-  const compactionThreshold =
-    state.config?.validate?.compaction_overdue_events ?? DEFAULT_COMPACTION_OVERDUE_EVENTS;
 
   // Provably-closed active segments (rotate.ts's rule, evaluated purely):
   // a run segment whose run has ended, or a session segment whose final
@@ -857,18 +1215,107 @@ function checkMaintenance(state: ParsedState): Finding[] {
     });
   }
 
-  const totalEvents = state.input.segments.reduce(
-    (sum, segment) => sum + segment.events.length,
-    0,
+  // Compaction debt (PRD F6.2). An unreadable marker dir already produced
+  // schema.distilled and leaves state.distilled undefined — skip rather than
+  // warn over state we could not see.
+  if (state.distilled === undefined) return findings;
+  const maxEvents = state.config?.compaction?.max_events ?? DEFAULT_COMPACTION_MAX_EVENTS;
+  const maxAgeDays =
+    state.config?.compaction?.max_age_days ?? DEFAULT_COMPACTION_MAX_AGE_DAYS;
+
+  const undistilled = state.input.segments.filter(
+    (segment) => segment.archived && !state.distilled!.has(segment.name),
   );
-  if (totalEvents >= compactionThreshold) {
+  let undistilledEvents = 0;
+  let oldest: string | undefined;
+  for (const segment of undistilled) {
+    undistilledEvents += segment.events.length;
+    for (const event of segment.events) {
+      if (oldest === undefined || event.ts < oldest) oldest = event.ts;
+    }
+  }
+
+  if (undistilledEvents >= maxEvents) {
     findings.push({
       severity: "warning",
       check: "compaction.overdue",
-      message: `journal holds ${totalEvents} events (threshold ${compactionThreshold}) — compaction is overdue`,
-      fix: "distill durable observations from the journal (semantic maintenance is workflow work, ADR-0004)",
+      message:
+        `journal archive holds ${undistilledEvents} un-distilled event(s) across ` +
+        `${undistilled.length} segment(s) (threshold ${maxEvents}) — compaction is overdue`,
+      fix: COMPACT_FIX,
     });
   }
+
+  const nowSeconds = state.input.now === undefined ? undefined : epochSeconds(state.input.now);
+  const oldestSeconds = oldest === undefined ? undefined : epochSeconds(oldest);
+  if (nowSeconds !== undefined && oldestSeconds !== undefined) {
+    const ageDays = (nowSeconds - oldestSeconds) / 86400;
+    if (ageDays > maxAgeDays) {
+      findings.push({
+        severity: "warning",
+        check: "compaction.overdue",
+        message:
+          `the oldest un-distilled archived event (${oldest}) is ${Math.floor(ageDays)} day(s) ` +
+          `old (threshold ${maxAgeDays}) — compaction is overdue`,
+        fix: COMPACT_FIX,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Skills lockfile drift (PRD F7, ADR-0009): manifest and lock disagree.
+ * Deterministic — compares the two committed files only, NEVER the network.
+ * Three warnings, keyed by the source `repo`:
+ *   - a manifest source with no lock entry (needs `nahel skills lock`);
+ *   - a lock entry no longer in the manifest (an orphaned pin);
+ *   - a manifest source whose ref changed since it was locked (stale pin).
+ * A malformed manifest/lock produced a schema error already and leaves the
+ * parsed value undefined, so drift is skipped rather than reported twice.
+ */
+function checkSkillsDrift(state: ParsedState): Finding[] {
+  const manifest = state.skillsManifest;
+  const lock = state.skillsLock;
+  if (manifest === undefined && lock === undefined) return [];
+
+  const findings: Finding[] = [];
+  const lockByRepo = new Map((lock?.entries ?? []).map((entry) => [entry.repo, entry]));
+  const manifestRepos = new Set((manifest?.skills ?? []).map((source) => source.repo));
+
+  for (const source of manifest?.skills ?? []) {
+    const locked = lockByRepo.get(source.repo);
+    if (locked === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "skills.unlocked",
+        path: state.input.skillsManifestPath,
+        message: `skills.yaml lists ${source.repo} but skills.lock has no entry for it — the source is unpinned`,
+        fix: "run `nahel skills lock` to resolve and pin it",
+      });
+    } else if (locked.ref !== source.ref) {
+      findings.push({
+        severity: "warning",
+        check: "skills.stale",
+        path: state.input.skillsManifestPath,
+        message: `${source.repo} is pinned at ref ${locked.ref} (sha ${locked.sha}) but skills.yaml now asks for ref ${source.ref}`,
+        fix: "run `nahel skills lock` to re-resolve the changed ref",
+      });
+    }
+  }
+
+  for (const entry of lock?.entries ?? []) {
+    if (!manifestRepos.has(entry.repo)) {
+      findings.push({
+        severity: "warning",
+        check: "skills.orphaned",
+        path: state.input.skillsLockPath,
+        message: `skills.lock pins ${entry.repo} but skills.yaml no longer lists it`,
+        fix: "remove it from skills.lock (or restore the manifest source), then run `nahel skills lock`",
+      });
+    }
+  }
+
   return findings;
 }
 
@@ -891,6 +1338,9 @@ export function validate(input: ValidationInput): Finding[] {
   const { state, findings } = parseState(input);
   findings.push(
     ...checkRefs(state),
+    ...checkPrdRefs(state),
+    ...checkInvestigationRefs(state),
+    ...checkPrdApproval(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),
@@ -898,6 +1348,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkDivergence(state),
     ...checkHotState(state),
     ...checkMaintenance(state),
+    ...checkSkillsDrift(state),
   );
   return findings.sort(compareFindings);
 }

@@ -224,7 +224,7 @@ Cleanup completed:
   
 Next steps:
   - Deploy changes if needed
-  - Start new epic: /pm:prd-new {feature}
+  - Start new work: nahel prd-new workflow (nahel/workflows/prd-new.md)
   - View completed work: git log --oneline -20
 ```
 

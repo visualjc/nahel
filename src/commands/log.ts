@@ -11,6 +11,7 @@ import {
 import { itemExists, readConfig, readRun, storeLayout } from "../store/layout";
 import { MUTATION_PAYLOAD_KEYS } from "../store/mutate";
 import { rotateJournal } from "../store/rotate";
+import { UsageError } from "./item";
 
 /**
  * `nahel log` (PRD F4): append a typed journal event — an *observation about
@@ -35,9 +36,6 @@ export interface LogCommandContext extends CommandContext {
   /** Value of the NAHEL_ACTOR environment variable, read at the entry point. */
   actorOverride?: string;
 }
-
-/** A user-input error: reported with the usage line appended. */
-class UsageError extends Error {}
 
 const CORE_TYPE_SET = new Set<string>(Object.values(CORE_EVENT_TYPES));
 
@@ -92,11 +90,12 @@ function parseFlags(argv: string[]): LogFlags {
 }
 
 /**
- * Build the event payload from --data entries, merged left to right. Each
- * entry is either a JSON object or key=val (the value JSON-parsed when it is
- * valid JSON — numbers, booleans, quoted strings — else taken literally).
+ * Build a record from --data entries, merged left to right. Each entry is
+ * either a JSON object or key=val (the value JSON-parsed when it is valid
+ * JSON — numbers, booleans, quoted strings — else taken literally). Shared
+ * with `nahel observe`, which speaks the same --data dialect (PRD F6).
  */
-function parsePayload(entries: string[]): Record<string, unknown> {
+export function parseDataEntries(entries: string[]): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   for (const entry of entries) {
     const trimmed = entry.trim();
@@ -130,6 +129,12 @@ function parsePayload(entries: string[]): Record<string, unknown> {
       payload[key] = value;
     }
   }
+  return payload;
+}
+
+/** log's event payload: the parsed --data with the replay keys banned. */
+function parsePayload(entries: string[]): Record<string, unknown> {
+  const payload = parseDataEntries(entries);
   // The store's replay machinery reads target/record/body from mutation
   // event payloads; banned here at top level so a logged observation can
   // never masquerade as a mutation (nested occurrences are plain data).

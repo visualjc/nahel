@@ -15,7 +15,8 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 - **Journal** — the append-only event record of what happened (`nahel log`), stored as JSONL segments — one segment per run (plus segments for non-run events) so parallel worktrees never merge-conflict. Reading merges segments by time. CLI enforces rotation; never edited, only appended.
 - **Journal event** — one entry in the journal: unique ID (stable across rotation), timestamp, type, actor, optional run and work-item refs, payload. Event IDs are what provenance links point at. Mutation events are **write-ahead**: appended before the record change they describe, so the journal may run ahead of records after a crash but never lies about what happened.
 - **Observation** — one durable curated fact distilled from experience: one record per fact, with provenance = journal event IDs. Human-readable and editable in review. Searchable via `nahel recall`.
-- **Knowledge layer** — the curated durable set: ADRs, this glossary, PRODUCT.md, ARCHITECTURE.md, observations.
+- **Knowledge layer** — the curated durable set: ADRs, this glossary, PRODUCT.md, ARCHITECTURE.md, observations, PRDs.
+- **PRD** — a product requirements document: a knowledge document (`docs/prds/`) authored by a `plan` item and referenced by `feature` items via frontmatter path. Its draft→approved lifecycle lives on the owning work item, never in the PRD file.
 - **Brief / briefing** — the generated onboarding pack (`nahel brief`): everything a fresh agent needs to act correctly — goals, constraints, glossary, current state, recent activity — rendered from hot state + journal + knowledge. Answers *"what is this project and how do I act?"*
 - **Progress** — the rendered journal timeline (`nahel progress`): what happened and when. Answers *"what has been done?"* A view, **never canonical** — there is no hand-maintained progress file. Brief embeds a truncated version.
 
@@ -39,6 +40,9 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 - **Repro waiver** — the logged, surfaced exception to "failing repro test before fix"; valid only when the investigation shows failed repro attempts.
 - **Pause / claim / handback** — first-class intervention operations. `pause` suspends a run. `claim` pins a work item at any level (one task or a whole epic) **and its entire subtree**: sets `claimed_by`, pauses active runs touching any covered item, and the CLI refuses agent mutations on claimed items — a guardrail against cooperating-but-fallible agents, with the journal making any bypass auditable. `handback` clears the claim and journals the human's changes; the agent resumes from the journaled delta.
 - **Parked** — a decision routed to `human-review-needed` without blocking the run.
+
+- **Responsibility** — a kind of judgment a project needs done: `architecture | implementation | review`. The unit routing maps to an executor; orthogonal to work-item type (one item exercises several responsibilities).
+- **Routing map** — the committed config mapping each responsibility to a preferred executor (agent CLI and/or model), plus a default. Advisory to interactive sessions via the brief; enforced by autonomous dispatch.
 
 ## Interfaces
 

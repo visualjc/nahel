@@ -1,0 +1,2 @@
+{"id":"ne11ncev","ts":"2026-07-21T18:01:26Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"7wkgajcg","payload":{"summary":"Scoped by ADR-0015: config schema + brief surfacing land in Phase 1 (advisory), dispatch enforcement in Phase 2."}}
+{"id":"058zyc2a","ts":"2026-07-21T18:01:26Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

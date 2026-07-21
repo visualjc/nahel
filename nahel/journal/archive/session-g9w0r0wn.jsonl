@@ -1,0 +1,2 @@
+{"id":"379mwf7h","ts":"2026-07-21T18:01:25Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"d8sa37p8","payload":{"target":"item","record":{"id":"d8sa37p8","name":"phase-1-prd","type":"plan","status":"backlog","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-21T18:01:25Z","updated":"2026-07-21T18:01:25Z"},"body":""}}
+{"id":"jq0ab250","ts":"2026-07-21T18:01:25Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"mfw5nej1","ts":"2026-07-21T20:19:14Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"6p2k3g6m","payload":{"target":"item","record":{"id":"6p2k3g6m","name":"validate-dangling-observation-item-refs","type":"chore","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T20:19:14Z","updated":"2026-07-21T20:19:14Z"},"body":""}}
+{"id":"5crhgfgm","ts":"2026-07-21T20:19:14Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

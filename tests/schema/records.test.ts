@@ -240,6 +240,50 @@ describe("schema/records — work item frontmatter", () => {
     expect(issues.some((i) => i.startsWith("prd:"))).toBe(true);
   });
 
+  test("accepts an optional investigation as a repo-relative path (F5: bug items reference their investigation doc by path)", () => {
+    expectAccepted(
+      workItemFrontmatterSchema,
+      { ...validItem, investigation: "docs/investigations/0gz8r4cm.md" },
+      "item with investigation",
+    );
+    const parsed = workItemFrontmatterSchema.parse({
+      ...validItem,
+      investigation: "docs/investigations/0gz8r4cm.md",
+    });
+    expect(parsed.investigation).toBe("docs/investigations/0gz8r4cm.md");
+  });
+
+  test("rejects an absolute investigation path (POSIX and Windows forms), naming the repo-relative rule", () => {
+    for (const absolute of ["/etc/inv/x.md", "C:\\inv\\x.md", "C:/inv/x.md", "\\\\host\\share\\x.md"]) {
+      const issues = rejectionIssues(
+        workItemFrontmatterSchema,
+        { ...validItem, investigation: absolute },
+        `item absolute investigation ${absolute}`,
+      );
+      expect(issues.some((i) => i.startsWith("investigation:") && i.includes("repo-relative"))).toBe(true);
+    }
+  });
+
+  test('rejects an investigation path with a ".." segment (no traversal outside the repo)', () => {
+    for (const traversal of ["../outside.md", "docs/../../etc/passwd", "docs/investigations/..", "..\\outside.md"]) {
+      const issues = rejectionIssues(
+        workItemFrontmatterSchema,
+        { ...validItem, investigation: traversal },
+        `item traversal investigation ${traversal}`,
+      );
+      expect(issues.some((i) => i.startsWith("investigation:") && i.includes(".."))).toBe(true);
+    }
+  });
+
+  test("rejects an empty investigation path (absent means no investigation; empty is a mistake)", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, investigation: "" },
+      "item empty investigation",
+    );
+    expect(issues.some((i) => i.startsWith("investigation:"))).toBe(true);
+  });
+
   test("rejects a non-UTC created timestamp, naming the required format", () => {
     const issues = rejectionIssues(
       workItemFrontmatterSchema,

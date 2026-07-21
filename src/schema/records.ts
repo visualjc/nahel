@@ -56,26 +56,40 @@ export const externalRefSchema = z.strictObject({
 export type ExternalRef = z.infer<typeof externalRefSchema>;
 
 /**
- * The `prd` field: a repo-relative path to a PRD knowledge document
- * (ADR-0013 — the plan item that authors a PRD records it as its
- * deliverable; feature items reference it the same way). Hardened at the
- * schema level like every path this repo commits: absolute paths (POSIX,
- * drive-letter, UNC) and `..` traversal segments are rejected outright, so
- * a record can never point outside the repo (hard constraint 2). The path
- * is a REFERENCE only — existence on disk is a `nahel validate` warning,
- * never a schema concern (ADR-0012: the document may arrive by later merge).
+ * A repo-relative knowledge-document path, hardened at the schema level like
+ * every path this repo commits: absolute paths (POSIX, drive-letter, UNC) and
+ * `..` traversal segments are rejected outright, so a record can never point
+ * outside the repo (hard constraint 2). The path is a REFERENCE only —
+ * existence on disk is a `nahel validate` warning, never a schema concern
+ * (ADR-0012: the document may arrive by later merge).
  */
-const prdPathField = z
-  .string()
-  .min(1, "prd path must be a non-empty string")
-  .refine(
-    (path) => !path.startsWith("/") && !path.startsWith("\\") && !/^[A-Za-z]:[/\\]/.test(path),
-    "prd path must be repo-relative — absolute paths are rejected (hard constraint 2: nothing outside the repo)",
-  )
-  .refine(
-    (path) => !path.split(/[/\\]/).includes(".."),
-    'prd path must not contain ".." segments — no traversal outside the repo (hard constraint 2)',
-  );
+const repoRelativeDocPathField = (what: string) =>
+  z
+    .string()
+    .min(1, `${what} path must be a non-empty string`)
+    .refine(
+      (path) => !path.startsWith("/") && !path.startsWith("\\") && !/^[A-Za-z]:[/\\]/.test(path),
+      `${what} path must be repo-relative — absolute paths are rejected (hard constraint 2: nothing outside the repo)`,
+    )
+    .refine(
+      (path) => !path.split(/[/\\]/).includes(".."),
+      `${what} path must not contain ".." segments — no traversal outside the repo (hard constraint 2)`,
+    );
+
+/**
+ * The `prd` field: the item's PRD document (ADR-0013 — the plan item that
+ * authors a PRD records it as its deliverable; feature items reference it
+ * the same way).
+ */
+const prdPathField = repoRelativeDocPathField("prd");
+
+/**
+ * The `investigation` field (PRD F5.1): a bug item's durable diagnosis
+ * document — symptoms, repro status, hypotheses tested, root cause. By the
+ * bug-lane workflow convention it lives at `docs/investigations/<item-id>.md`;
+ * the schema validates only the path shape, never the location.
+ */
+const investigationPathField = repoRelativeDocPathField("investigation");
 
 /** Work item frontmatter — the unit of intent (markdown body carries the prose). */
 export const workItemFrontmatterSchema = z.strictObject({
@@ -88,6 +102,7 @@ export const workItemFrontmatterSchema = z.strictObject({
   depends_on: z.array(idField),
   external_refs: z.array(externalRefSchema),
   prd: prdPathField.optional(),
+  investigation: investigationPathField.optional(),
   claimed_by: nonEmptyString("claimed_by actor id").optional(),
   created: timestampField,
   updated: timestampField,

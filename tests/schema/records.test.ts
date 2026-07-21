@@ -446,6 +446,138 @@ describe("schema/records — config", () => {
   });
 });
 
+describe("schema/records — run contract (F2.1, ADR-0014)", () => {
+  const withContract = (contract: unknown) => ({ ...validConfig, contract });
+
+  test("a config with no contract section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no contract");
+  });
+
+  test("accepts a minimal contract (launch/seed/test commands)", () => {
+    expectAccepted(
+      configSchema,
+      withContract({ launch: "bun run dev", seed: "bun run seed", test: "bun test" }),
+      "contract minimal",
+    );
+  });
+
+  test("accepts a full contract (healthcheck, ports, env var names)", () => {
+    expectAccepted(
+      configSchema,
+      withContract({
+        launch: "bun run dev",
+        seed: "bun run seed",
+        test: "bun test",
+        healthcheck: "curl -fsS localhost:3000/health",
+        ports: [3000, 5432],
+        env: ["DATABASE_URL", "STRIPE_SECRET_KEY"],
+      }),
+      "contract full",
+    );
+  });
+
+  test("rejects a contract missing a required command, pointing at it", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withContract({ launch: "bun run dev", test: "bun test" }),
+      "contract missing seed",
+    );
+    expect(issues.some((i) => i.startsWith("contract.seed:"))).toBe(true);
+  });
+
+  test("rejects a required command that is an empty string", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withContract({ launch: "", seed: "s", test: "t" }),
+      "contract empty launch",
+    );
+    expect(issues.some((i) => i.startsWith("contract.launch:"))).toBe(true);
+  });
+
+  test("rejects a non-integer port, pointing at the offending entry", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withContract({ launch: "l", seed: "s", test: "t", ports: [3000, 8.5] }),
+      "contract non-integer port",
+    );
+    expect(issues.some((i) => i.startsWith("contract.ports.1:"))).toBe(true);
+  });
+
+  test("rejects an env entry that is not a non-empty string, pointing at it", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withContract({ launch: "l", seed: "s", test: "t", env: ["OK", ""] }),
+      "contract empty env name",
+    );
+    expect(issues.some((i) => i.startsWith("contract.env.1:"))).toBe(true);
+  });
+
+  test("rejects an unknown contract key, naming it (strict object)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withContract({ launch: "l", seed: "s", test: "t", secrets: ["NOPE"] }),
+      "contract unknown key",
+    );
+    expect(issues.some((i) => i.includes("secrets"))).toBe(true);
+  });
+});
+
+describe("schema/records — responsibility routing (F3.1, ADR-0015)", () => {
+  const withRouting = (routing: unknown) => ({ ...validConfig, routing });
+
+  test("a config with no routing section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no routing");
+  });
+
+  test("accepts a single responsibility with just an agent", () => {
+    expectAccepted(
+      configSchema,
+      withRouting({ implementation: { agent: "claude-code" } }),
+      "routing agent only",
+    );
+  });
+
+  test("accepts every enum responsibility plus a default, agent and/or model", () => {
+    expectAccepted(
+      configSchema,
+      withRouting({
+        architecture: { agent: "codex", model: "gpt-5" },
+        implementation: { model: "claude-opus-4" },
+        review: { agent: "codex" },
+        default: { agent: "claude-code", model: "claude-sonnet-4" },
+      }),
+      "routing full",
+    );
+  });
+
+  test("rejects a routing entry that sets neither agent nor model", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withRouting({ review: {} }),
+      "routing entry empty",
+    );
+    expect(issues.some((i) => i.includes("agent") && i.includes("model"))).toBe(true);
+  });
+
+  test("rejects a non-enum responsibility key, naming it (unknown responsibilities rejected)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withRouting({ testing: { agent: "codex" } }),
+      "routing non-enum key",
+    );
+    expect(issues.some((i) => i.includes("testing"))).toBe(true);
+  });
+
+  test("rejects an unknown key inside a routing entry (strict object)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withRouting({ implementation: { agent: "codex", provider: "openai" } }),
+      "routing entry unknown key",
+    );
+    expect(issues.some((i) => i.includes("provider"))).toBe(true);
+  });
+});
+
 describe("schema/records — actor", () => {
   test("session is optional but must be non-empty when present", () => {
     expectAccepted(actorSchema, { kind: "human", id: "jim" }, "actor no session");

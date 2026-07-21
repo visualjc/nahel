@@ -104,10 +104,61 @@ export const observationFrontmatterSchema = z.strictObject({
 export type ObservationFrontmatter = z.infer<typeof observationFrontmatterSchema>;
 
 /**
+ * Run contract — `config.contract` (PRD F2, ADR-0014): how the app launches,
+ * seeds, tests, and reports health, plus the ports it binds and the NAMES of
+ * the env vars it needs. Secret VALUES never live here — the contract is
+ * committed, publishable state; `nahel doctor` verifies the named vars are set
+ * on this machine without ever reading their values. Strict: a typo'd key is a
+ * validation error, not silent state.
+ */
+export const contractSchema = z.strictObject({
+  launch: nonEmptyString("contract.launch command"),
+  seed: nonEmptyString("contract.seed command"),
+  test: nonEmptyString("contract.test command"),
+  healthcheck: nonEmptyString("contract.healthcheck command").optional(),
+  ports: z
+    .array(z.number().int("contract.ports entries must be integers").positive("contract.ports entries must be >= 1"))
+    .optional(),
+  env: z.array(nonEmptyString("contract.env entry (an env var name)")).optional(),
+});
+export type Contract = z.infer<typeof contractSchema>;
+
+/**
+ * One responsibility's routing (PRD F3, ADR-0015): the agent CLI and/or model
+ * to prefer. At least one of the two must be set — an empty entry routes
+ * nothing and is a config mistake.
+ */
+export const routingEntrySchema = z
+  .strictObject({
+    agent: nonEmptyString("routing agent").optional(),
+    model: nonEmptyString("routing model").optional(),
+  })
+  .refine((entry) => entry.agent !== undefined || entry.model !== undefined, {
+    message: "routing entry must set at least one of agent or model",
+  });
+export type RoutingEntry = z.infer<typeof routingEntrySchema>;
+
+/**
+ * Responsibility routing — `config.routing` (PRD F3, ADR-0015): a fixed enum
+ * of responsibilities mapped to `{agent, model}` preferences, plus a default.
+ * Strict: unknown responsibilities are rejected so the vocabulary stays a
+ * deliberate schema change, never an accidental typo. Advisory in Phase 1
+ * (surfaced by `nahel brief`); enforced by Phase 2 dispatch.
+ */
+export const routingSchema = z.strictObject({
+  architecture: routingEntrySchema.optional(),
+  implementation: routingEntrySchema.optional(),
+  review: routingEntrySchema.optional(),
+  default: routingEntrySchema.optional(),
+});
+export type Routing = z.infer<typeof routingSchema>;
+
+/**
  * Config — `nahel/config`: where the knowledge layer lives (paths relative to
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
  * The optional `validate` block tunes the maintenance-warning thresholds
- * (PRD F8, ADR-0004) — additive, so existing configs stay valid.
+ * (PRD F8, ADR-0004); the optional `contract` (ADR-0014) and `routing`
+ * (ADR-0015) sections are additive too, so existing configs stay valid.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -132,5 +183,7 @@ export const configSchema = z.strictObject({
         .optional(),
     })
     .optional(),
+  contract: contractSchema.optional(),
+  routing: routingSchema.optional(),
 });
 export type Config = z.infer<typeof configSchema>;

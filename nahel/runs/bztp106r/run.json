@@ -1,0 +1,12 @@
+{
+  "id": "bztp106r",
+  "item": "4va4c5wz",
+  "actor": {
+    "kind": "agent",
+    "id": "claude-code"
+  },
+  "lane": "epic-lite",
+  "phase": "implementing",
+  "status": "active",
+  "started": "2026-07-21T18:43:22Z"
+}

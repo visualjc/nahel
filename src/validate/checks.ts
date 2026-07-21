@@ -2,6 +2,7 @@ import YAML from "yaml";
 import type { z } from "zod";
 import {
   configSchema,
+  distilledSchema,
   observationFrontmatterSchema,
   runSchema,
   skillsLockSchema,
@@ -90,12 +91,24 @@ export interface ValidationInput {
   skillsLockPath: string;
   skillsLockText?: string;
   skillsLockError?: string;
+  /** `nahel/journal/distilled.json` — undefined text means absent (nothing distilled). */
+  distilledPath: string;
+  distilledText?: string;
+  distilledError?: string;
+  /**
+   * The collector's clock reading (env.now() format), injected as DATA so the
+   * checks stay pure. Optional: without it the compaction AGE threshold is
+   * skipped (the count threshold needs no clock).
+   */
+  now?: string;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
 export const DEFAULT_ROTATION_OVERDUE_SEGMENTS = 5;
-/** Default compaction-debt threshold: total journal events (ADR-0004). */
-export const DEFAULT_COMPACTION_OVERDUE_EVENTS = 1000;
+/** Default compaction-debt threshold: un-distilled archived events (PRD F6.2). */
+export const DEFAULT_COMPACTION_MAX_EVENTS = 200;
+/** Default compaction-debt threshold: age in days of the oldest un-distilled archived event. */
+export const DEFAULT_COMPACTION_MAX_AGE_DAYS = 30;
 
 /** The records that parsed cleanly — what the integrity checks run over. */
 interface ParsedState {
@@ -114,6 +127,12 @@ interface ParsedState {
   /** Parsed skills.yaml / skills.lock (undefined when absent or malformed). */
   skillsManifest: SkillsManifest | undefined;
   skillsLock: SkillsLock | undefined;
+  /**
+   * Distilled archived segment names (PRD F6). Empty when the file is absent;
+   * undefined when it is malformed (reported as schema.distilled), which
+   * mutes the compaction check rather than double-reporting over bad data.
+   */
+  distilled: Set<string> | undefined;
 }
 
 function zodIssues(error: z.ZodError): string {
@@ -143,6 +162,7 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     eventIds: new Set(),
     skillsManifest: undefined,
     skillsLock: undefined,
+    distilled: undefined,
   };
 
   // Config.
@@ -262,6 +282,51 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
           path: input.skillsLockPath,
           message: `skills.lock is invalid: ${zodIssues(result.error)}`,
           fix: "run `nahel skills lock` to regenerate it (or restore skills.lock from git)",
+        });
+      }
+    }
+  }
+
+  // Distilled segment list (distilled.json, PRD F6): JSON, absent means
+  // nothing distilled yet (an empty set); malformed is a schema error and
+  // leaves state.distilled undefined so the compaction check stays quiet
+  // instead of reporting over data it cannot trust.
+  if (input.distilledError !== undefined) {
+    findings.push({
+      severity: "error",
+      check: "schema.distilled",
+      path: input.distilledPath,
+      message: `distilled.json is unreadable: ${input.distilledError}`,
+      fix: RESTORE_FIX,
+    });
+  } else if (input.distilledText === undefined) {
+    state.distilled = new Set();
+  } else {
+    let parsed: unknown;
+    let jsonError: string | undefined;
+    try {
+      parsed = JSON.parse(input.distilledText);
+    } catch (error) {
+      jsonError = errorMessage(error);
+    }
+    if (jsonError !== undefined) {
+      findings.push({
+        severity: "error",
+        check: "schema.distilled",
+        path: input.distilledPath,
+        message: `distilled.json is not parseable JSON: ${jsonError}`,
+        fix: "restore distilled.json from git — `nahel distill` maintains it as a sorted JSON array of archived segment filenames",
+      });
+    } else {
+      const result = distilledSchema.safeParse(parsed);
+      if (result.success) state.distilled = new Set(result.data);
+      else {
+        findings.push({
+          severity: "error",
+          check: "schema.distilled",
+          path: input.distilledPath,
+          message: `distilled.json is invalid: ${zodIssues(result.error)}`,
+          fix: "restore distilled.json from git — `nahel distill` maintains it as a sorted JSON array of archived segment filenames",
         });
       }
     }
@@ -918,17 +983,43 @@ function checkHotState(state: ParsedState): Finding[] {
   return findings;
 }
 
+const TIMESTAMP_PARTS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
+
+/**
+ * Seconds since the Unix epoch for a schema-format UTC timestamp, computed
+ * with plain calendar arithmetic (days-from-civil) — the validate layer is
+ * pure and touches no ambient clock or date machinery. Undefined when the
+ * string is not in the schema's timestamp format.
+ */
+function epochSeconds(timestamp: string): number | undefined {
+  const parts = TIMESTAMP_PARTS.exec(timestamp);
+  if (parts === null) return undefined;
+  const [, year, month, day, hour, minute, second] = parts.map(Number) as number[];
+  const shiftedYear = month! <= 2 ? year! - 1 : year!;
+  const era = Math.floor(shiftedYear / 400);
+  const yearOfEra = shiftedYear - era * 400;
+  const dayOfYear = Math.floor((153 * (month! + (month! > 2 ? -3 : 9)) + 2) / 5) + day! - 1;
+  const dayOfEra =
+    yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
+  const epochDays = era * 146097 + dayOfEra - 719468;
+  return epochDays * 86400 + hour! * 3600 + minute! * 60 + second!;
+}
+
+const COMPACT_FIX =
+  "run the compact workflow (nahel/workflows/compact.md): distill facts with `nahel observe`, then mark the covered segments with `nahel distill <segment>...`";
+
 /**
  * Maintenance-debt warnings (ADR-0004: validate flags overdue semantic
- * maintenance). Thresholds come from config's optional `validate` block,
- * with sane defaults.
+ * maintenance). Rotation debt is closed-but-unarchived segments (threshold
+ * from config's `validate` block); compaction debt is UN-DISTILLED ARCHIVED
+ * events — events in archived segments not listed in distilled.json — over
+ * the `compaction` section's count/age thresholds (PRD F6.2). The age leg
+ * needs the injected clock reading and is skipped without one.
  */
 function checkMaintenance(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
   const rotationThreshold =
     state.config?.validate?.rotation_overdue_segments ?? DEFAULT_ROTATION_OVERDUE_SEGMENTS;
-  const compactionThreshold =
-    state.config?.validate?.compaction_overdue_events ?? DEFAULT_COMPACTION_OVERDUE_EVENTS;
 
   // Provably-closed active segments (rotate.ts's rule, evaluated purely):
   // a run segment whose run has ended, or a session segment whose final
@@ -955,17 +1046,51 @@ function checkMaintenance(state: ParsedState): Finding[] {
     });
   }
 
-  const totalEvents = state.input.segments.reduce(
-    (sum, segment) => sum + segment.events.length,
-    0,
+  // Compaction debt (PRD F6.2). A malformed distilled.json already produced
+  // schema.distilled and leaves state.distilled undefined — skip rather than
+  // warn over data we cannot trust.
+  if (state.distilled === undefined) return findings;
+  const maxEvents = state.config?.compaction?.max_events ?? DEFAULT_COMPACTION_MAX_EVENTS;
+  const maxAgeDays =
+    state.config?.compaction?.max_age_days ?? DEFAULT_COMPACTION_MAX_AGE_DAYS;
+
+  const undistilled = state.input.segments.filter(
+    (segment) => segment.archived && !state.distilled!.has(segment.name),
   );
-  if (totalEvents >= compactionThreshold) {
+  let undistilledEvents = 0;
+  let oldest: string | undefined;
+  for (const segment of undistilled) {
+    undistilledEvents += segment.events.length;
+    for (const event of segment.events) {
+      if (oldest === undefined || event.ts < oldest) oldest = event.ts;
+    }
+  }
+
+  if (undistilledEvents >= maxEvents) {
     findings.push({
       severity: "warning",
       check: "compaction.overdue",
-      message: `journal holds ${totalEvents} events (threshold ${compactionThreshold}) — compaction is overdue`,
-      fix: "distill durable observations from the journal (semantic maintenance is workflow work, ADR-0004)",
+      message:
+        `journal archive holds ${undistilledEvents} un-distilled event(s) across ` +
+        `${undistilled.length} segment(s) (threshold ${maxEvents}) — compaction is overdue`,
+      fix: COMPACT_FIX,
     });
+  }
+
+  const nowSeconds = state.input.now === undefined ? undefined : epochSeconds(state.input.now);
+  const oldestSeconds = oldest === undefined ? undefined : epochSeconds(oldest);
+  if (nowSeconds !== undefined && oldestSeconds !== undefined) {
+    const ageDays = (nowSeconds - oldestSeconds) / 86400;
+    if (ageDays > maxAgeDays) {
+      findings.push({
+        severity: "warning",
+        check: "compaction.overdue",
+        message:
+          `the oldest un-distilled archived event (${oldest}) is ${Math.floor(ageDays)} day(s) ` +
+          `old (threshold ${maxAgeDays}) — compaction is overdue`,
+        fix: COMPACT_FIX,
+      });
+    }
   }
   return findings;
 }

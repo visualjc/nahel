@@ -5,6 +5,7 @@ import { generateId } from "../../src/schema/id";
 import {
   actorSchema,
   configSchema,
+  distilledSchema,
   journalEventSchema,
   observationFrontmatterSchema,
   runSchema,
@@ -406,6 +407,23 @@ describe("schema/records — observation frontmatter", () => {
     );
     expect(issues.some((i) => i.startsWith("id:"))).toBe(true);
   });
+
+  test("accepts an optional name slug (`nahel observe <slug>` writes it; Phase-0 records lack it)", () => {
+    expectAccepted(
+      observationFrontmatterSchema,
+      { ...validObservation, name: "flaky-auth-test" },
+      "observation with name",
+    );
+  });
+
+  test("rejects a non-slug name", () => {
+    const issues = rejectionIssues(
+      observationFrontmatterSchema,
+      { ...validObservation, name: "Not A Slug" },
+      "observation bad name",
+    );
+    expect(issues.some((i) => i.startsWith("name:") && i.includes("slug"))).toBe(true);
+  });
 });
 
 describe("schema/records — config", () => {
@@ -575,6 +593,82 @@ describe("schema/records — responsibility routing (F3.1, ADR-0015)", () => {
       "routing entry unknown key",
     );
     expect(issues.some((i) => i.includes("provider"))).toBe(true);
+  });
+});
+
+describe("schema/records — compaction thresholds (F6.2)", () => {
+  const withCompaction = (compaction: unknown) => ({ ...validConfig, compaction });
+
+  test("a config with no compaction section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no compaction");
+  });
+
+  test("accepts count and age thresholds, together or alone", () => {
+    expectAccepted(
+      configSchema,
+      withCompaction({ max_events: 500, max_age_days: 14 }),
+      "compaction both",
+    );
+    expectAccepted(configSchema, withCompaction({ max_events: 500 }), "compaction count only");
+    expectAccepted(configSchema, withCompaction({ max_age_days: 14 }), "compaction age only");
+    expectAccepted(configSchema, withCompaction({}), "compaction empty (defaults apply)");
+  });
+
+  test("rejects non-positive and fractional thresholds, naming the field", () => {
+    for (const [value, label] of [
+      [{ max_events: 0 }, "compaction zero events"],
+      [{ max_events: 1.5 }, "compaction fractional events"],
+      [{ max_age_days: -1 }, "compaction negative age"],
+      [{ max_age_days: 2.5 }, "compaction fractional age"],
+    ] as const) {
+      const issues = rejectionIssues(configSchema, withCompaction(value), label);
+      expect(issues.some((i) => i.startsWith("compaction."))).toBe(true);
+    }
+  });
+
+  test("rejects unknown compaction keys (a typo is an error, not silent state)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withCompaction({ maxEvents: 10 }),
+      "compaction unknown key",
+    );
+    expect(issues.some((i) => i.includes("maxEvents"))).toBe(true);
+  });
+
+  test("the retired validate.compaction_overdue_events key is rejected (moved to compaction.max_events)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      { ...validConfig, validate: { compaction_overdue_events: 5 } },
+      "config retired compaction key",
+    );
+    expect(issues.some((i) => i.includes("compaction_overdue_events"))).toBe(true);
+  });
+});
+
+describe("schema/records — distilled segment list (F6, ADR-0012)", () => {
+  test("accepts a list of archived segment filenames (and the empty list)", () => {
+    expectAccepted(
+      distilledSchema,
+      ["run-abcdefgh.jsonl", "session-0gz8r4cm.jsonl"],
+      "distilled valid",
+    );
+    expectAccepted(distilledSchema, [], "distilled empty");
+  });
+
+  test("rejects entries that are not journal segment filenames", () => {
+    for (const [value, label] of [
+      [["notes.md"], "distilled non-segment"],
+      [["run-UPPER123.jsonl"], "distilled bad id"],
+      [["../escape.jsonl"], "distilled traversal"],
+      [[""], "distilled empty entry"],
+    ] as const) {
+      const issues = rejectionIssues(distilledSchema, value, label);
+      expect(issues.some((i) => i.includes("segment"))).toBe(true);
+    }
+  });
+
+  test("rejects a non-array shape (union semantics need a plain list)", () => {
+    rejectionIssues(distilledSchema, { segments: [] }, "distilled non-array");
   });
 });
 

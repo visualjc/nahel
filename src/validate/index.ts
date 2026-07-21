@@ -10,6 +10,7 @@ import {
   listRuns,
   observationPath,
   readConfigText,
+  readDistilledText,
   readRunRecordText,
   readSkillsLockText,
   readSkillsManifestText,
@@ -33,7 +34,8 @@ import {
  */
 
 export {
-  DEFAULT_COMPACTION_OVERDUE_EVENTS,
+  DEFAULT_COMPACTION_MAX_AGE_DAYS,
+  DEFAULT_COMPACTION_MAX_EVENTS,
   DEFAULT_ROTATION_OVERDUE_SEGMENTS,
   validate,
 } from "./checks";
@@ -66,7 +68,10 @@ async function collectFrontmatterRecord(
  * raw config text, raw item/run/observation records, hot state, and the
  * per-line journal segment scan. Deterministically ordered (ids sorted).
  */
-export async function collectValidationInput(layout: StoreLayout): Promise<ValidationInput> {
+export async function collectValidationInput(
+  layout: StoreLayout,
+  options: ValidateOptions = {},
+): Promise<ValidationInput> {
   const input: ValidationInput = {
     configPath: layout.configPath,
     items: [],
@@ -75,6 +80,8 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
     segments: await scanSegments(layout),
     skillsManifestPath: layout.skillsManifestPath,
     skillsLockPath: layout.skillsLockPath,
+    distilledPath: layout.distilledPath,
+    ...(options.now === undefined ? {} : { now: options.now }),
   };
 
   try {
@@ -96,6 +103,13 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
     if (text !== null) input.skillsLockText = text;
   } catch (error) {
     input.skillsLockError = errorMessage(error);
+  }
+  // Distilled list is OPTIONAL too: a null read means nothing distilled yet.
+  try {
+    const text = await readDistilledText(layout);
+    if (text !== null) input.distilledText = text;
+  } catch (error) {
+    input.distilledError = errorMessage(error);
   }
 
   // Ids below come from readdir (single path components — they cannot
@@ -160,7 +174,19 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
   return input;
 }
 
+/**
+ * Collector knobs. `now` is the caller's clock reading (env.now() format),
+ * threaded into the input as data — the compaction AGE threshold (PRD F6.2)
+ * needs it and is skipped when absent; no check ever reads a clock itself.
+ */
+export interface ValidateOptions {
+  now?: string;
+}
+
 /** One-call integrity check: collect the store scan, run every check. */
-export async function validateStore(layout: StoreLayout): Promise<Finding[]> {
-  return validate(await collectValidationInput(layout));
+export async function validateStore(
+  layout: StoreLayout,
+  options: ValidateOptions = {},
+): Promise<Finding[]> {
+  return validate(await collectValidationInput(layout, options));
 }

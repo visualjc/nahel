@@ -7,7 +7,7 @@ import { listSegments } from "../../src/store/journal";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import type { Finding } from "../../src/validate";
 import { itemPath } from "../../src/store/layout";
-import { mutate } from "../../src/store/mutate";
+import { closeStoreContext, mutate } from "../../src/store/mutate";
 import { makeTempDir, seededEnv } from "../store/helpers";
 import {
   createItem,
@@ -31,11 +31,15 @@ interface CommandResult {
 }
 
 /** Drive the registration-ready command exactly as cli.ts dispatch would. */
-async function runValidate(argv: string[], cwd: string): Promise<CommandResult> {
+async function runValidate(
+  argv: string[],
+  cwd: string,
+  options: { env?: ReturnType<typeof seededEnv> } = {},
+): Promise<CommandResult> {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const ctx: CommandContext = {
-    env: seededEnv(),
+    env: options.env ?? seededEnv(),
     cwd,
     stdout: (text) => stdout.push(text),
     stderr: (text) => stderr.push(text),
@@ -125,24 +129,23 @@ describe("nahel validate — the command", () => {
   });
 
   test("warnings are reported but do not fail: exit 0", async () => {
-    const fixture = await setupFixture(dirs, {
-      validate: { compaction_overdue_events: 1 },
-    });
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);
+    await closeStoreContext(fixture.agent); // archive the session segment: un-distilled debt
 
     const result = await runValidate([], fixture.root);
     expect(result.code).toBe(0);
     const output = result.stdout.join("\n");
     expect(output).toContain("warning");
     expect(output).toContain("compaction.overdue");
+    expect(output).toContain("nahel/workflows/compact.md");
     expect(output).toContain("0 error(s), 1 warning(s)");
   });
 
   test("--json emits the machine shape: repaired + findings", async () => {
-    const fixture = await setupFixture(dirs, {
-      validate: { compaction_overdue_events: 1 },
-    });
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);
+    await closeStoreContext(fixture.agent);
 
     const result = await runValidate(["--json"], fixture.root);
     expect(result.code).toBe(0);
@@ -155,6 +158,24 @@ describe("nahel validate — the command", () => {
     expect(parsed.findings[0]!.severity).toBe("warning");
     expect(parsed.findings[0]!.check).toBe("compaction.overdue");
     expect(typeof parsed.findings[0]!.message).toBe("string");
+  });
+
+  test("the command feeds the clock into the age threshold: old un-distilled archives warn end-to-end", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_age_days: 30 } });
+    await createItem(fixture); // events at 2026-07-16 (the fixture epoch)
+    await closeStoreContext(fixture.agent);
+
+    // The command reads its clock from the injected env: 35 days later.
+    const later = await runValidate([], fixture.root, {
+      env: seededEnv({ now: "2026-08-20T12:00:00Z" }),
+    });
+    expect(later.code).toBe(0);
+    expect(later.stdout.join("\n")).toContain("compaction.overdue");
+
+    // Same store, fresh clock: quiet.
+    const fresh = await runValidate([], fixture.root);
+    expect(fresh.code).toBe(0);
+    expect(fresh.stdout).toEqual([]);
   });
 
   test("without --repair, validate never mutates: the divergent record stays byte-identical", async () => {

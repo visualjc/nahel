@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  addDistilled,
   ensureLayout,
   itemExists,
   itemPath,
@@ -10,6 +11,8 @@ import {
   listRuns,
   observationPath,
   readConfig,
+  readDistilled,
+  readDistilledText,
   readItem,
   readObservation,
   readRun,
@@ -451,5 +454,74 @@ describe("observation records", () => {
     const layout = await ensureLayout(root);
     const bad = { id: "abc123de", created: env.now(), tags: [], sources: ["not valid"] };
     expect(writeObservation(layout, bad, "fact")).rejects.toThrow();
+  });
+});
+
+describe("distilled segment list (PRD F6)", () => {
+  test("distilledPath lives in the journal dir; an absent file reads as the empty list", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    expect(layout.distilledPath).toBe(join(root, "nahel", "journal", "distilled.json"));
+    expect(await readDistilled(layout)).toEqual([]);
+    expect(await readDistilledText(layout)).toBeNull();
+  });
+
+  test("addDistilled unions, dedupes, sorts, and reports exactly what was new", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+
+    const first = await addDistilled(layout, ["session-bbbbbbbb.jsonl", "run-aaaaaaaa.jsonl"]);
+    expect(first.added).toEqual(["run-aaaaaaaa.jsonl", "session-bbbbbbbb.jsonl"]);
+    expect(first.distilled).toEqual(["run-aaaaaaaa.jsonl", "session-bbbbbbbb.jsonl"]);
+
+    const second = await addDistilled(layout, ["session-bbbbbbbb.jsonl", "run-cccccccc.jsonl"]);
+    expect(second.added).toEqual(["run-cccccccc.jsonl"]);
+    expect(second.distilled).toEqual([
+      "run-aaaaaaaa.jsonl",
+      "run-cccccccc.jsonl",
+      "session-bbbbbbbb.jsonl",
+    ]);
+    expect(await readDistilled(layout)).toEqual(second.distilled);
+  });
+
+  test("a re-run with already-distilled segments changes nothing: added is empty, bytes identical", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await addDistilled(layout, ["run-aaaaaaaa.jsonl"]);
+    const before = await readFile(layout.distilledPath, "utf8");
+
+    const rerun = await addDistilled(layout, ["run-aaaaaaaa.jsonl"]);
+    expect(rerun.added).toEqual([]);
+    expect(rerun.distilled).toEqual(["run-aaaaaaaa.jsonl"]);
+    expect(await readFile(layout.distilledPath, "utf8")).toBe(before);
+  });
+
+  test("the file is a sorted one-entry-per-line JSON array (merge-safe union state, ADR-0012)", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await addDistilled(layout, ["session-zzzzzzzz.jsonl", "run-aaaaaaaa.jsonl"]);
+    const text = await readFile(layout.distilledPath, "utf8");
+    expect(text).toBe(
+      `${JSON.stringify(["run-aaaaaaaa.jsonl", "session-zzzzzzzz.jsonl"], null, 2)}\n`,
+    );
+  });
+
+  test("addDistilled refuses non-segment names and writes nothing", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    expect(addDistilled(layout, ["../../etc/passwd"])).rejects.toThrow(/segment/);
+    expect(addDistilled(layout, ["notes.md"])).rejects.toThrow(/segment/);
+    expect(await readDistilledText(layout)).toBeNull();
+  });
+
+  test("readDistilled throws on malformed content (validate's tolerant path uses the raw text)", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await writeFile(layout.distilledPath, "not json\n");
+    expect(readDistilled(layout)).rejects.toThrow();
+    expect(await readDistilledText(layout)).toBe("not json\n");
+
+    await writeFile(layout.distilledPath, JSON.stringify(["stray.txt"]));
+    expect(readDistilled(layout)).rejects.toThrow(/segment/);
   });
 });

@@ -3,12 +3,14 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
   configSchema,
+  distilledSchema,
   observationFrontmatterSchema,
   runSchema,
   skillsLockSchema,
   skillsManifestSchema,
   workItemFrontmatterSchema,
   type Config,
+  type Distilled,
   type ObservationFrontmatter,
   type Run,
   type SkillsLock,
@@ -34,6 +36,8 @@ export interface StoreLayout {
   runsDir: string;
   journalDir: string;
   journalArchiveDir: string;
+  /** `nahel/journal/distilled.json` — archived segments fully distilled (PRD F6). */
+  distilledPath: string;
   observationsDir: string;
   /** `skills.yaml` — the pinned-skill manifest, at the repo root (PRD F7). */
   skillsManifestPath: string;
@@ -53,6 +57,7 @@ export function storeLayout(root: string): StoreLayout {
     runsDir: join(nahelDir, "runs"),
     journalDir,
     journalArchiveDir: join(journalDir, "archive"),
+    distilledPath: join(journalDir, "distilled.json"),
     observationsDir: join(nahelDir, "observations"),
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
@@ -344,6 +349,48 @@ export async function writeObservation(
 ): Promise<void> {
   const valid = observationFrontmatterSchema.parse(frontmatter);
   await writeFrontmatterFile(observationPath(layout, valid.id), valid, body);
+}
+
+/**
+ * Raw text of `nahel/journal/distilled.json`; null when absent (nothing
+ * distilled yet). validate's tolerant read consumes this so a malformed file
+ * is REPORTED as a finding rather than crashing the read pass (PRD F6/F8).
+ */
+export async function readDistilledText(layout: StoreLayout): Promise<string | null> {
+  return readTextFile(layout.distilledPath);
+}
+
+/**
+ * Read and validate the distilled segment list; [] when the file is absent.
+ * Returned deduped and sorted — membership is the meaning (union semantics,
+ * ADR-0012), so the normalized SET is the value.
+ */
+export async function readDistilled(layout: StoreLayout): Promise<Distilled> {
+  const text = await readDistilledText(layout);
+  if (text === null) return [];
+  return [...new Set(distilledSchema.parse(JSON.parse(text)))].sort();
+}
+
+/**
+ * Mark segments distilled: validate the names, union them into the existing
+ * list, and atomically write the sorted result. Purely additive — a name
+ * already present is never duplicated, and a re-run with no new names writes
+ * nothing at all (the compaction acceptance bar: re-running changes nothing).
+ */
+export async function addDistilled(
+  layout: StoreLayout,
+  names: readonly string[],
+): Promise<{ distilled: Distilled; added: string[] }> {
+  const valid = distilledSchema.parse(names);
+  const existing = new Set(await readDistilled(layout));
+  const added = [...new Set(valid)].filter((name) => !existing.has(name)).sort();
+  const distilled = [...existing, ...added].sort();
+  if (added.length > 0) {
+    // One entry per line so concurrent worktrees adding different segments
+    // merge line-wise without conflict (ADR-0012 merge-safe state).
+    await writeFileAtomic(layout.distilledPath, `${JSON.stringify(distilled, null, 2)}\n`);
+  }
+  return { distilled, added };
 }
 
 /**

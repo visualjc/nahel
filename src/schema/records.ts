@@ -94,14 +94,36 @@ export const journalEventSchema = z.strictObject({
 });
 export type JournalEvent = z.infer<typeof journalEventSchema>;
 
-/** Observation frontmatter — one durable curated fact; sources are journal event ids. */
+/**
+ * Observation frontmatter — one durable curated fact; sources are journal
+ * event ids. `name` is the recall-searchable slug `nahel observe <slug>`
+ * writes; optional because Phase-0 records predate it.
+ */
 export const observationFrontmatterSchema = z.strictObject({
   id: idField,
+  name: slugField.optional(),
   created: timestampField,
   tags: z.array(nonEmptyString("tag")),
   sources: z.array(idField),
 });
 export type ObservationFrontmatter = z.infer<typeof observationFrontmatterSchema>;
+
+const segmentFilenameField = z
+  .string()
+  .regex(
+    /^(run|session)-[0-9a-z]{8}\.jsonl$/,
+    "must be a journal segment filename: (run|session)-<8-char id>.jsonl",
+  );
+
+/**
+ * `nahel/journal/distilled.json` (PRD F6): the archived segment filenames
+ * whose events have been fully distilled into observations. A plain sorted
+ * list with union semantics — membership means distilled, concurrent adds of
+ * different segments merge trivially (ADR-0012 merge-safe state). Maintained
+ * only by `nahel distill`; never lists active segments.
+ */
+export const distilledSchema = z.array(segmentFilenameField);
+export type Distilled = z.infer<typeof distilledSchema>;
 
 /**
  * Run contract — `config.contract` (PRD F2, ADR-0014): how the app launches,
@@ -198,11 +220,33 @@ export const routingSchema = z.strictObject({
 export type Routing = z.infer<typeof routingSchema>;
 
 /**
+ * Compaction thresholds — `config.compaction` (PRD F6.2, ADR-0004): when
+ * `nahel validate` warns that un-distilled ARCHIVED journal events (events in
+ * archived segments not listed in distilled.json) are overdue for the compact
+ * workflow. `max_events` bounds their count, `max_age_days` the age of the
+ * oldest one; defaults apply per-field when absent (checks.ts).
+ */
+export const compactionSchema = z.strictObject({
+  max_events: z
+    .number()
+    .int("compaction.max_events must be an integer")
+    .positive("compaction.max_events must be >= 1")
+    .optional(),
+  max_age_days: z
+    .number()
+    .int("compaction.max_age_days must be an integer")
+    .positive("compaction.max_age_days must be >= 1")
+    .optional(),
+});
+export type Compaction = z.infer<typeof compactionSchema>;
+
+/**
  * Config — `nahel/config`: where the knowledge layer lives (paths relative to
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
  * The optional `validate` block tunes the maintenance-warning thresholds
- * (PRD F8, ADR-0004); the optional `contract` (ADR-0014) and `routing`
- * (ADR-0015) sections are additive too, so existing configs stay valid.
+ * (PRD F8, ADR-0004); the optional `compaction` (PRD F6.2), `contract`
+ * (ADR-0014) and `routing` (ADR-0015) sections are additive too, so existing
+ * configs stay valid.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -219,14 +263,9 @@ export const configSchema = z.strictObject({
         .int("rotation_overdue_segments must be an integer")
         .positive("rotation_overdue_segments must be >= 1")
         .optional(),
-      /** Warn when the journal holds this many events (compaction debt). */
-      compaction_overdue_events: z
-        .number()
-        .int("compaction_overdue_events must be an integer")
-        .positive("compaction_overdue_events must be >= 1")
-        .optional(),
     })
     .optional(),
+  compaction: compactionSchema.optional(),
   contract: contractSchema.optional(),
   routing: routingSchema.optional(),
 });

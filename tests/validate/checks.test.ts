@@ -4,15 +4,21 @@ import { join } from "node:path";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import { generateId } from "../../src/schema/id";
 import { hotStatePath } from "../../src/store/hotstate";
-import { appendEvent, newSessionSegmentId, sessionSegmentPath } from "../../src/store/journal";
 import {
+  appendEvent,
+  listSegments,
+  newSessionSegmentId,
+  sessionSegmentPath,
+} from "../../src/store/journal";
+import {
+  addDistilled,
   itemPath,
   runRecordPath,
   writeItem,
   writeObservation,
   writeRun,
 } from "../../src/store/layout";
-import { mutate } from "../../src/store/mutate";
+import { closeStoreContext, mutate } from "../../src/store/mutate";
 import { validateStore } from "../../src/validate";
 import {
   createItem,
@@ -804,16 +810,134 @@ describe("validate — rotation and compaction overdue (warnings, thresholds fro
     expect(findings[0]!.fix).toBeDefined();
   });
 
-  test("journal growth past the configured compaction threshold warns (ADR-0004 semantic-maintenance debt)", async () => {
-    const fixture = await setupFixture(dirs, {
-      validate: { compaction_overdue_events: 1 },
-    });
+  test("un-distilled archived events at or past compaction.max_events warn, naming the compact workflow (F6.2)", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);
+    // Close this invocation's session segment and let the sweep archive it.
+    await closeStoreContext(fixture.agent);
+    expect((await listSegments(fixture.layout)).archived).toHaveLength(1);
 
     const findings = findingsFor(await validateStore(fixture.layout), "compaction.overdue");
     expect(findings).toHaveLength(1);
     expect(findings[0]!.severity).toBe("warning");
-    expect(findings[0]!.fix).toBeDefined();
+    expect(findings[0]!.message).toContain("un-distilled");
+    expect(findings[0]!.fix).toContain("nahel/workflows/compact.md");
+    expect(findings[0]!.fix).toContain("nahel observe");
+    expect(findings[0]!.fix).toContain("nahel distill");
+  });
+
+  test("segments listed in distilled.json stop counting: marking the archive distilled clears the warning", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await createItem(fixture);
+    await closeStoreContext(fixture.agent);
+    const { archived } = await listSegments(fixture.layout);
+    await addDistilled(fixture.layout, archived);
+
+    const findings = findingsFor(await validateStore(fixture.layout), "compaction.overdue");
+    expect(findings).toEqual([]);
+  });
+
+  test("active-segment events are never compaction debt (only the archive is distillable)", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await createItem(fixture); // events sit in the still-active session segment
+
+    const findings = findingsFor(await validateStore(fixture.layout), "compaction.overdue");
+    expect(findings).toEqual([]);
+  });
+
+  test("age past compaction.max_age_days warns even when the count is small — and distilling clears it", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_age_days: 30 } });
+    await createItem(fixture); // events at 2026-07-16
+    await closeStoreContext(fixture.agent);
+
+    // 35 days later: over the 30-day threshold.
+    const overdue = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-08-20T12:00:00Z" }),
+      "compaction.overdue",
+    );
+    expect(overdue).toHaveLength(1);
+    expect(overdue[0]!.severity).toBe("warning");
+    expect(overdue[0]!.message).toContain("day");
+    expect(overdue[0]!.fix).toContain("nahel/workflows/compact.md");
+
+    // 4 days later: quiet.
+    const fresh = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-07-20T12:00:00Z" }),
+      "compaction.overdue",
+    );
+    expect(fresh).toEqual([]);
+
+    // Distilled: quiet regardless of age.
+    await addDistilled(fixture.layout, (await listSegments(fixture.layout)).archived);
+    const distilled = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-08-20T12:00:00Z" }),
+      "compaction.overdue",
+    );
+    expect(distilled).toEqual([]);
+  });
+
+  test("without an injected now the age check is skipped; the count threshold still enforces", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_age_days: 1 } });
+    await createItem(fixture);
+    await closeStoreContext(fixture.agent);
+
+    expect(findingsFor(await validateStore(fixture.layout), "compaction.overdue")).toEqual([]);
+  });
+
+  test("shipped defaults: 200 un-distilled archived events or 30 days of age (PRD F6.2)", async () => {
+    const fixture = await setupFixture(dirs);
+    // Raw-seed one archived segment with exactly 199 valid note events.
+    const lines: string[] = [];
+    for (let seq = 0; seq < 199; seq++) {
+      lines.push(rawEventLine({ id: generateId(fixture.env), seq }).trimEnd());
+    }
+    const name = `session-${generateId(fixture.env)}.jsonl`;
+    await writeFile(join(fixture.layout.journalArchiveDir, name), `${lines.join("\n")}\n`);
+
+    const now = "2026-07-20T12:00:00Z"; // 4 days after the seeded events
+    const under = findingsFor(
+      await validateStore(fixture.layout, { now }),
+      "compaction.overdue",
+    );
+    expect(under).toEqual([]);
+
+    // One more event tips the count to 200.
+    await writeFile(
+      join(fixture.layout.journalArchiveDir, name),
+      `${lines.join("\n")}\n${rawEventLine({ id: generateId(fixture.env), seq: 199 })}`,
+    );
+    const atCount = findingsFor(
+      await validateStore(fixture.layout, { now }),
+      "compaction.overdue",
+    );
+    expect(atCount).toHaveLength(1);
+    expect(atCount[0]!.message).toContain("200");
+
+    // Age alone: 31 days after the oldest event, count back under threshold.
+    await writeFile(
+      join(fixture.layout.journalArchiveDir, name),
+      `${rawEventLine({ id: generateId(fixture.env), seq: 0 })}`,
+    );
+    const aged = findingsFor(
+      await validateStore(fixture.layout, { now: "2026-08-16T12:00:01Z" }),
+      "compaction.overdue",
+    );
+    expect(aged).toHaveLength(1);
+    expect(aged[0]!.message).toContain("30");
+  });
+
+  test("a malformed distilled.json is a schema error and mutes the compaction check (no double report)", async () => {
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await createItem(fixture);
+    await closeStoreContext(fixture.agent);
+    await writeFile(fixture.layout.distilledPath, "not json\n");
+
+    const findings = await validateStore(fixture.layout);
+    const schema = findingsFor(findings, "schema.distilled");
+    expect(schema).toHaveLength(1);
+    expect(schema[0]!.severity).toBe("error");
+    expect(schema[0]!.path).toBe(fixture.layout.distilledPath);
+    expect(findingsFor(findings, "compaction.overdue")).toEqual([]);
   });
 
   test("sane defaults: a small clean store warns about neither", async () => {
@@ -940,10 +1064,9 @@ describe("validate — mutation detection keys on event type, not payload shape"
 
 describe("validate — finding shape and determinism", () => {
   test("findings order errors before warnings and is identical across calls", async () => {
-    const fixture = await setupFixture(dirs, {
-      validate: { compaction_overdue_events: 1 },
-    });
+    const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     const orphan = await createItem(fixture);
+    await closeStoreContext(fixture.agent); // archived events: the compaction warning
     await writeItem(fixture.layout, { ...orphan, parent: "zzzzzzzz" }, "");
 
     const first = await validateStore(fixture.layout);

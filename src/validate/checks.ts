@@ -120,7 +120,7 @@ interface ParsedState {
   runs: Map<string, { record: Run; path: string }>;
   /** Ids with a run directory on disk, valid or not. */
   runDirs: Set<string>;
-  observations: Map<string, { record: ObservationFrontmatter; path: string }>;
+  observations: Map<string, { record: ObservationFrontmatter; body: string; path: string }>;
   /** Every valid event across all segments, in the ts → seq → id total order. */
   events: JournalEvent[];
   eventIds: Set<string>;
@@ -348,7 +348,7 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
       raws: input.observations,
       schema: observationFrontmatterSchema,
       keep: (raw: RawFrontmatterRecord, record: ObservationFrontmatter) =>
-        state.observations.set(record.id, { record, path: raw.path }),
+        state.observations.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
     },
   ] as const;
   for (const kind of frontmatterKinds) {
@@ -613,7 +613,8 @@ function checkCycles(state: ParsedState): Finding[] {
 type Mutation =
   | { target: "item"; record: WorkItemFrontmatter; body: string }
   | { target: "run"; record: Run }
-  | { target: "item" | "run"; invalid: string };
+  | { target: "observation"; record: ObservationFrontmatter; body: string }
+  | { target: "item" | "run" | "observation"; invalid: string };
 
 /**
  * Parse a mutation event's payload record, when the event is a mutation.
@@ -640,10 +641,23 @@ function mutationRecord(event: JournalEvent): Mutation | undefined {
     if (!result.success) return { target: "run", invalid: zodIssues(result.error) };
     return { target: "run", record: result.data };
   }
+  if (payload["target"] === "observation") {
+    const result = observationFrontmatterSchema.safeParse(payload["record"]);
+    if (!result.success) return { target: "observation", invalid: zodIssues(result.error) };
+    const body = payload["body"];
+    if (typeof body !== "string") {
+      return { target: "observation", invalid: "payload body is not a string" };
+    }
+    return { target: "observation", record: result.data, body };
+  }
   // A core mutation type whose payload lacks the target/record replay fields:
   // the choke point always writes them, so this event cannot be replayed.
   return {
-    target: event.type.startsWith("item.") ? "item" : "run",
+    target: event.type.startsWith("item.")
+      ? "item"
+      : event.type.startsWith("observation.")
+        ? "observation"
+        : "run",
     invalid: "payload carries no target/record mutation fields",
   };
 }
@@ -693,6 +707,8 @@ function checkClaims(state: ParsedState): Finding[] {
   for (const event of state.events) {
     const mutation = mutationRecord(event);
     if (mutation === undefined || "invalid" in mutation) continue;
+    // Observations touch no item — no claim can cover them (mutate() parity).
+    if (mutation.target === "observation") continue;
 
     const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
     if (event.actor.kind === "agent") {
@@ -860,12 +876,19 @@ function checkDivergence(state: ParsedState): Finding[] {
 
   type ItemFinalist = { event: JournalEvent; record: WorkItemFrontmatter; body: string };
   type RunFinalist = { event: JournalEvent; record: Run };
+  type ObservationFinalist = {
+    event: JournalEvent;
+    record: ObservationFrontmatter;
+    body: string;
+  };
   const itemFinalists = new Map<string, ItemFinalist[]>();
   const runFinalists = new Map<string, RunFinalist[]>();
+  const observationFinalists = new Map<string, ObservationFinalist[]>();
   for (const segment of state.input.segments) {
     // Per segment, event order is causal order: later overwrites earlier.
     const segmentItems = new Map<string, ItemFinalist>();
     const segmentRuns = new Map<string, RunFinalist>();
+    const segmentObservations = new Map<string, ObservationFinalist>();
     for (const event of segment.events) {
       const mutation = mutationRecord(event);
       if (mutation === undefined || "invalid" in mutation) continue;
@@ -875,8 +898,14 @@ function checkDivergence(state: ParsedState): Finding[] {
           record: mutation.record,
           body: mutation.body,
         });
-      } else {
+      } else if (mutation.target === "run") {
         segmentRuns.set(mutation.record.id, { event, record: mutation.record });
+      } else {
+        segmentObservations.set(mutation.record.id, {
+          event,
+          record: mutation.record,
+          body: mutation.body,
+        });
       }
     }
     for (const [id, finalist] of segmentItems) {
@@ -884,6 +913,9 @@ function checkDivergence(state: ParsedState): Finding[] {
     }
     for (const [id, finalist] of segmentRuns) {
       runFinalists.set(id, [...(runFinalists.get(id) ?? []), finalist]);
+    }
+    for (const [id, finalist] of segmentObservations) {
+      observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), finalist]);
     }
   }
 
@@ -928,6 +960,29 @@ function checkDivergence(state: ParsedState): Finding[] {
         ...(disk === undefined ? {} : { path: disk.path }),
         message:
           `run ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
+          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
+        fix: repairFix,
+      });
+    }
+  }
+  for (const [id, finalists] of observationFinalists) {
+    const disk = state.observations.get(id);
+    const candidates = latestCandidates(finalists);
+    const inSync =
+      disk !== undefined &&
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
+          disk.body === candidate.body,
+      );
+    if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
+      findings.push({
+        severity: "error",
+        check: "journal.divergence",
+        ...(disk === undefined ? {} : { path: disk.path }),
+        message:
+          `observation ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
           `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
         fix: repairFix,
       });

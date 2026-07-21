@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
-import type { Config, Run, WorkItemFrontmatter } from "../../src/schema/records";
+import type {
+  Config,
+  ObservationFrontmatter,
+  Run,
+  WorkItemFrontmatter,
+} from "../../src/schema/records";
 
 /**
  * Deterministic Env with a seeded LCG RNG (distinct, reproducible IDs — unlike
@@ -64,6 +69,22 @@ export function makeFrontmatter(
     external_refs: [],
     created: ts,
     updated: ts,
+    ...overrides,
+  };
+}
+
+/** A valid observation record citing `sources`; id and timestamp from env. */
+export function makeObservation(
+  env: Env,
+  sources: string[],
+  overrides: Partial<ObservationFrontmatter> = {},
+): ObservationFrontmatter {
+  return {
+    id: generateId(env),
+    name: "test-observation",
+    created: env.now(),
+    tags: [],
+    sources,
     ...overrides,
   };
 }

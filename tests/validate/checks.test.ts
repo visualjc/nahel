@@ -8,17 +8,20 @@ import {
   appendEvent,
   listSegments,
   newSessionSegmentId,
+  readJournal,
   sessionSegmentPath,
 } from "../../src/store/journal";
 import {
   addDistilled,
   itemPath,
+  observationPath,
   runRecordPath,
   writeItem,
   writeObservation,
   writeRun,
 } from "../../src/store/layout";
-import { closeStoreContext, mutate } from "../../src/store/mutate";
+import { closeStoreContext, mutate, replayPending } from "../../src/store/mutate";
+import { makeObservation } from "../store/helpers";
 import { validateStore } from "../../src/validate";
 import {
   createItem,
@@ -1058,6 +1061,61 @@ describe("validate — mutation detection keys on event type, not payload shape"
     const findings = await validateStore(fixture.layout);
     expect(findingsFor(findings, "claims.violation")).toEqual([]);
     expect(findingsFor(findings, "claims.conflict")).toEqual([]);
+    expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+  });
+});
+
+describe("validate — observation mutations flow through the choke point (PRD F6)", () => {
+  test("a journaled observation validates clean; losing the record is journal.divergence and repair heals it", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+
+    // Provenance: cite the item-creation event this same store journaled.
+    const sourceId = (await Array.fromAsync(readJournal(fixture.layout)))[0]!.id;
+    const observation = makeObservation(fixture.env, [sourceId]);
+    await mutate(fixture.agent, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter: observation,
+      body: "one durable fact\n",
+    });
+    expect(await validateStore(fixture.layout)).toEqual([]);
+
+    // The write-ahead crash window: journal ahead, record gone.
+    await rm(observationPath(fixture.layout, observation.id));
+    const findings = findingsFor(await validateStore(fixture.layout), "journal.divergence");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain(observation.id);
+    expect(findings[0]!.message).toContain("observation");
+
+    const repaired = await replayPending(fixture.layout);
+    expect(repaired.map((r) => r.target)).toEqual(["observation"]);
+    expect(await validateStore(fixture.layout)).toEqual([]);
+    expect(item.id).toBe(item.id); // provenance item still present
+  });
+
+  test("an agent observation.created never trips claims.violation — claims cover items, not observations", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture);
+    const claimed = { ...item, claimed_by: "jim", updated: fixture.env.now() };
+    await mutate(fixture.human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: claimed,
+      body: "",
+    });
+
+    const observation = makeObservation(fixture.env, []);
+    await mutate(fixture.agent, {
+      target: "observation",
+      eventType: CORE_EVENT_TYPES.observationCreated,
+      frontmatter: observation,
+      body: "observed while the item was claimed\n",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "claims.violation")).toEqual([]);
     expect(findingsFor(findings, "journal.divergence")).toEqual([]);
   });
 });

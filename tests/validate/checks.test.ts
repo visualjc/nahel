@@ -424,6 +424,69 @@ describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
   });
 });
 
+describe("validate — investigation references (item.investigation-missing, F5)", () => {
+  test("an item whose investigation path has no file on disk is a WARNING (never an error) naming item and path", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, {
+      type: "bug",
+      investigation: "docs/investigations/ghost.md",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    const missing = findingsFor(findings, "item.investigation-missing");
+    expect(missing).toHaveLength(1);
+    expect(missing[0]!.severity).toBe("warning");
+    expect(missing[0]!.message).toContain(item.id);
+    expect(missing[0]!.message).toContain("docs/investigations/ghost.md");
+    expect(missing[0]!.fix).toContain("bug-lane");
+    // Merge-safe (ADR-0012): the missing document degrades nothing else —
+    // the store is otherwise fully valid, so no errors exist at all.
+    expect(findings.filter((finding) => finding.severity === "error")).toHaveLength(0);
+  });
+
+  test("an item whose investigation path exists on disk produces no finding", async () => {
+    const fixture = await setupFixture(dirs);
+    await mkdir(join(fixture.root, "docs", "investigations"), { recursive: true });
+    await writeFile(
+      join(fixture.root, "docs", "investigations", "real.md"),
+      "# investigation: real\n\nsymptoms, repro status, hypotheses, root cause\n",
+    );
+    await createItem(fixture, { type: "bug", investigation: "docs/investigations/real.md" });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.investigation-missing"),
+    ).toHaveLength(0);
+  });
+
+  test("items without an investigation field produce no finding (the field is optional)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.investigation-missing"),
+    ).toHaveLength(0);
+  });
+
+  test("each item with the same missing investigation path warns once, at its own record", async () => {
+    const fixture = await setupFixture(dirs);
+    const a = await createItem(fixture, {
+      name: "bug-a",
+      type: "bug",
+      investigation: "docs/investigations/x.md",
+    });
+    const b = await createItem(fixture, {
+      name: "bug-b",
+      type: "bug",
+      investigation: "docs/investigations/x.md",
+    });
+
+    const missing = findingsFor(await validateStore(fixture.layout), "item.investigation-missing");
+    expect(missing).toHaveLength(2);
+    const ids = missing.map((finding) => finding.message).join("\n");
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+  });
+});
+
 describe("validate — circular references", () => {
   test("a parent cycle is detected and reported once with the cycle path", async () => {
     const fixture = await setupFixture(dirs);

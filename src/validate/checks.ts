@@ -108,6 +108,12 @@ export interface ValidationInput {
    * item.prd-missing warning is skipped (same pattern as `now`).
    */
   prdPresence?: Record<string, boolean>;
+  /**
+   * Existence on disk of every schema-valid `investigation` path any item
+   * references (F5), collected exactly like prdPresence. Optional: without it
+   * the item.investigation-missing warning is skipped.
+   */
+  investigationPresence?: Record<string, boolean>;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
@@ -550,26 +556,58 @@ function checkRefs(state: ParsedState): Finding[] {
 }
 
 /**
- * PRD reference existence (F1, ADR-0013): an item's `prd` path should name a
- * document on disk, but a missing one is a WARNING, never an error — knowledge
- * documents can legitimately arrive by a later merge (ADR-0012 merge-safe
- * state). Skipped entirely when the collector supplied no presence data.
+ * Knowledge-document reference existence: an item's document path (`prd`,
+ * `investigation`) should name a file on disk, but a missing one is a
+ * WARNING, never an error — knowledge documents can legitimately arrive by a
+ * later merge (ADR-0012 merge-safe state). Skipped entirely when the
+ * collector supplied no presence data for that field.
  */
-function checkPrdRefs(state: ParsedState): Finding[] {
+function checkDocRefs(
+  state: ParsedState,
+  presence: Record<string, boolean> | undefined,
+  field: "prd" | "investigation",
+  check: string,
+  what: string,
+  fix: string,
+): Finding[] {
   const findings: Finding[] = [];
-  const presence = state.input.prdPresence;
   if (presence === undefined) return findings;
   for (const { record, path } of state.items.values()) {
-    if (record.prd === undefined || presence[record.prd] !== false) continue;
+    const doc = record[field];
+    if (doc === undefined || presence[doc] !== false) continue;
     findings.push({
       severity: "warning",
-      check: "item.prd-missing",
+      check,
       path,
-      message: `item ${record.id} references PRD ${record.prd}, which does not exist on disk`,
-      fix: "author the document (prd-new workflow) or fix the item's prd path — a PRD may arrive by a later merge",
+      message: `item ${record.id} references ${what} ${doc}, which does not exist on disk`,
+      fix,
     });
   }
   return findings;
+}
+
+/** PRD reference existence (F1, ADR-0013). */
+function checkPrdRefs(state: ParsedState): Finding[] {
+  return checkDocRefs(
+    state,
+    state.input.prdPresence,
+    "prd",
+    "item.prd-missing",
+    "PRD",
+    "author the document (prd-new workflow) or fix the item's prd path — a PRD may arrive by a later merge",
+  );
+}
+
+/** Investigation reference existence (F5). */
+function checkInvestigationRefs(state: ParsedState): Finding[] {
+  return checkDocRefs(
+    state,
+    state.input.investigationPresence,
+    "investigation",
+    "item.investigation-missing",
+    "investigation",
+    "author the document (bug-lane workflow) or fix the item's investigation path — it may arrive by a later merge",
+  );
 }
 
 /** Circular parent / depends_on detection; each cycle reported once. */
@@ -1255,6 +1293,7 @@ export function validate(input: ValidationInput): Finding[] {
   findings.push(
     ...checkRefs(state),
     ...checkPrdRefs(state),
+    ...checkInvestigationRefs(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),

@@ -66,6 +66,30 @@ async function collectFrontmatterRecord(
 }
 
 /**
+ * Existence on disk of every schema-valid document path the given item field
+ * references, keyed by the path as written (repo-relative).
+ */
+async function collectDocPresence(
+  layout: StoreLayout,
+  input: ValidationInput,
+  field: "prd" | "investigation",
+): Promise<Record<string, boolean>> {
+  const docField = workItemFrontmatterSchema.shape[field];
+  const presence: Record<string, boolean> = {};
+  for (const raw of input.items) {
+    const parsed = docField.safeParse(raw.frontmatter?.[field]);
+    if (!parsed.success || parsed.data === undefined || parsed.data in presence) continue;
+    try {
+      presence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      presence[parsed.data] = false;
+    }
+  }
+  return presence;
+}
+
+/**
  * Collect everything validate checks in one tolerant store read pass:
  * raw config text, raw item/run/observation records, hot state, and the
  * per-line journal segment scan. Deterministically ordered (ids sorted).
@@ -141,24 +165,14 @@ export async function collectValidationInput(
     input.observations.push(await collectFrontmatterRecord(id, observationPath(layout, id)));
   }
 
-  // PRD presence (F1, ADR-0013): stat each schema-valid `prd` path once so
-  // the pure item.prd-missing check judges existence from data. Only paths
-  // the schema field accepts are touched — the hardened field (repo-relative,
-  // no traversal) is what proves the read stays inside the repo; anything
-  // else is already a schema.item finding, not a path to probe.
-  const prdField = workItemFrontmatterSchema.shape.prd;
-  const prdPresence: Record<string, boolean> = {};
-  for (const raw of input.items) {
-    const parsed = prdField.safeParse(raw.frontmatter?.["prd"]);
-    if (!parsed.success || parsed.data === undefined || parsed.data in prdPresence) continue;
-    try {
-      prdPresence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
-    } catch {
-      // Unreadable (e.g. the path names a directory): not a usable document.
-      prdPresence[parsed.data] = false;
-    }
-  }
-  input.prdPresence = prdPresence;
+  // Knowledge-document presence (prd: F1/ADR-0013; investigation: F5): stat
+  // each schema-valid path once so the pure item.*-missing checks judge
+  // existence from data. Only paths the schema field accepts are touched —
+  // the hardened fields (repo-relative, no traversal) are what prove the
+  // read stays inside the repo; anything else is already a schema.item
+  // finding, not a path to probe.
+  input.prdPresence = await collectDocPresence(layout, input, "prd");
+  input.investigationPresence = await collectDocPresence(layout, input, "investigation");
 
   for (const id of (await listRuns(layout)).sort()) {
     if (!ID_PATTERN.test(id)) {

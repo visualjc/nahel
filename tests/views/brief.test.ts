@@ -284,6 +284,65 @@ describe("renderBrief — pending human decisions", () => {
   });
 });
 
+describe("renderBrief — responsibility routing (PRD F3, ADR-0015)", () => {
+  test("absent routing renders no routing block at all (zero noise)", () => {
+    const brief = renderBrief(makeInputs());
+    expect(brief).not.toContain("== responsibility routing ==");
+  });
+
+  test("a configured routing map is surfaced, each responsibility with its agent/model", () => {
+    const brief = renderBrief(
+      makeInputs({
+        routing: {
+          architecture: { agent: "codex", model: "gpt-5" },
+          implementation: { model: "claude-opus-4" },
+          review: { agent: "codex" },
+          default: { agent: "claude-code", model: "claude-sonnet-4" },
+        },
+      }),
+    );
+    const section = brief.split("== responsibility routing ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("architecture: agent=codex model=gpt-5");
+    expect(section).toContain("implementation: model=claude-opus-4");
+    expect(section).toContain("review: agent=codex");
+    expect(section).toContain("default: agent=claude-code model=claude-sonnet-4");
+  });
+
+  test("the routing block sits after knowledge and before item statuses", () => {
+    const brief = renderBrief(makeInputs({ routing: { implementation: { agent: "codex" } } }));
+    const knowledge = brief.indexOf("== knowledge & canonical truth ==");
+    const routing = brief.indexOf("== responsibility routing ==");
+    const statuses = brief.indexOf("== item statuses ==");
+    expect(knowledge).toBeGreaterThanOrEqual(0);
+    expect(routing).toBeGreaterThan(knowledge);
+    expect(statuses).toBeGreaterThan(routing);
+  });
+
+  test("only configured responsibilities appear — an empty map stays silent", () => {
+    const oneLine = renderBrief(makeInputs({ routing: { review: { model: "gpt-5" } } }));
+    const section = oneLine.split("== responsibility routing ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("review: model=gpt-5");
+    expect(section).not.toContain("architecture");
+    expect(section).not.toContain("implementation");
+    expect(section).not.toContain("default");
+    // A present-but-empty routing object has nothing to route → no block.
+    expect(renderBrief(makeInputs({ routing: {} }))).not.toContain(
+      "== responsibility routing ==",
+    );
+  });
+
+  test("composeBrief threads config.routing through to the rendered brief", async () => {
+    const store = await populatedWithProduct();
+    const config = await readConfig(store.layout);
+    const brief = await composeBrief(store.layout, {
+      ...config,
+      routing: { implementation: { agent: "claude-code", model: "claude-opus-4" } },
+    });
+    expect(brief).toContain("== responsibility routing ==");
+    expect(brief).toContain("implementation: agent=claude-code model=claude-opus-4");
+  });
+});
+
 describe("renderBrief — validate warnings seam", () => {
   test("injected warnings render one per line; the default stub renders none", async () => {
     const withWarnings = renderBrief(

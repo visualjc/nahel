@@ -44,6 +44,8 @@ export interface BriefInputs {
   productPath: string;
   contextPath: string;
   adrPath: string;
+  /** Responsibility routing map from config, or undefined when unconfigured. */
+  routing?: Config["routing"];
   /** Validate warning lines from the injected source. */
   warnings: readonly string[];
 }
@@ -132,6 +134,26 @@ function knowledgeBody(inputs: BriefInputs): string {
   ].join("\n");
 }
 
+/**
+ * Optional routing section body (PRD F3, ADR-0015): each CONFIGURED
+ * responsibility on its own line with its agent/model, in the schema's enum
+ * order. Null when nothing is configured — the section is then omitted
+ * entirely, so an unconfigured project's brief carries zero routing noise.
+ */
+function routingBody(routing: Config["routing"]): string | null {
+  if (routing === undefined) return null;
+  const lines: string[] = [];
+  for (const responsibility of ["architecture", "implementation", "review", "default"] as const) {
+    const entry = routing[responsibility];
+    if (entry === undefined) continue;
+    const parts: string[] = [];
+    if (entry.agent !== undefined) parts.push(`agent=${entry.agent}`);
+    if (entry.model !== undefined) parts.push(`model=${entry.model}`);
+    lines.push(`${responsibility}: ${parts.join(" ")}`);
+  }
+  return lines.length === 0 ? null : lines.join("\n");
+}
+
 /** Section 5 body: claims, blocked items, paused runs — or an explicit none. */
 function decisionsBody(snapshot: Snapshot): string {
   const lines: string[] = [];
@@ -192,15 +214,21 @@ function assemble(
     statusSection = renderStatus(inputs.snapshot);
   }
 
-  return [
+  const sections = [
     "nahel brief",
     `== constitution (${inputs.productPath}) ==\n${constitution}`,
     `== knowledge & canonical truth ==\n${knowledgeBody(inputs)}`,
+  ];
+  // Optional, right after knowledge: advisory routing map when configured.
+  const routing = routingBody(inputs.routing);
+  if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
+  sections.push(
     `== item statuses ==\n${statusSection}`,
     `== recent activity (newest last) ==\n${activityBody(inputs.events, keptEvents)}`,
     `== pending human decisions ==\n${decisionsBody(inputs.snapshot)}`,
     `== validate warnings ==\n${inputs.warnings.length === 0 ? "none" : inputs.warnings.join("\n")}`,
-  ].join("\n\n");
+  );
+  return sections.join("\n\n");
 }
 
 /** Largest value in [lo, hi] whose assembly fits the budget; -1 when none does. */
@@ -273,6 +301,7 @@ export async function composeBrief(
     productPath: config.knowledge.product,
     contextPath: config.knowledge.context,
     adrPath: config.knowledge.adr,
+    routing: config.routing,
     warnings,
   });
 }

@@ -940,7 +940,7 @@ describe("validate — rotation and compaction overdue (warnings, thresholds fro
     expect(findings[0]!.fix).toContain("nahel distill");
   });
 
-  test("segments listed in distilled.json stop counting: marking the archive distilled clears the warning", async () => {
+  test("segments with markers in distilled/ stop counting: marking the archive distilled clears the warning", async () => {
     const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);
     await closeStoreContext(fixture.agent);
@@ -1055,17 +1055,23 @@ describe("validate — rotation and compaction overdue (warnings, thresholds fro
     expect(body).toContain("nahel distill");
   });
 
-  test("a malformed distilled.json is a schema error and mutes the compaction check (no double report)", async () => {
+  test("a stray non-segment file in distilled/ is a schema error; well-formed markers still count", async () => {
     const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
     await createItem(fixture);
     await closeStoreContext(fixture.agent);
-    await writeFile(fixture.layout.distilledPath, "not json\n");
+    await addDistilled(fixture.layout, (await listSegments(fixture.layout)).archived);
+    await writeFile(join(fixture.layout.distilledDir, "stray.txt"), "");
 
+    // The stray file is reported per name; markers are independent files, so
+    // it does not poison the rest — the real markers still count and the
+    // fully-distilled archive owes no compaction debt.
     const findings = await validateStore(fixture.layout);
     const schema = findingsFor(findings, "schema.distilled");
     expect(schema).toHaveLength(1);
     expect(schema[0]!.severity).toBe("error");
-    expect(schema[0]!.path).toBe(fixture.layout.distilledPath);
+    expect(schema[0]!.path).toBe(fixture.layout.distilledDir);
+    expect(schema[0]!.message).toContain("stray.txt");
+    expect(schema[0]!.fix).toContain("remove the stray file");
     expect(findingsFor(findings, "compaction.overdue")).toEqual([]);
   });
 

@@ -15,8 +15,8 @@ Before any `nahel` command: if you are an agent, set
 `NAHEL_ACTOR=agent:<your-id>` so every journal event carries your identity.
 
 1. Find the un-distilled archived segments: list
-   `nahel/journal/archive/*.jsonl` and subtract the names already in
-   `nahel/journal/distilled.json` (absent file = nothing distilled yet).
+   `nahel/journal/archive/*.jsonl` and subtract the marker filenames already
+   in `nahel/journal/distilled/` (absent dir = nothing distilled yet).
    Only archived segments qualify — active segments are still being written.
 2. Read those segments (`nahel progress` shows the merged timeline; the
    segment files themselves are plain JSONL). This is judgment work: look for
@@ -41,8 +41,9 @@ Before any `nahel` command: if you are an agent, set
        nahel distill <segment-filename> ...
 
    The CLI refuses segments that are not in the archive, journals the act,
-   and unions the names into `nahel/journal/distilled.json`. Re-running is
-   harmless: already-marked segments change nothing.
+   and creates one empty marker file per segment under
+   `nahel/journal/distilled/` (the marker's name IS the record). Re-running
+   is harmless: already-marked segments change nothing.
 6. Confirm with `nahel validate`: the `compaction.overdue` warning clears
    once the un-distilled archive is back under the configured thresholds
    (`compaction.max_events` / `compaction.max_age_days` in `nahel/config`,
@@ -50,4 +51,5 @@ Before any `nahel` command: if you are an agent, set
 
 Fallback (degraded environment): if the `nahel` CLI is unavailable, read the
 archived segments directly and draft the observations as notes, but make NO
-state mutations — observations and distilled.json are CLI-maintained state.
+state mutations — observations and the distilled markers are CLI-maintained
+state.

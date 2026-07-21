@@ -7,7 +7,8 @@ import { commandContext, execute, UsageError, type Command } from "./item";
 
 /**
  * `nahel distill` (PRD F6.1): mark ARCHIVED journal segments as fully
- * distilled — union them into nahel/journal/distilled.json and journal the
+ * distilled — one empty marker file per segment under nahel/journal/distilled/
+ * (disjoint distills touch disjoint files, ADR-0012) — and journal the
  * act. Append/mark only, the F6 acceptance bar: no journal event is ever
  * edited or deleted, and re-running over already-distilled segments changes
  * nothing (no new entries, no new events). Only rotated segments qualify:
@@ -62,8 +63,8 @@ async function runDistill(
   }
 
   // Write-ahead like every state change: the act lands in the journal first,
-  // then the distilled list is updated (a crash between the two is healed by
-  // simply re-running distill — the union write is idempotent).
+  // then the marker files are created (a crash between the two is healed by
+  // simply re-running distill — marker creation is idempotent).
   await appendEvent(ctx.layout, ctx.env, {
     type: DISTILLED_EVENT_TYPE,
     actor: ctx.actor,
@@ -79,7 +80,7 @@ async function runDistill(
 export const distillCommand: Command = {
   name: "distill",
   description:
-    "mark archived journal segments as distilled (adds them to nahel/journal/distilled.json, journals the act)",
+    "mark archived journal segments as distilled (adds marker files under nahel/journal/distilled/, journals the act)",
   run: (argv, env, cwd, actorOverride) =>
     execute("run `nahel distill --help` for usage", async () => {
       if (argv.includes("--help") || argv.includes("-h")) {

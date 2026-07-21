@@ -6,12 +6,12 @@ import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
 import {
   itemPath,
+  listDistilledMarkers,
   listItems,
   listObservations,
   listRuns,
   observationPath,
   readConfigText,
-  readDistilledText,
   readRunRecordText,
   readSkillsLockText,
   readSkillsManifestText,
@@ -106,7 +106,7 @@ export async function collectValidationInput(
     segments: await scanSegments(layout),
     skillsManifestPath: layout.skillsManifestPath,
     skillsLockPath: layout.skillsLockPath,
-    distilledPath: layout.distilledPath,
+    distilledDir: layout.distilledDir,
     ...(options.now === undefined ? {} : { now: options.now }),
   };
 
@@ -130,10 +130,10 @@ export async function collectValidationInput(
   } catch (error) {
     input.skillsLockError = errorMessage(error);
   }
-  // Distilled list is OPTIONAL too: a null read means nothing distilled yet.
+  // Distilled markers are OPTIONAL too: an absent dir lists as [] (nothing
+  // distilled yet); only a real readdir failure becomes an error finding.
   try {
-    const text = await readDistilledText(layout);
-    if (text !== null) input.distilledText = text;
+    input.distilledMarkers = await listDistilledMarkers(layout);
   } catch (error) {
     input.distilledError = errorMessage(error);
   }

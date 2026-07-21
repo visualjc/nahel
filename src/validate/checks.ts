@@ -91,9 +91,14 @@ export interface ValidationInput {
   skillsLockPath: string;
   skillsLockText?: string;
   skillsLockError?: string;
-  /** `nahel/journal/distilled.json` — undefined text means absent (nothing distilled). */
-  distilledPath: string;
-  distilledText?: string;
+  /**
+   * `nahel/journal/distilled/` — one empty marker file per distilled archived
+   * segment. `distilledMarkers` is the raw filename listing ([] covers the
+   * absent-dir case: nothing distilled yet); `distilledError` a readdir
+   * failure.
+   */
+  distilledDir: string;
+  distilledMarkers?: string[];
   distilledError?: string;
   /**
    * The collector's clock reading (env.now() format), injected as DATA so the
@@ -141,9 +146,13 @@ interface ParsedState {
   skillsManifest: SkillsManifest | undefined;
   skillsLock: SkillsLock | undefined;
   /**
-   * Distilled archived segment names (PRD F6). Empty when the file is absent;
-   * undefined when it is malformed (reported as schema.distilled), which
-   * mutes the compaction check rather than double-reporting over bad data.
+   * Distilled archived segment names (PRD F6): the well-formed marker
+   * filenames in `nahel/journal/distilled/`. Empty when the dir is absent;
+   * undefined only when the dir itself is unreadable (reported as
+   * schema.distilled), which mutes the compaction check rather than
+   * reporting over state it could not see. A stray non-segment filename is
+   * its own schema.distilled finding but does not poison the other markers —
+   * each marker is an independent file.
    */
   distilled: Set<string> | undefined;
 }
@@ -300,49 +309,37 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     }
   }
 
-  // Distilled segment list (distilled.json, PRD F6): JSON, absent means
-  // nothing distilled yet (an empty set); malformed is a schema error and
-  // leaves state.distilled undefined so the compaction check stays quiet
-  // instead of reporting over data it cannot trust.
+  // Distilled markers (nahel/journal/distilled/, PRD F6): one empty file per
+  // distilled archived segment, the name being the datum; an absent dir means
+  // nothing distilled yet (an empty listing). Markers are independent files,
+  // so a stray non-segment filename is reported per name while the
+  // well-formed markers still count; only an unreadable dir mutes the
+  // compaction check (nothing could be seen at all).
   if (input.distilledError !== undefined) {
     findings.push({
       severity: "error",
       check: "schema.distilled",
-      path: input.distilledPath,
-      message: `distilled.json is unreadable: ${input.distilledError}`,
+      path: input.distilledDir,
+      message: `distilled marker directory is unreadable: ${input.distilledError}`,
       fix: RESTORE_FIX,
     });
-  } else if (input.distilledText === undefined) {
-    state.distilled = new Set();
   } else {
-    let parsed: unknown;
-    let jsonError: string | undefined;
-    try {
-      parsed = JSON.parse(input.distilledText);
-    } catch (error) {
-      jsonError = errorMessage(error);
-    }
-    if (jsonError !== undefined) {
-      findings.push({
-        severity: "error",
-        check: "schema.distilled",
-        path: input.distilledPath,
-        message: `distilled.json is not parseable JSON: ${jsonError}`,
-        fix: "restore distilled.json from git — `nahel distill` maintains it as a sorted JSON array of archived segment filenames",
-      });
-    } else {
-      const result = distilledSchema.safeParse(parsed);
-      if (result.success) state.distilled = new Set(result.data);
-      else {
+    const markers = new Set<string>();
+    for (const name of input.distilledMarkers ?? []) {
+      const result = distilledSchema.element.safeParse(name);
+      if (result.success) {
+        markers.add(result.data);
+      } else {
         findings.push({
           severity: "error",
           check: "schema.distilled",
-          path: input.distilledPath,
-          message: `distilled.json is invalid: ${zodIssues(result.error)}`,
-          fix: "restore distilled.json from git — `nahel distill` maintains it as a sorted JSON array of archived segment filenames",
+          path: input.distilledDir,
+          message: `distilled marker ${JSON.stringify(name)} is not an archived segment filename: ${zodIssues(result.error)}`,
+          fix: "remove the stray file — `nahel distill` keeps one empty marker file per distilled segment, named exactly after it",
         });
       }
     }
+    state.distilled = markers;
   }
 
   // Items and observations share the frontmatter-record shape.
@@ -1135,7 +1132,8 @@ const COMPACT_FIX =
  * Maintenance-debt warnings (ADR-0004: validate flags overdue semantic
  * maintenance). Rotation debt is closed-but-unarchived segments (threshold
  * from config's `validate` block); compaction debt is UN-DISTILLED ARCHIVED
- * events — events in archived segments not listed in distilled.json — over
+ * events — events in archived segments with no marker in
+ * nahel/journal/distilled/ — over
  * the `compaction` section's count/age thresholds (PRD F6.2). The age leg
  * needs the injected clock reading and is skipped without one.
  */
@@ -1169,9 +1167,9 @@ function checkMaintenance(state: ParsedState): Finding[] {
     });
   }
 
-  // Compaction debt (PRD F6.2). A malformed distilled.json already produced
+  // Compaction debt (PRD F6.2). An unreadable marker dir already produced
   // schema.distilled and leaves state.distilled undefined — skip rather than
-  // warn over data we cannot trust.
+  // warn over state we could not see.
   if (state.distilled === undefined) return findings;
   const maxEvents = state.config?.compaction?.max_events ?? DEFAULT_COMPACTION_MAX_EVENTS;
   const maxAgeDays =

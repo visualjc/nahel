@@ -165,11 +165,13 @@ const segmentFilenameField = z
   );
 
 /**
- * `nahel/journal/distilled.json` (PRD F6): the archived segment filenames
- * whose events have been fully distilled into observations. A plain sorted
- * list with union semantics — membership means distilled, concurrent adds of
- * different segments merge trivially (ADR-0012 merge-safe state). Maintained
- * only by `nahel distill`; never lists active segments.
+ * `nahel/journal/distilled/` (PRD F6): the archived segment filenames whose
+ * events have been fully distilled into observations, each recorded as one
+ * EMPTY marker file named after the segment. Union semantics — a marker's
+ * existence means distilled, and disjoint distills touch disjoint files, so
+ * concurrent adds of different segments merge as a plain directory union
+ * (ADR-0012 merge-safe state). Maintained only by `nahel distill`; never
+ * marks active segments. The schema validates the marker NAMES.
  */
 export const distilledSchema = z.array(segmentFilenameField);
 export type Distilled = z.infer<typeof distilledSchema>;
@@ -276,8 +278,8 @@ export type Routing = z.infer<typeof routingSchema>;
 /**
  * Compaction thresholds — `config.compaction` (PRD F6.2, ADR-0004): when
  * `nahel validate` warns that un-distilled ARCHIVED journal events (events in
- * archived segments not listed in distilled.json) are overdue for the compact
- * workflow. `max_events` bounds their count, `max_age_days` the age of the
+ * archived segments with no marker in nahel/journal/distilled/) are overdue
+ * for the compact workflow. `max_events` bounds their count, `max_age_days` the age of the
  * oldest one; defaults apply per-field when absent (checks.ts).
  */
 export const compactionSchema = z.strictObject({

@@ -7,12 +7,12 @@ import {
   itemExists,
   itemPath,
   knowledgePaths,
+  listDistilledMarkers,
   listItems,
   listRuns,
   observationPath,
   readConfig,
   readDistilled,
-  readDistilledText,
   readItem,
   readObservation,
   readRun,
@@ -457,13 +457,16 @@ describe("observation records", () => {
   });
 });
 
-describe("distilled segment list (PRD F6)", () => {
-  test("distilledPath lives in the journal dir; an absent file reads as the empty list", async () => {
+describe("distilled segment markers (PRD F6)", () => {
+  test("distilledDir lives in the journal dir; an absent dir reads as the empty list", async () => {
     const root = await tempRoot();
     const layout = await ensureLayout(root);
-    expect(layout.distilledPath).toBe(join(root, "nahel", "journal", "distilled.json"));
+    expect(layout.distilledDir).toBe(join(root, "nahel", "journal", "distilled"));
+    // The marker dir does not exist until the first distill (git cannot track
+    // an empty dir — same fresh-clone reality as the archive dir).
+    expect(readdir(layout.distilledDir)).rejects.toThrow();
     expect(await readDistilled(layout)).toEqual([]);
-    expect(await readDistilledText(layout)).toBeNull();
+    expect(await listDistilledMarkers(layout)).toEqual([]);
   });
 
   test("addDistilled unions, dedupes, sorts, and reports exactly what was new", async () => {
@@ -484,26 +487,48 @@ describe("distilled segment list (PRD F6)", () => {
     expect(await readDistilled(layout)).toEqual(second.distilled);
   });
 
-  test("a re-run with already-distilled segments changes nothing: added is empty, bytes identical", async () => {
+  test("one EMPTY marker file per segment, named after it — the name is the datum (ADR-0012)", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await addDistilled(layout, ["session-zzzzzzzz.jsonl", "run-aaaaaaaa.jsonl"]);
+    expect((await readdir(layout.distilledDir)).sort()).toEqual([
+      "run-aaaaaaaa.jsonl",
+      "session-zzzzzzzz.jsonl",
+    ]);
+    for (const name of ["run-aaaaaaaa.jsonl", "session-zzzzzzzz.jsonl"]) {
+      expect((await stat(join(layout.distilledDir, name))).size).toBe(0);
+    }
+  });
+
+  test("disjoint distills touch disjoint files, and no shared distilled.json is ever created", async () => {
     const root = await tempRoot();
     const layout = await ensureLayout(root);
     await addDistilled(layout, ["run-aaaaaaaa.jsonl"]);
-    const before = await readFile(layout.distilledPath, "utf8");
+    await addDistilled(layout, ["session-bbbbbbbb.jsonl"]);
+    // Two markers, each an independent file — concurrent adds of different
+    // segments cannot lose each other, and two worktrees distilling
+    // different segments merge as a plain directory union (ADR-0012).
+    expect((await readdir(layout.distilledDir)).sort()).toEqual([
+      "run-aaaaaaaa.jsonl",
+      "session-bbbbbbbb.jsonl",
+    ]);
+    // The old shared read-modify-write file must never reappear.
+    expect(readFile(join(layout.journalDir, "distilled.json"), "utf8")).rejects.toThrow();
+  });
+
+  test("a re-run with already-distilled segments changes nothing: added is empty, markers untouched", async () => {
+    const root = await tempRoot();
+    const layout = await ensureLayout(root);
+    await addDistilled(layout, ["run-aaaaaaaa.jsonl"]);
+    const before = await stat(join(layout.distilledDir, "run-aaaaaaaa.jsonl"));
 
     const rerun = await addDistilled(layout, ["run-aaaaaaaa.jsonl"]);
     expect(rerun.added).toEqual([]);
     expect(rerun.distilled).toEqual(["run-aaaaaaaa.jsonl"]);
-    expect(await readFile(layout.distilledPath, "utf8")).toBe(before);
-  });
-
-  test("the file is a sorted one-entry-per-line JSON array (merge-safe union state, ADR-0012)", async () => {
-    const root = await tempRoot();
-    const layout = await ensureLayout(root);
-    await addDistilled(layout, ["session-zzzzzzzz.jsonl", "run-aaaaaaaa.jsonl"]);
-    const text = await readFile(layout.distilledPath, "utf8");
-    expect(text).toBe(
-      `${JSON.stringify(["run-aaaaaaaa.jsonl", "session-zzzzzzzz.jsonl"], null, 2)}\n`,
-    );
+    expect(await readdir(layout.distilledDir)).toEqual(["run-aaaaaaaa.jsonl"]);
+    const after = await stat(join(layout.distilledDir, "run-aaaaaaaa.jsonl"));
+    expect(after.size).toBe(0);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 
   test("addDistilled refuses non-segment names and writes nothing", async () => {
@@ -511,17 +536,17 @@ describe("distilled segment list (PRD F6)", () => {
     const layout = await ensureLayout(root);
     expect(addDistilled(layout, ["../../etc/passwd"])).rejects.toThrow(/segment/);
     expect(addDistilled(layout, ["notes.md"])).rejects.toThrow(/segment/);
-    expect(await readDistilledText(layout)).toBeNull();
+    // Nothing was marked — the marker dir was never even created.
+    expect(await listDistilledMarkers(layout)).toEqual([]);
+    expect(readdir(layout.distilledDir)).rejects.toThrow();
   });
 
-  test("readDistilled throws on malformed content (validate's tolerant path uses the raw text)", async () => {
+  test("readDistilled throws on a stray non-segment marker (validate's tolerant path lists raw names)", async () => {
     const root = await tempRoot();
     const layout = await ensureLayout(root);
-    await writeFile(layout.distilledPath, "not json\n");
-    expect(readDistilled(layout)).rejects.toThrow();
-    expect(await readDistilledText(layout)).toBe("not json\n");
-
-    await writeFile(layout.distilledPath, JSON.stringify(["stray.txt"]));
+    await addDistilled(layout, ["run-aaaaaaaa.jsonl"]);
+    await writeFile(join(layout.distilledDir, "stray.txt"), "");
     expect(readDistilled(layout)).rejects.toThrow(/segment/);
+    expect(await listDistilledMarkers(layout)).toEqual(["run-aaaaaaaa.jsonl", "stray.txt"]);
   });
 });

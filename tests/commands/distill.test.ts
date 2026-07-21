@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { distillCommand } from "../../src/commands/distill";
 import type { Env } from "../../src/schema/env";
@@ -13,8 +13,8 @@ import {
 } from "../../src/store/journal";
 import {
   ensureLayout,
+  listDistilledMarkers,
   readDistilled,
-  readDistilledText,
   writeConfig,
   type StoreLayout,
 } from "../../src/store/layout";
@@ -23,8 +23,8 @@ import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
  * `nahel distill` (PRD F6.1): mark ARCHIVED journal segments as distilled —
- * additive union into nahel/journal/distilled.json, the act itself
- * journaled. Compaction never edits or deletes journal events (the F6
+ * one empty marker file per segment under nahel/journal/distilled/, the act
+ * itself journaled. Compaction never edits or deletes journal events (the F6
  * acceptance bar): these tests prove archived segments stay byte-identical
  * and a re-run changes nothing.
  */
@@ -90,7 +90,7 @@ async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
 }
 
 describe("nahel distill — marking archived segments", () => {
-  test("adds archived segments to distilled.json and journals the act write-ahead", async () => {
+  test("adds a marker file per archived segment and journals the act write-ahead", async () => {
     const { root, layout, env } = await setup();
     const name = await seedSegment(layout, env, { archive: true });
     const archiveBytes = await readFile(join(layout.journalArchiveDir, name), "utf8");
@@ -111,18 +111,38 @@ describe("nahel distill — marking archived segments", () => {
     expect(await readFile(join(layout.journalArchiveDir, name), "utf8")).toBe(archiveBytes);
   });
 
-  test("a re-run changes nothing: no new distilled entries, no new journal events, identical bytes", async () => {
+  test("a re-run changes nothing: no new markers, no new journal events, identical bytes", async () => {
     const { root, layout, env } = await setup();
     const name = await seedSegment(layout, env, { archive: true });
     expect(await distillCommand.run([name], env, root)).toBe(0);
-    const distilledBytes = await readFile(layout.distilledPath, "utf8");
+    const markerBefore = await stat(join(layout.distilledDir, name));
+    expect(markerBefore.size).toBe(0);
     const eventCount = (await journalEvents(layout)).length;
 
     logs = [];
     expect(await distillCommand.run([name], env, root)).toBe(0);
     expect(logs.join("\n")).toContain("already distilled");
-    expect(await readFile(layout.distilledPath, "utf8")).toBe(distilledBytes);
+    expect(await listDistilledMarkers(layout)).toEqual([name]);
+    const markerAfter = await stat(join(layout.distilledDir, name));
+    expect(markerAfter.size).toBe(0);
+    expect(markerAfter.mtimeMs).toBe(markerBefore.mtimeMs);
     expect((await journalEvents(layout)).length).toBe(eventCount);
+  });
+
+  test("two sequential distills of different segments produce two disjoint marker files — never a shared distilled.json", async () => {
+    const { root, layout, env } = await setup();
+    const first = await seedSegment(layout, env, { archive: true });
+    const second = await seedSegment(layout, env, { archive: true });
+
+    expect(await distillCommand.run([first], env, root)).toBe(0);
+    expect(await distillCommand.run([second], env, root)).toBe(0);
+
+    // Each distill touched only its own marker file (ADR-0012: disjoint
+    // distills touch disjoint files — no lost updates, no merge conflicts).
+    expect((await readdir(layout.distilledDir)).sort()).toEqual([first, second].sort());
+    expect(await readDistilled(layout)).toEqual([first, second].sort());
+    // The old shared read-modify-write JSON file is never created.
+    expect(readFile(join(layout.journalDir, "distilled.json"), "utf8")).rejects.toThrow();
   });
 
   test("a mix of new and already-distilled segments journals only the new ones", async () => {
@@ -152,7 +172,7 @@ describe("nahel distill — refusals", () => {
     expect(code).toBe(1);
     expect(errs.join("\n")).toContain("still active");
     expect(errs.join("\n")).toContain(name);
-    expect(await readDistilledText(layout)).toBeNull();
+    expect(await listDistilledMarkers(layout)).toEqual([]);
   });
 
   test("refuses a segment that is not in the archive at all", async () => {
@@ -160,7 +180,7 @@ describe("nahel distill — refusals", () => {
     const code = await distillCommand.run(["session-zzzzzzzz.jsonl"], env, root);
     expect(code).toBe(1);
     expect(errs.join("\n")).toContain("not in the journal archive");
-    expect(await readDistilledText(layout)).toBeNull();
+    expect(await listDistilledMarkers(layout)).toEqual([]);
   });
 
   test("one bad name refuses the whole invocation — no partial marking", async () => {
@@ -168,7 +188,7 @@ describe("nahel distill — refusals", () => {
     const good = await seedSegment(layout, env, { archive: true });
     const code = await distillCommand.run([good, "session-zzzzzzzz.jsonl"], env, root);
     expect(code).toBe(1);
-    expect(await readDistilledText(layout)).toBeNull();
+    expect(await listDistilledMarkers(layout)).toEqual([]);
     expect(
       (await journalEvents(layout)).filter((event) => event.type === "journal.distilled"),
     ).toEqual([]);

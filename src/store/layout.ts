@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, realpath, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
@@ -36,8 +36,11 @@ export interface StoreLayout {
   runsDir: string;
   journalDir: string;
   journalArchiveDir: string;
-  /** `nahel/journal/distilled.json` — archived segments fully distilled (PRD F6). */
-  distilledPath: string;
+  /**
+   * `nahel/journal/distilled/` — one EMPTY marker file per fully distilled
+   * archived segment, named exactly after it (PRD F6). The name is the datum.
+   */
+  distilledDir: string;
   observationsDir: string;
   /** `skills.yaml` — the pinned-skill manifest, at the repo root (PRD F7). */
   skillsManifestPath: string;
@@ -57,7 +60,7 @@ export function storeLayout(root: string): StoreLayout {
     runsDir: join(nahelDir, "runs"),
     journalDir,
     journalArchiveDir: join(journalDir, "archive"),
-    distilledPath: join(journalDir, "distilled.json"),
+    distilledDir: join(journalDir, "distilled"),
     observationsDir: join(nahelDir, "observations"),
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
@@ -352,30 +355,38 @@ export async function writeObservation(
 }
 
 /**
- * Raw text of `nahel/journal/distilled.json`; null when absent (nothing
- * distilled yet). validate's tolerant read consumes this so a malformed file
- * is REPORTED as a finding rather than crashing the read pass (PRD F6/F8).
+ * Raw filenames in `nahel/journal/distilled/`, sorted; [] when the dir is
+ * absent (nothing distilled yet — git cannot track an empty dir, so a fresh
+ * clone has none). validate's tolerant read consumes this so a stray file is
+ * REPORTED as a finding rather than crashing the read pass (PRD F6/F8).
  */
-export async function readDistilledText(layout: StoreLayout): Promise<string | null> {
-  return readTextFile(layout.distilledPath);
+export async function listDistilledMarkers(layout: StoreLayout): Promise<string[]> {
+  const entries = await readdir(layout.distilledDir).catch((error) => {
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [] as string[];
+    throw error;
+  });
+  return entries.sort();
 }
 
 /**
- * Read and validate the distilled segment list; [] when the file is absent.
- * Returned deduped and sorted — membership is the meaning (union semantics,
- * ADR-0012), so the normalized SET is the value.
+ * Read and validate the distilled segment list; [] when no markers exist.
+ * Sorted — membership is the meaning (union semantics, ADR-0012), and each
+ * member is its own marker FILE, so readdir is already a set.
  */
 export async function readDistilled(layout: StoreLayout): Promise<Distilled> {
-  const text = await readDistilledText(layout);
-  if (text === null) return [];
-  return [...new Set(distilledSchema.parse(JSON.parse(text)))].sort();
+  return distilledSchema.parse(await listDistilledMarkers(layout));
 }
 
 /**
- * Mark segments distilled: validate the names, union them into the existing
- * list, and atomically write the sorted result. Purely additive — a name
- * already present is never duplicated, and a re-run with no new names writes
- * nothing at all (the compaction acceptance bar: re-running changes nothing).
+ * Mark segments distilled: validate the names, then create one EMPTY marker
+ * file per NEW name under `nahel/journal/distilled/` (mkdir on demand — the
+ * dir may not exist on a fresh clone, rotate.ts's archive-dir precedent).
+ * Purely additive and per-segment: disjoint distills touch disjoint files, so
+ * concurrent invocations cannot lose each other's marks and two worktrees
+ * distilling different segments merge as a plain directory union (ADR-0012
+ * merge-safe state). A re-run with no new names writes nothing at all (the
+ * compaction acceptance bar: re-running changes nothing).
  */
 export async function addDistilled(
   layout: StoreLayout,
@@ -386,9 +397,12 @@ export async function addDistilled(
   const added = [...new Set(valid)].filter((name) => !existing.has(name)).sort();
   const distilled = [...existing, ...added].sort();
   if (added.length > 0) {
-    // One entry per line so concurrent worktrees adding different segments
-    // merge line-wise without conflict (ADR-0012 merge-safe state).
-    await writeFileAtomic(layout.distilledPath, `${JSON.stringify(distilled, null, 2)}\n`);
+    await mkdir(layout.distilledDir, { recursive: true });
+    for (const name of added) {
+      // The marker is empty — the NAME is the datum, so creating a file that
+      // already exists is byte-identical (idempotence at the file level).
+      await writeFile(join(layout.distilledDir, name), "");
+    }
   }
   return { distilled, added };
 }

@@ -18,7 +18,7 @@ Decompose epic into tasks and sync to GitHub in one operation.
 Check that epic exists and hasn't been processed:
 ```bash
 # Epic must exist
-test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. Run: /pm:prd-parse $ARGUMENTS"
+test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. New work is authored via the nahel prd-parse workflow (nahel/workflows/prd-parse.md); this command serves pre-existing ccpm epics only"
 
 # Check for existing tasks
 if ls .claude/epics/$ARGUMENTS/[0-9]*.md 2>/dev/null | grep -q .; then

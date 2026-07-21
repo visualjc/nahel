@@ -81,7 +81,7 @@ fi
 # Resolve PRD directory (repo-relative)
 PRD_DIR=$(.claude/scripts/pm/resolve-prd-dir.sh 2>/dev/null)
 
-# If empty (no env/config), prompt once in interactive flows (e.g., prd-new):
+# If empty (no env/config), prompt once in interactive flows (e.g., prd-edit):
 # 1) .claude/prds (back-compat), 2) docs/prds (recommended), 3) custom
 # Persist choice to .claude/.ccpmrc as PRD_DIR and create the directory.
 ```

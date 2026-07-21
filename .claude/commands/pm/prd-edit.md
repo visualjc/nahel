@@ -17,7 +17,7 @@ Edit an existing Product Requirements Document.
 
 Resolve PRD path and read `$PRD_DIR/$ARGUMENTS.md`:
 ```bash
-PRD_DIR=$(.claude/scripts/pm/resolve-prd-dir.sh) || { echo "❌ No PRD directory. Run /pm:prd-new $ARGUMENTS first"; exit 1; }
+PRD_DIR=$(.claude/scripts/pm/resolve-prd-dir.sh) || { echo "❌ No PRD directory. Author the PRD via the nahel prd-new workflow (nahel/workflows/prd-new.md) first"; exit 1; }
 ```
 Read `$PRD_DIR/$ARGUMENTS.md`:
 - Parse frontmatter
@@ -59,7 +59,7 @@ If PRD has associated epic:
   
 {If has epic}: ⚠️ Epic may need review: {epic_name}
 
-Next: /pm:prd-parse $ARGUMENTS to update epic
+Next: nahel prd-parse workflow (nahel/workflows/prd-parse.md) to update the plan item
 ```
 
 ## Important Notes

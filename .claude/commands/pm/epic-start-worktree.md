@@ -15,7 +15,7 @@ Launch parallel agents to work on epic tasks in a shared worktree.
 
 1. **Verify epic exists:**
    ```bash
-   test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. Run: /pm:prd-parse $ARGUMENTS"
+   test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. New work is authored via the nahel prd-parse workflow (nahel/workflows/prd-parse.md); this command serves pre-existing ccpm epics only"
    ```
 
 2. **Check GitHub sync:**

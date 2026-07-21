@@ -1,0 +1,2 @@
+{"id":"8npczxf4","ts":"2026-07-21T17:29:53Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"7wkgajcg","payload":{"target":"item","record":{"id":"7wkgajcg","name":"agent-responsibility-routing","type":"feature","status":"backlog","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-21T17:29:53Z","updated":"2026-07-21T17:29:53Z"},"body":""}}
+{"id":"rvx797wv","ts":"2026-07-21T17:29:53Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

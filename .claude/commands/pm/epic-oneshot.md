@@ -37,14 +37,14 @@ fi
 
 ### 2. Execute Decompose
 
-Simply run the decompose command:
+Decompose the epic via the canonical nahel workflow:
 ```
-Running: /pm:epic-decompose $ARGUMENTS
+Following: nahel/workflows/epic-decompose.md for $ARGUMENTS
 ```
 
 This will:
 - Read the epic
-- Create task files (using parallel agents if appropriate)
+- Create session-sized child tasks
 - Update epic with task summary
 
 ### 3. Execute Sync
@@ -81,9 +81,9 @@ Ready for development!
 ## Important Notes
 
 This is simply a convenience wrapper that runs:
-1. `/pm:epic-decompose` 
+1. the nahel epic-decompose workflow (`nahel/workflows/epic-decompose.md`)
 2. `/pm:epic-sync`
 
-Both commands handle their own error checking, parallel execution, and validation. This command just orchestrates them in sequence.
+Both steps handle their own error checking and validation. This command just orchestrates them in sequence.
 
 Use this when you're confident the epic is ready and want to go from epic to GitHub issues in one step.

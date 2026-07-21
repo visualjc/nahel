@@ -21,7 +21,7 @@ test -f .claude/epics/$ARGUMENTS/epic.md || echo "❌ Epic not found. New work i
 ls .claude/epics/$ARGUMENTS/*.md 2>/dev/null | grep -v epic.md | wc -l
 ```
 
-If no tasks found: "❌ No tasks to sync. Run: /pm:epic-decompose $ARGUMENTS"
+If no tasks found: "❌ No tasks to sync. Decompose the epic via the nahel epic-decompose workflow (nahel/workflows/epic-decompose.md)"
 
 ## Instructions
 

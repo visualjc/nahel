@@ -8,6 +8,7 @@ const STORE_DIR = join(SRC_DIR, "store");
 const EXPECTED_STORE_FILES = [
   "actor.ts",
   "baseline.ts",
+  "ccpm.ts",
   "frontmatter.ts",
   "healthcheck.ts",
   "hotstate.ts",

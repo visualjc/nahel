@@ -1,0 +1,2 @@
+{"id":"0yy806xm","ts":"2026-07-21T20:49:35Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"y273p9tq","payload":{"target":"item","record":{"id":"y273p9tq","name":"phase-1-core-loop","type":"feature","status":"in-review","lane":"full","depends_on":[],"external_refs":[{"provider":"github","id":"13"}],"created":"2026-07-21T18:21:13Z","updated":"2026-07-21T20:49:35Z"},"body":""}}
+{"id":"pkfqxkpk","ts":"2026-07-21T20:49:35Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

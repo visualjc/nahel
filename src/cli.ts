@@ -15,6 +15,7 @@ import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
 import { progressCommand } from "./commands/progress";
 import { runCommand } from "./commands/run";
+import { skillsCommand } from "./commands/skills";
 import { statusCommand } from "./commands/status";
 import { validateCommand } from "./commands/validate";
 import { systemEnv, type Env } from "./schema/env";
@@ -80,6 +81,7 @@ export const COMMANDS: Record<string, Command> = {
   pause: adapt(pauseCommand),
   progress: progressCommand,
   run: adapt(runCommand),
+  skills: skillsCommand,
   status: statusCommand,
   validate: validateCommand,
 };

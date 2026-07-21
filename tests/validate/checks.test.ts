@@ -205,6 +205,55 @@ describe("validate — schema validity of every record", () => {
     expect(missing[0]!.fix).toContain("nahel init");
   });
 
+  test("a malformed run contract is reported as a schema.config error (PRD F2.1)", async () => {
+    const fixture = await setupFixture(dirs);
+    // A contract missing the required `seed` command is malformed.
+    await writeFile(
+      fixture.layout.configPath,
+      [
+        "knowledge:",
+        "  product: PRODUCT.md",
+        "  context: CONTEXT.md",
+        "  adr: docs/adr",
+        "actor:",
+        "  kind: agent",
+        "  id: claude-code",
+        "contract:",
+        "  launch: bun run dev",
+        "  test: bun test",
+        "",
+      ].join("\n"),
+    );
+    const findings = findingsFor(await validateStore(fixture.layout), "schema.config");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain("contract.seed");
+  });
+
+  test("a routing section with a non-enum responsibility is a schema.config error (PRD F3.1)", async () => {
+    const fixture = await setupFixture(dirs);
+    await writeFile(
+      fixture.layout.configPath,
+      [
+        "knowledge:",
+        "  product: PRODUCT.md",
+        "  context: CONTEXT.md",
+        "  adr: docs/adr",
+        "actor:",
+        "  kind: agent",
+        "  id: claude-code",
+        "routing:",
+        "  testing:",
+        "    agent: codex",
+        "",
+      ].join("\n"),
+    );
+    const findings = findingsFor(await validateStore(fixture.layout), "schema.config");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain("testing");
+  });
+
   test("malformed journal lines are reported with segment and line number", async () => {
     const fixture = await setupFixture(dirs);
     const segment = sessionSegmentPath(fixture.layout, "s0s0s0s0");

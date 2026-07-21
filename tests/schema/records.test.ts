@@ -645,6 +645,96 @@ describe("schema/records — compaction thresholds (F6.2)", () => {
   });
 });
 
+describe("schema/records — inception tier (F4.1)", () => {
+  const withInception = (inception: unknown) => ({ ...validConfig, inception });
+
+  test("a config with no inception section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no inception");
+  });
+
+  test("accepts every tier — seed, standard, and the deferred-but-recordable full", () => {
+    expectAccepted(configSchema, withInception({ tier: "seed" }), "inception seed");
+    expectAccepted(configSchema, withInception({ tier: "standard" }), "inception standard");
+    expectAccepted(configSchema, withInception({ tier: "full" }), "inception full");
+  });
+
+  test("rejects a non-enum tier, pointing at the field", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withInception({ tier: "quick" }),
+      "inception bad tier",
+    );
+    expect(issues.some((i) => i.startsWith("inception.tier:"))).toBe(true);
+  });
+
+  test("rejects an inception section without a tier — the tier IS the record", () => {
+    const issues = rejectionIssues(configSchema, withInception({}), "inception empty");
+    expect(issues.some((i) => i.startsWith("inception.tier:"))).toBe(true);
+  });
+
+  test("rejects unknown inception keys (a typo is an error, not silent state)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withInception({ tier: "seed", upgraded: true }),
+      "inception unknown key",
+    );
+    expect(issues.some((i) => i.includes("upgraded"))).toBe(true);
+  });
+});
+
+describe("schema/records — governance (F4, roadmap §7)", () => {
+  const withGovernance = (governance: unknown) => ({ ...validConfig, governance });
+
+  test("a config with no governance section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no governance");
+  });
+
+  test("accepts human and delegated modes per area, mixed freely", () => {
+    expectAccepted(
+      configSchema,
+      withGovernance({ product: "human", architecture: "human" }),
+      "governance all human",
+    );
+    expectAccepted(
+      configSchema,
+      withGovernance({ product: "human", architecture: "delegated" }),
+      "governance mixed",
+    );
+    expectAccepted(
+      configSchema,
+      withGovernance({ product: "delegated", architecture: "delegated" }),
+      "governance all delegated",
+    );
+  });
+
+  test("rejects a non-enum mode, pointing at the area", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withGovernance({ product: "auto", architecture: "human" }),
+      "governance bad mode",
+    );
+    expect(issues.some((i) => i.startsWith("governance.product:"))).toBe(true);
+  });
+
+  test("rejects a governance section that omits an area — both areas are declared or none", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withGovernance({ product: "human" }),
+      "governance missing architecture",
+    );
+    expect(issues.some((i) => i.startsWith("governance.architecture:"))).toBe(true);
+  });
+
+  test("rejects unknown governance areas (the vocabulary is a deliberate schema change)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withGovernance({ product: "human", architecture: "human", qa: "delegated" }),
+      "governance unknown area",
+    );
+    expect(issues.some((i) => i.includes("qa"))).toBe(true);
+  });
+});
+
 describe("schema/records — distilled segment list (F6, ADR-0012)", () => {
   test("accepts a list of archived segment filenames (and the empty list)", () => {
     expectAccepted(

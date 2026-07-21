@@ -40,3 +40,19 @@ export type ActorKind = (typeof ACTOR_KINDS)[number];
  */
 export const RUN_STATUSES = ["active", "paused", "ended"] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
+
+/**
+ * Inception tier a project founded at (glossary: Inception). `full` is a
+ * valid recorded value even while its workflow is deferred (PRD F4.1) — the
+ * tier ratchet needs the value representable before the workflow ships.
+ */
+export const INCEPTION_TIERS = ["seed", "standard", "full"] as const;
+export type InceptionTier = (typeof INCEPTION_TIERS)[number];
+
+/**
+ * Who owns legislation for a governance area (glossary: Delegated
+ * governance): `human` — agents propose, the human approves; `delegated` —
+ * agent roles decide via consensus. Recorded in Phase 1, enforced later.
+ */
+export const GOVERNANCE_MODES = ["human", "delegated"] as const;
+export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];

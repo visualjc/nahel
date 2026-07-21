@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { ACTOR_KINDS, LANES, RUN_STATUSES, WORK_ITEM_STATUSES, WORK_ITEM_TYPES } from "./enums";
+import {
+  ACTOR_KINDS,
+  GOVERNANCE_MODES,
+  INCEPTION_TIERS,
+  LANES,
+  RUN_STATUSES,
+  WORK_ITEM_STATUSES,
+  WORK_ITEM_TYPES,
+} from "./enums";
 import { ID_ALPHABET, ID_LENGTH, ID_PATTERN } from "./id";
 
 /**
@@ -241,12 +249,37 @@ export const compactionSchema = z.strictObject({
 export type Compaction = z.infer<typeof compactionSchema>;
 
 /**
+ * Inception record — `config.inception` (PRD F4.1): the tier the project
+ * founded at. Written by the inception workflow via `nahel config set`;
+ * Phase 2+ autonomy gates and the tier ratchet read it. `full` is recordable
+ * now even though the full-tier workflow is deferred.
+ */
+export const inceptionSchema = z.strictObject({
+  tier: z.enum(INCEPTION_TIERS),
+});
+export type Inception = z.infer<typeof inceptionSchema>;
+
+/**
+ * Governance — `config.governance` (PRD F4, roadmap §7): who owns
+ * legislation per area — product (priorities, PRD approvals) and
+ * architecture (ADRs, architecture evolution). Both areas are declared
+ * together: a half-declared governance posture is ambiguity, not state.
+ * Recorded in Phase 1; delegated-consensus enforcement is a later phase.
+ */
+export const governanceSchema = z.strictObject({
+  product: z.enum(GOVERNANCE_MODES),
+  architecture: z.enum(GOVERNANCE_MODES),
+});
+export type Governance = z.infer<typeof governanceSchema>;
+
+/**
  * Config — `nahel/config`: where the knowledge layer lives (paths relative to
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
  * The optional `validate` block tunes the maintenance-warning thresholds
  * (PRD F8, ADR-0004); the optional `compaction` (PRD F6.2), `contract`
  * (ADR-0014) and `routing` (ADR-0015) sections are additive too, so existing
- * configs stay valid.
+ * configs stay valid — as are `inception` and `governance` (PRD F4), written
+ * by the inception workflow through `nahel config set`.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -268,5 +301,7 @@ export const configSchema = z.strictObject({
   compaction: compactionSchema.optional(),
   contract: contractSchema.optional(),
   routing: routingSchema.optional(),
+  inception: inceptionSchema.optional(),
+  governance: governanceSchema.optional(),
 });
 export type Config = z.infer<typeof configSchema>;

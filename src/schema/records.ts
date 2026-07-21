@@ -187,6 +187,11 @@ export const contractSchema = z.strictObject({
   seed: nonEmptyString("contract.seed command"),
   test: nonEmptyString("contract.test command"),
   healthcheck: nonEmptyString("contract.healthcheck command").optional(),
+  healthcheck_timeout_seconds: z
+    .number()
+    .int("contract.healthcheck_timeout_seconds must be an integer")
+    .positive("contract.healthcheck_timeout_seconds must be >= 1")
+    .optional(),
   ports: z
     .array(z.number().int("contract.ports entries must be integers").positive("contract.ports entries must be >= 1"))
     .optional(),

@@ -637,6 +637,29 @@ describe("schema/records — run contract (F2.1, ADR-0014)", () => {
     expect(issues.some((i) => i.startsWith("contract.env.1:"))).toBe(true);
   });
 
+  test("accepts an optional positive-integer healthcheck_timeout_seconds", () => {
+    expectAccepted(
+      configSchema,
+      withContract({ launch: "l", seed: "s", test: "t", healthcheck: "c", healthcheck_timeout_seconds: 30 }),
+      "contract healthcheck timeout",
+    );
+  });
+
+  test("rejects a non-positive or non-integer healthcheck_timeout_seconds, pointing at it", () => {
+    const zero = rejectionIssues(
+      configSchema,
+      withContract({ launch: "l", seed: "s", test: "t", healthcheck_timeout_seconds: 0 }),
+      "contract zero timeout",
+    );
+    expect(zero.some((i) => i.startsWith("contract.healthcheck_timeout_seconds:"))).toBe(true);
+    const frac = rejectionIssues(
+      configSchema,
+      withContract({ launch: "l", seed: "s", test: "t", healthcheck_timeout_seconds: 2.5 }),
+      "contract fractional timeout",
+    );
+    expect(frac.some((i) => i.startsWith("contract.healthcheck_timeout_seconds:"))).toBe(true);
+  });
+
   test("rejects an unknown contract key, naming it (strict object)", () => {
     const issues = rejectionIssues(
       configSchema,

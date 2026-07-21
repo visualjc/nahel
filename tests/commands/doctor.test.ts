@@ -110,6 +110,18 @@ describe("nahel doctor — env complete", () => {
     expect(result.stdout).toContain("healthcheck failed (exit 7)");
     expect(result.stdout).not.toContain("LEAKEDOUTPUT"); // never echoes healthcheck output
   });
+
+  test("a healthcheck that outruns healthcheck_timeout_seconds reports a distinct timeout message, still exit 4 (Finding 6 / PR #13)", async () => {
+    const start = Date.now();
+    const result = await runDoctor({
+      contract: { ...base, healthcheck: "sleep 5", healthcheck_timeout_seconds: 1 },
+    });
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(3000); // killed, not hung on the full sleep
+    expect(result.code).toBe(4); // same exit branch as a failed healthcheck
+    expect(result.stdout).toContain("timed out after 1s"); // but a distinct message
+    expect(result.stdout).not.toContain("healthcheck failed (exit"); // not the plain-failure line
+  });
 });
 
 describe("nahel doctor — hard errors and usage", () => {

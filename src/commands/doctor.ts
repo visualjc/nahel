@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { runHealthcheck } from "../store/healthcheck";
+import { DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS, runHealthcheck } from "../store/healthcheck";
 import { readConfig, storeLayout } from "../store/layout";
 import { UsageError } from "./item";
 
@@ -79,7 +79,15 @@ async function runDoctor(argv: string[], ctx: CommandContext): Promise<number> {
     }
 
     if (contract.healthcheck !== undefined) {
-      const result = await runHealthcheck(contract.healthcheck);
+      const timeoutSeconds =
+        contract.healthcheck_timeout_seconds ?? DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS;
+      const result = await runHealthcheck(contract.healthcheck, timeoutSeconds);
+      if (result.timedOut) {
+        // Distinct from a plain failure: the check hung past its deadline and
+        // was killed, so a wedged healthcheck can never block doctor forever.
+        ctx.stdout(`healthcheck timed out after ${timeoutSeconds}s: ${contract.healthcheck}`);
+        return DOCTOR_EXIT.healthcheckFailed;
+      }
       if (!result.ok) {
         ctx.stdout(
           `healthcheck failed (exit ${result.exitCode ?? "unknown"}): ${contract.healthcheck}`,

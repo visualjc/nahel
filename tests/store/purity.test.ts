@@ -15,6 +15,7 @@ const EXPECTED_STORE_FILES = [
   "layout.ts",
   "mutate.ts",
   "rotate.ts",
+  "skills.ts",
 ];
 
 /** fs imports are the store layer's exclusive privilege. */
@@ -24,13 +25,14 @@ const FS_IMPORT = /from\s+["'](node:)?(fs|fs\/promises)["']/;
 const FORBIDDEN_EVERYWHERE = /from\s+["'](node:)?(net|http|https|http2|dns|tls)["']/;
 
 /**
- * Process spawning is store-layer I/O with exactly two legitimate uses:
+ * Process spawning is store-layer I/O with exactly three legitimate uses:
  * baseline.ts spawning `git` for claim baselines and handback evidence
- * (PRD F9), and healthcheck.ts spawning the run contract's healthcheck
- * (PRD F2). Everywhere else it stays forbidden.
+ * (PRD F9), healthcheck.ts spawning the run contract's healthcheck (PRD F2),
+ * and skills.ts spawning `git` / the `skills` CLI to fetch pinned skills
+ * (PRD F7, ADR-0009). Everywhere else it stays forbidden.
  */
 const PROCESS_SPAWN_IMPORT = /from\s+["'](node:)?(child_process|worker_threads)["']/;
-const SPAWN_ALLOWED = ["baseline.ts", "healthcheck.ts"];
+const SPAWN_ALLOWED = ["baseline.ts", "healthcheck.ts", "skills.ts"];
 
 /** Ambient I/O and environment access forbidden in the store layer. */
 const FORBIDDEN_GLOBALS = [/\bfetch\s*\(/, /\bBun\.(file|write|spawn|serve|env)\b/, /\bprocess\.env\b/];

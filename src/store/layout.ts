@@ -5,10 +5,14 @@ import {
   configSchema,
   observationFrontmatterSchema,
   runSchema,
+  skillsLockSchema,
+  skillsManifestSchema,
   workItemFrontmatterSchema,
   type Config,
   type ObservationFrontmatter,
   type Run,
+  type SkillsLock,
+  type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { requireValidId } from "../schema/id";
@@ -31,6 +35,10 @@ export interface StoreLayout {
   journalDir: string;
   journalArchiveDir: string;
   observationsDir: string;
+  /** `skills.yaml` — the pinned-skill manifest, at the repo root (PRD F7). */
+  skillsManifestPath: string;
+  /** `skills.lock` — the resolved manifest, at the repo root (PRD F7). */
+  skillsLockPath: string;
 }
 
 /** Compute the layout paths for a repo root (no filesystem access). */
@@ -46,6 +54,8 @@ export function storeLayout(root: string): StoreLayout {
     journalDir,
     journalArchiveDir: join(journalDir, "archive"),
     observationsDir: join(nahelDir, "observations"),
+    skillsManifestPath: join(root, "skills.yaml"),
+    skillsLockPath: join(root, "skills.lock"),
   };
 }
 
@@ -334,4 +344,38 @@ export async function writeObservation(
 ): Promise<void> {
   const valid = observationFrontmatterSchema.parse(frontmatter);
   await writeFrontmatterFile(observationPath(layout, valid.id), valid, body);
+}
+
+/**
+ * Raw text of `skills.yaml`; null when absent (a repo may declare no skills).
+ * validate's tolerant read consumes this so a malformed manifest is REPORTED
+ * as a finding rather than crashing the read pass (PRD F7/F8).
+ */
+export async function readSkillsManifestText(layout: StoreLayout): Promise<string | null> {
+  return readTextFile(layout.skillsManifestPath);
+}
+
+/** Read and validate `skills.yaml`; null when the manifest is absent. */
+export async function readSkillsManifest(layout: StoreLayout): Promise<SkillsManifest | null> {
+  const text = await readSkillsManifestText(layout);
+  if (text === null) return null;
+  return skillsManifestSchema.parse(YAML.parse(text));
+}
+
+/** Raw text of `skills.lock`; null when absent (validate's tolerant read). */
+export async function readSkillsLockText(layout: StoreLayout): Promise<string | null> {
+  return readTextFile(layout.skillsLockPath);
+}
+
+/** Read and validate `skills.lock`; null when the lockfile is absent. */
+export async function readSkillsLock(layout: StoreLayout): Promise<SkillsLock | null> {
+  const text = await readSkillsLockText(layout);
+  if (text === null) return null;
+  return skillsLockSchema.parse(JSON.parse(text));
+}
+
+/** Validate and atomically write `skills.lock`. */
+export async function writeSkillsLock(layout: StoreLayout, lock: SkillsLock): Promise<void> {
+  const valid = skillsLockSchema.parse(lock);
+  await writeFileAtomic(layout.skillsLockPath, `${JSON.stringify(valid, null, 2)}\n`);
 }

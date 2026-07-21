@@ -7,13 +7,16 @@
 // inside each command.
 
 import { briefCommand } from "./commands/brief";
+import { distillCommand } from "./commands/distill";
 import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
 import { installCommand } from "./commands/install";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
+import { observeCommand } from "./commands/observe";
 import { progressCommand } from "./commands/progress";
+import { recallCommand } from "./commands/recall";
 import { runCommand } from "./commands/run";
 import { skillsCommand } from "./commands/skills";
 import { statusCommand } from "./commands/status";
@@ -72,14 +75,17 @@ function adapt(command: {
 export const COMMANDS: Record<string, Command> = {
   brief: briefCommand,
   claim: adapt(claimCommand),
+  distill: adapt(distillCommand),
   doctor: doctorCommand,
   handback: adapt(handbackCommand),
   init: initCommand,
   install: installCommand,
   item: adapt(itemCommand),
   log: logCommand,
+  observe: adapt(observeCommand),
   pause: adapt(pauseCommand),
   progress: progressCommand,
+  recall: recallCommand,
   run: adapt(runCommand),
   skills: skillsCommand,
   status: statusCommand,

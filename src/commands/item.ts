@@ -130,18 +130,21 @@ function parseExternalRef(value: string): ExternalRef {
 const CLOSED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
 
 const USAGE = `usage:
-  nahel item new <type> <name> <lane> [--parent <id>] [--depends-on <id>]... [--external-ref <provider>:<id>]...
+  nahel item new <type> <name> <lane> [--parent <id>] [--depends-on <id>]...
+                 [--external-ref <provider>:<id>]... [--prd <path>]
     Create a work item (status starts at backlog) and print its generated id.
       type: ${WORK_ITEM_TYPES.join(" | ")}
       lane: ${LANES.join(" | ")}
+      --prd: repo-relative path to the item's PRD document (ADR-0013)
 
   nahel item update <id> [--status <status>] [--lane <lane>] [--parent <id>]
-                    [--depends-on <id>]... [--external-ref <provider>:<id>]... [--reopen]
-                    [--clear-parent] [--clear-depends-on] [--clear-external-refs]
+                    [--depends-on <id>]... [--external-ref <provider>:<id>]...
+                    [--prd <path>] [--reopen] [--clear-parent]
+                    [--clear-depends-on] [--clear-external-refs] [--clear-prd]
     Update fields; the CLI maintains \`updated\`. Repeatable --depends-on and
-    --external-ref replace the whole list; --clear-parent, --clear-depends-on
-    and --clear-external-refs remove the field / empty the list (each is
-    mutually exclusive with its set flag).
+    --external-ref replace the whole list; --clear-parent, --clear-depends-on,
+    --clear-external-refs and --clear-prd remove the field / empty the list
+    (each is mutually exclusive with its set flag).
       status: ${WORK_ITEM_STATUSES.join(" | ")}
       Any status transition is legal except re-opening a done or dropped item,
       which requires --reopen (guard against accidental resurrection);
@@ -159,6 +162,7 @@ async function itemNew(
       parent: { type: "string" },
       "depends-on": { type: "string", multiple: true },
       "external-ref": { type: "string", multiple: true },
+      prd: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -171,6 +175,13 @@ async function itemNew(
   const name = requireValid(workItemFrontmatterSchema.shape.name, positionals[1], "name");
   const lane = requireEnum(positionals[2]!, LANES, "lane");
   const externalRefs = (values["external-ref"] ?? []).map(parseExternalRef);
+  // Path hardening happens in the schema (repo-relative, no traversal);
+  // existence on disk is deliberately NOT checked — the PRD may arrive by a
+  // later merge, and a missing document is a validate WARNING (ADR-0012).
+  const prd =
+    values.prd === undefined
+      ? undefined
+      : requireValid(workItemFrontmatterSchema.shape.prd, values.prd, "--prd");
 
   const ctx = await commandContext(cwd, env, actorOverride);
   if (values.parent !== undefined) {
@@ -190,6 +201,7 @@ async function itemNew(
     ...(values.parent === undefined ? {} : { parent: values.parent }),
     depends_on: values["depends-on"] ?? [],
     external_refs: externalRefs,
+    ...(prd === undefined ? {} : { prd }),
     created,
     updated: created,
   };
@@ -218,10 +230,12 @@ async function itemUpdate(
       parent: { type: "string" },
       "depends-on": { type: "string", multiple: true },
       "external-ref": { type: "string", multiple: true },
+      prd: { type: "string" },
       reopen: { type: "boolean" },
       "clear-parent": { type: "boolean" },
       "clear-depends-on": { type: "boolean" },
       "clear-external-refs": { type: "boolean" },
+      "clear-prd": { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -234,6 +248,7 @@ async function itemUpdate(
     ["parent", "clear-parent"],
     ["depends-on", "clear-depends-on"],
     ["external-ref", "clear-external-refs"],
+    ["prd", "clear-prd"],
   ] as const) {
     if (values[setFlag] !== undefined && values[clearFlag] === true) {
       throw new UsageError(
@@ -247,13 +262,16 @@ async function itemUpdate(
     values.parent !== undefined ||
     values["depends-on"] !== undefined ||
     values["external-ref"] !== undefined ||
+    values.prd !== undefined ||
     values["clear-parent"] === true ||
     values["clear-depends-on"] === true ||
-    values["clear-external-refs"] === true;
+    values["clear-external-refs"] === true ||
+    values["clear-prd"] === true;
   if (!hasChange) {
     throw new UsageError(
       "nothing to update — pass at least one of --status, --lane, --parent, --depends-on, " +
-        "--external-ref, --clear-parent, --clear-depends-on, --clear-external-refs",
+        "--external-ref, --prd, --clear-parent, --clear-depends-on, --clear-external-refs, " +
+        "--clear-prd",
     );
   }
 
@@ -297,6 +315,11 @@ async function itemUpdate(
   if (values["external-ref"] !== undefined) {
     next.external_refs = values["external-ref"].map(parseExternalRef);
   }
+  if (values.prd !== undefined) {
+    // Schema-hardened path; existence is validate's concern, not write-time's
+    // (ADR-0012: the PRD document may arrive by a later merge).
+    next.prd = requireValid(workItemFrontmatterSchema.shape.prd, values.prd, "--prd");
+  }
   // Clears build the full post-mutation record — "cleared" is an ABSENT
   // parent key (never parent: undefined/null), an empty list for the others.
   // The store's claim check still reads the CURRENT chain from disk starting
@@ -310,6 +333,9 @@ async function itemUpdate(
   }
   if (values["clear-external-refs"] === true) {
     next.external_refs = [];
+  }
+  if (values["clear-prd"] === true) {
+    delete next.prd;
   }
   next.updated = env.now();
 

@@ -397,6 +397,129 @@ describe("item update", () => {
     expect((await readItem(layout, id)).frontmatter.parent).toBeUndefined();
   });
 
+  // F1 (ADR-0013): work items reference their PRD by repo-relative path;
+  // the CLI is the only writer, following the set/clear flag conventions.
+  describe("prd path (--prd / --clear-prd)", () => {
+    test("item new --prd records the repo-relative path and round-trips it", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root, ["--prd", "docs/prds/auth-login.md"]);
+
+      const { frontmatter } = await readItem(layout, id);
+      expect(frontmatter.prd).toBe("docs/prds/auth-login.md");
+      // Journaled like any mutation: the write-ahead payload IS the record.
+      const events = await journalEvents(layout);
+      expect((events[0]!.payload["record"] as Record<string, unknown>)["prd"]).toBe(
+        "docs/prds/auth-login.md",
+      );
+    });
+
+    test("item new without --prd records no prd key at all", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root);
+      const { frontmatter } = await readItem(layout, id);
+      expect("prd" in frontmatter).toBe(false);
+    });
+
+    test("item new --prd rejects an absolute path with the repo-relative rule, nothing created", async () => {
+      const { root, layout, env } = await setup();
+      const code = await itemCommand.run(
+        ["new", "feature", "bad-prd", "direct", "--prd", "/etc/prds/x.md"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("repo-relative");
+      expect(await listItems(layout)).toEqual([]);
+    });
+
+    test('item new --prd rejects a ".." traversal path, nothing created', async () => {
+      const { root, layout, env } = await setup();
+      const code = await itemCommand.run(
+        ["new", "feature", "bad-prd", "direct", "--prd", "../outside.md"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("..");
+      expect(await listItems(layout)).toEqual([]);
+    });
+
+    test("item update --prd sets the path on an existing item, journaled", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root);
+      const code = await itemCommand.run(
+        ["update", id, "--prd", "docs/prds/test-item.md"],
+        env,
+        root,
+      );
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
+
+      const after = await readItem(layout, id);
+      expect(after.frontmatter.prd).toBe("docs/prds/test-item.md");
+      expect(after.frontmatter.updated > after.frontmatter.created).toBe(true);
+      const events = await journalEvents(layout);
+      expect(events[events.length - 2]!.payload["record"]).toEqual(after.frontmatter);
+    });
+
+    test("item update --prd rejects an invalid path and writes nothing", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root);
+      const code = await itemCommand.run(
+        ["update", id, "--prd", "docs/../../etc/passwd"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("..");
+      expect((await readItem(layout, id)).frontmatter.prd).toBeUndefined();
+    });
+
+    test("--clear-prd removes the field; the journaled record carries NO prd key", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root, ["--prd", "docs/prds/test-item.md"]);
+
+      const code = await itemCommand.run(["update", id, "--clear-prd"], env, root);
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
+
+      const after = await readItem(layout, id);
+      expect("prd" in after.frontmatter).toBe(false);
+      const events = await journalEvents(layout);
+      const updated = events[events.length - 2]!;
+      expect(updated.type).toBe("item.updated");
+      expect("prd" in (updated.payload["record"] as Record<string, unknown>)).toBe(false);
+    });
+
+    test("--clear-prd counts as a change on its own — no 'nothing to update'", async () => {
+      const { root, env } = await setup();
+      const id = await newItem(env, root);
+      expect(await itemCommand.run(["update", id, "--clear-prd"], env, root)).toBe(0);
+    });
+
+    test("--prd and --clear-prd together: mutually exclusive error, nothing written", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root, ["--prd", "docs/prds/test-item.md"]);
+      const code = await itemCommand.run(
+        ["update", id, "--prd", "docs/prds/other.md", "--clear-prd"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("mutually exclusive");
+      expect(stderr()).toContain("--clear-prd");
+      expect((await readItem(layout, id)).frontmatter.prd).toBe("docs/prds/test-item.md");
+    });
+
+    test("a missing PRD file is NOT a write-time error — the path is a reference (ADR-0012)", async () => {
+      const { root, layout, env } = await setup();
+      // Nothing at docs/prds/never-written.md; creation must still succeed —
+      // knowledge documents can arrive by a later merge.
+      const id = await newItem(env, root, ["--prd", "docs/prds/never-written.md"]);
+      expect((await readItem(layout, id)).frontmatter.prd).toBe("docs/prds/never-written.md");
+    });
+  });
+
   // PR #12 review: without explicit clear flags the CLI could SET
   // parent/depends_on/external_refs but never CLEAR them — forcing hand-edits,
   // which violates CLI-only mutation (hard constraint 3).

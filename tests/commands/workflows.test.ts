@@ -82,6 +82,47 @@ describe("feature-lane canonical workflow docs (F1)", () => {
     expect(body).toContain("NAHEL_ACTOR");
   });
 
+  test("bug-lane.md: diagnosis-first — investigation doc, red-before-fix hard rule, waiver only after failed repro, root cause distilled", async () => {
+    const { parsed, body } = await shippedWorkflow("bug-lane.md");
+    expect(parsed.name).toBe("bug-lane");
+    expect(parsed.description.length).toBeGreaterThan(0);
+    // Mechanics compose task-lifecycle, never repeat it.
+    expect(body).toContain("task-lifecycle");
+    // F5.1: the durable investigation document, recorded on the item by path.
+    expect(body).toContain("docs/investigations/");
+    expect(body).toContain("--investigation");
+    for (const section of ["symptoms", "repro status", "hypotheses", "root cause"]) {
+      expect(body.toLowerCase()).toContain(section);
+    }
+    // F5.2 hard rule (acceptance: no done without repro-or-waiver): the
+    // failing repro test comes before ANY fix — the tdd red-first posture.
+    expect(body).toContain("HARD RULE");
+    expect(body).toContain("failing repro test");
+    expect(body).toContain("red");
+    // Diagnosis discipline: pinned diagnosing-bugs skill with inline fallback.
+    expect(body).toContain("diagnosing-bugs");
+    expect(body).toContain("reproduce");
+    expect(body).toContain("isolate");
+    expect(body).toContain("one at a time");
+    // F5.3 waiver path: an observation, tagged, item-referenced, valid ONLY
+    // with documented failed repro attempts, provenance to the journal, and
+    // restated in the PR body — never silently skipped.
+    expect(body).toContain("nahel observe");
+    expect(body).toContain("repro-waiver");
+    expect(body).toContain("--item");
+    expect(body).toContain("ONLY");
+    expect(body).toContain("failed repro attempts");
+    expect(body).toContain("sources");
+    expect(body).toContain("PR body");
+    // F5.4 close: root cause distilled with provenance; run ended honestly;
+    // done stays the human's to grant.
+    expect(body).toContain("nahel run end");
+    expect(body).toContain("--status in-review");
+    expect(body).toContain("done");
+    expect(body).toContain("Fallback");
+    expect(body).toContain("NAHEL_ACTOR");
+  });
+
   test("task-lifecycle.md: the leaf loop — status flips, run phases, journaled findings, the claim rule", async () => {
     const { parsed, body } = await shippedWorkflow("task-lifecycle.md");
     expect(parsed.name).toBe("task-lifecycle");

@@ -1,0 +1,2 @@
+{"id":"ypywwqby","ts":"2026-07-21T19:34:00Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"hqvb4xj7","payload":{"target":"item","record":{"id":"hqvb4xj7","name":"f6-compaction-recall","type":"feature","status":"in-review","lane":"epic-lite","parent":"y273p9tq","depends_on":[],"external_refs":[],"created":"2026-07-21T18:21:13Z","updated":"2026-07-21T19:34:00Z"},"body":""}}
+{"id":"r1dvbsqn","ts":"2026-07-21T19:34:00Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

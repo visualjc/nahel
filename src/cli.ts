@@ -7,6 +7,7 @@
 // inside each command.
 
 import { briefCommand } from "./commands/brief";
+import { configCommand } from "./commands/config";
 import { distillCommand } from "./commands/distill";
 import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
@@ -75,6 +76,7 @@ function adapt(command: {
 export const COMMANDS: Record<string, Command> = {
   brief: briefCommand,
   claim: adapt(claimCommand),
+  config: adapt(configCommand),
   distill: adapt(distillCommand),
   doctor: doctorCommand,
   handback: adapt(handbackCommand),

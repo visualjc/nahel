@@ -189,6 +189,23 @@ describe("restoreViaClone (clone at pinned SHA + symlink)", () => {
     await expect(attempt).rejects.toThrow(/missing/);
   });
 
+  test("refuses to overwrite real user content at .claude/skills/<name> — throws SkillsError, leaves the directory byte-for-byte intact (Finding 5 / PR #13)", async () => {
+    const { repo, sha } = await makeSkillsRepo({ tdd: "# tdd\n" });
+    const layout = await initTargetRepo();
+    // A user's REAL (non-symlink) directory already occupies the link target.
+    const collision = join(claudeSkillsDir(layout), "tdd");
+    await mkdir(collision, { recursive: true });
+    await writeFile(join(collision, "USER.md"), "hand-written user content\n");
+
+    const entry = { repo, ref: "main", sha, skills: ["tdd"] };
+    await expect(restoreViaClone(layout, entry)).rejects.toBeInstanceOf(SkillsError);
+    // The refusal names the offending path so the user can act on it.
+    await expect(restoreViaClone(layout, entry)).rejects.toThrow(/tdd/);
+
+    // The user's directory and its file survive untouched — nothing was erased.
+    expect(await readFile(join(collision, "USER.md"), "utf8")).toBe("hand-written user content\n");
+  });
+
   test("restores the EXACT locked commit, not the tip of the branch", async () => {
     const { repo, sha } = await makeSkillsRepo({ tdd: "# v1\n" });
     // Advance the branch after locking: the lock still pins the old commit.

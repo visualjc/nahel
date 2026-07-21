@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, rm, stat, symlink } from "node:fs/promises";
+import { lstat, mkdir, rm, stat, symlink } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { SkillsLockEntry } from "../schema/records";
@@ -134,12 +134,29 @@ async function locateSkill(cloneDir: string, name: string): Promise<string | nul
   return null;
 }
 
-/** Symlink a located skill into .claude/skills/, replacing any stale link. */
+/**
+ * Symlink a located skill into .claude/skills/, replacing any stale nahel link.
+ * A destination that is a symlink is nahel-managed by definition and is
+ * replaced. A destination that is a real file or directory is USER content: we
+ * refuse to touch it and throw SkillsError naming the path (Finding 5) rather
+ * than erase it with a blind recursive rm. lstat, not stat, so an existing
+ * symlink is recognized as a link (never followed to its target's type).
+ */
 async function placeSymlink(layout: StoreLayout, name: string, target: string): Promise<void> {
   const dir = claudeSkillsDir(layout);
   await mkdir(dir, { recursive: true });
   const link = join(dir, name);
-  await rm(link, { recursive: true, force: true });
+  const info = await lstat(link).catch(() => null);
+  if (info !== null) {
+    if (!info.isSymbolicLink()) {
+      throw new SkillsError(
+        `refusing to place skill ${JSON.stringify(name)}: ${link} already exists and is not a ` +
+          `nahel-managed symlink but a real ${info.isDirectory() ? "directory" : "file"} — ` +
+          `move or remove it yourself, then re-run restore`,
+      );
+    }
+    await rm(link, { force: true });
+  }
   await symlink(target, link);
 }
 

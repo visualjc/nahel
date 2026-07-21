@@ -424,6 +424,153 @@ describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
   });
 });
 
+describe("validate — PRD-approval consistency (item.prd-unapproved, ADR-0013)", () => {
+  test("an active feature referencing a PRD whose authoring plan item is not done WARNS, naming both ids", async () => {
+    const fixture = await setupFixture(dirs);
+    // The revoked-approval window: the plan authored (and had approved) the
+    // PRD, then `item update --status backlog --reopen` revoked its done while
+    // the feature was already in flight. The check sees only current state —
+    // a non-done plan item authoring a PRD an active feature depends on.
+    const plan = await createItem(fixture, {
+      name: "auth-plan",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/auth.md",
+    });
+    const feature = await createItem(fixture, {
+      name: "auth-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/auth.md",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "item.prd-unapproved");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(feature.id);
+    expect(findings[0]!.message).toContain(feature.id);
+    expect(findings[0]!.message).toContain(plan.id);
+    expect(findings[0]!.message).toContain("docs/prds/auth.md");
+    expect(findings[0]!.message).toContain("not done");
+    expect(findings[0]!.fix).toContain("done");
+  });
+
+  test("multiple non-done plan items authoring the same PRD are all named, sorted, in one finding", async () => {
+    const fixture = await setupFixture(dirs);
+    const p1 = await createItem(fixture, {
+      name: "plan-one",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/multi.md",
+    });
+    const p2 = await createItem(fixture, {
+      name: "plan-two",
+      type: "plan",
+      status: "in-review",
+      prd: "docs/prds/multi.md",
+    });
+    const feature = await createItem(fixture, {
+      name: "multi-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/multi.md",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "item.prd-unapproved");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(feature.id);
+    const sorted = [p1.id, p2.id].sort();
+    expect(findings[0]!.message).toContain(`${sorted[0]}, ${sorted[1]}`);
+  });
+
+  test("a PRD whose authoring plan item IS done produces no finding (approved)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, {
+      name: "ok-plan",
+      type: "plan",
+      status: "done",
+      prd: "docs/prds/ok.md",
+    });
+    await createItem(fixture, {
+      name: "ok-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/ok.md",
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.prd-unapproved"),
+    ).toHaveLength(0);
+  });
+
+  test("a PRD with NO authoring plan item stays quiet (ccpm-imported epic shape)", async () => {
+    const fixture = await setupFixture(dirs);
+    // A ccpm-imported epic carries a `prd` path but has no `plan` item that
+    // authored it — imports must never warn. No plan item shares the path.
+    await createItem(fixture, {
+      name: "imported-epic",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/imported.md",
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.prd-unapproved"),
+    ).toHaveLength(0);
+  });
+
+  test("a done or dropped feature referencing a revoked PRD is exempt (finished work is history)", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, {
+      name: "hist-plan",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/hist.md",
+    });
+    await createItem(fixture, {
+      name: "done-feature",
+      type: "feature",
+      status: "done",
+      prd: "docs/prds/hist.md",
+    });
+    await createItem(fixture, {
+      name: "dropped-feature",
+      type: "feature",
+      status: "dropped",
+      prd: "docs/prds/hist.md",
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "item.prd-unapproved"),
+    ).toHaveLength(0);
+  });
+
+  test("the finding is a warning — validate never fails on it, and the result is deterministic", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, {
+      name: "det-plan",
+      type: "plan",
+      status: "backlog",
+      prd: "docs/prds/det.md",
+    });
+    await createItem(fixture, {
+      name: "det-feature",
+      type: "feature",
+      status: "in-progress",
+      prd: "docs/prds/det.md",
+    });
+
+    const first = await validateStore(fixture.layout);
+    const second = await validateStore(fixture.layout);
+    expect(second).toEqual(first);
+    // Never an error — warning severity only.
+    expect(findingsFor(first, "item.prd-unapproved").every((f) => f.severity === "warning")).toBe(
+      true,
+    );
+    expect(first.filter((f) => f.severity === "error")).toHaveLength(0);
+  });
+});
+
 describe("validate — investigation references (item.investigation-missing, F5)", () => {
   test("an item whose investigation path has no file on disk is a WARNING (never an error) naming item and path", async () => {
     const fixture = await setupFixture(dirs);

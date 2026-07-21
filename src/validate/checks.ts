@@ -607,6 +607,54 @@ function checkInvestigationRefs(state: ParsedState): Finding[] {
   );
 }
 
+/**
+ * PRD-approval consistency (ADR-0013 + its 2026-07-21 amendment): a PRD file
+ * carries no status — its approval lifecycle lives on the authoring `plan`
+ * item, where done = approved, and `prd-parse` gates epic creation on that.
+ * But `item update --status backlog --reopen` can revoke a plan item's done
+ * AFTER feature items referencing the same PRD are already in flight, and
+ * nothing else detects that drift. So: an ACTIVE non-plan item referencing a
+ * `prd` whose authoring plan item(s) exist but none is done is a WARNING
+ * (approval missing or revoked). A ccpm-imported epic carries a `prd` but has
+ * NO plan item authoring it — no plan item shares the path, so imports stay
+ * quiet. Finished work (the referencing item itself done or dropped) pointing
+ * at a since-revoked PRD is history, not drift, so it is exempt; every active
+ * status (backlog, in-progress, blocked, in-review) warns. A warning, never an
+ * error — this never fails `nahel validate`.
+ */
+function checkPrdApproval(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  // PRD path → the authoring plan items' ids and whether any of them is done.
+  const plansByPrd = new Map<string, { ids: string[]; anyDone: boolean }>();
+  for (const { record } of state.items.values()) {
+    if (record.type !== "plan" || record.prd === undefined) continue;
+    const entry = plansByPrd.get(record.prd) ?? { ids: [], anyDone: false };
+    entry.ids.push(record.id);
+    entry.anyDone = entry.anyDone || record.status === "done";
+    plansByPrd.set(record.prd, entry);
+  }
+
+  for (const { record, path } of state.items.values()) {
+    if (record.type === "plan" || record.prd === undefined) continue;
+    if (record.status === "done" || record.status === "dropped") continue;
+    const plans = plansByPrd.get(record.prd);
+    if (plans === undefined || plans.anyDone) continue;
+    // Sort so the id listing (and thus the message) is deterministic.
+    const ids = [...plans.ids].sort().join(", ");
+    findings.push({
+      severity: "warning",
+      check: "item.prd-unapproved",
+      path,
+      message:
+        `item ${record.id} references ${record.prd} whose authoring plan item ${ids} ` +
+        `is not done (approval missing or revoked)`,
+      fix: "flip the authoring plan item to done once the PRD is approved (the prd-parse gate), or pause the feature work until then",
+    });
+  }
+  return findings;
+}
+
 /** Circular parent / depends_on detection; each cycle reported once. */
 function checkCycles(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -1292,6 +1340,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkRefs(state),
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
+    ...checkPrdApproval(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),

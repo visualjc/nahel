@@ -1,0 +1,12 @@
+{
+  "id": "qtcpdqwe",
+  "item": "ab394bmh",
+  "actor": {
+    "kind": "agent",
+    "id": "claude-code"
+  },
+  "lane": "full",
+  "phase": "implementing",
+  "status": "active",
+  "started": "2026-07-21T20:03:16Z"
+}

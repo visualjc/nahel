@@ -18,4 +18,9 @@ Alternatives rejected: sequential IDs with merge-time renumbering (breaks every 
 
 ## Consequences
 
-Parallel worktrees merge without state conflicts by construction. Costs: IDs are not human-memorable (humans use slugs; mirrors provide friendly numbers), and reading the journal requires a CLI merge step instead of `cat` — acceptable since prose views are rendered anyway (ADR-0006).
+Parallel worktrees merge without state conflicts by construction **for disjoint records** — two branches touching different items/runs/segments never conflict. Concurrent edits to the *same* record still git-conflict, deliberately: that is git surfacing a true concurrent edit, not a state-model failure. Costs: IDs are not human-memorable (humans use slugs; mirrors provide friendly numbers), and reading the journal requires a CLI merge step instead of `cat` — acceptable since prose views are rendered anyway (ADR-0006).
+
+## Known residuals (Phase 0, accepted and documented)
+
+- **Second-precision timestamps**: same-second cross-segment mutations of one record tie on `(ts)`; total order falls to segment-seq/event-id, and validate treats any max-ts per-segment-final candidate as in-sync. A crash in exactly that window can leave a record one same-second step behind while validate stays clean. Real fix later: subsecond timestamps or a causal tip rule.
+- **Single-writer-per-segment is cooperative**: the CLI's segment allocation guarantees it, but nothing enforces it against a process appending to another writer's active segment.

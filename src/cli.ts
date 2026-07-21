@@ -11,6 +11,7 @@ import { configCommand } from "./commands/config";
 import { distillCommand } from "./commands/distill";
 import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
+import { importCommand } from "./commands/import";
 import { installCommand } from "./commands/install";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
@@ -80,6 +81,7 @@ export const COMMANDS: Record<string, Command> = {
   distill: adapt(distillCommand),
   doctor: doctorCommand,
   handback: adapt(handbackCommand),
+  import: adapt(importCommand),
   init: initCommand,
   install: installCommand,
   item: adapt(itemCommand),

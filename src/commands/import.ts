@@ -6,6 +6,7 @@ import { CORE_EVENT_TYPES } from "../schema/events";
 import { generateId } from "../schema/id";
 import type { ExternalRef, WorkItemFrontmatter } from "../schema/records";
 import {
+  prdRelocationDest,
   readCcpmSource,
   readSourceDoc,
   relocatePrd,
@@ -247,23 +248,35 @@ async function crossCheckMapping(
   }
 }
 
+/** A PRD an epic references, read and ready to relocate (no writes done yet). */
+interface ResolvedEpicPrd {
+  /** The source-repo-relative candidate path that resolved. */
+  candidate: string;
+  fileBasename: string;
+  /** The deterministic docs/prds/ destination (the epic item's `prd` field). */
+  dest: string;
+  /** The PRD frontmatter with `status` removed (relocated status-stripped). */
+  strippedFrontmatter: Record<string, unknown>;
+  body: string;
+  /** The PRD's raw `status`, stripped from the copy but recorded on relocation. */
+  prdStatus: string | undefined;
+}
+
 /**
- * Relocate the PRD an epic references (ADR-0013): read it from the source
- * (its `prd:` path, falling back to `.claude/prds/<name>.md`), strip its
- * status, copy it into docs/prds/, and return the repo-relative dest for the
- * epic item's `prd` field plus the stripped status to record on the item. A
- * write only happens (and is only counted) when the dest is new or changed, so
- * a re-run relocates nothing again.
+ * Resolve the PRD an epic references (ADR-0013) WITHOUT writing anything: find
+ * the first candidate that reads (its `prd:` path, else `.claude/prds/<name>.md`),
+ * strip its status, and compute the deterministic docs/prds/ destination. Free
+ * of journal/item side effects, so importEpic can create the epic item —
+ * carrying this `dest` as its `prd` field — BEFORE any item-referencing
+ * relocation event is emitted (PRD F8.3, Finding 1: no journal event may
+ * reference an item not yet on disk; a crash in that window would dangle the
+ * ref forever). The destination is deterministic, so a crash after item
+ * creation but before relocation heals on re-run.
  */
-async function relocateEpicPrd(
-  ctx: StoreContext,
-  env: Env,
+async function resolveEpicPrd(
   sourceRoot: string,
   epic: CcpmEpic,
-  counts: ImportCounts,
-  relocatedBasenames: Set<string>,
-  owningItem: string,
-): Promise<string | undefined> {
+): Promise<ResolvedEpicPrd | undefined> {
   const candidates: string[] = [];
   const declared = epic.frontmatter["prd"];
   if (typeof declared === "string" && declared !== "") candidates.push(declared);
@@ -278,30 +291,57 @@ async function relocateEpicPrd(
     }
     if (doc === null) continue;
 
-    const fileBasename = basename(candidate);
-    const status = doc.frontmatter["status"];
+    const rawStatus = doc.frontmatter["status"];
     const stripped = { ...doc.frontmatter };
     delete stripped["status"];
-    const { dest, wrote } = await relocatePrd(ctx.layout.root, fileBasename, stripped, doc.body);
-    relocatedBasenames.add(fileBasename);
-    if (wrote) {
-      counts.prds_relocated += 1;
-      await appendEvent(ctx.layout, env, {
-        type: IMPORT_PRD_RELOCATED_EVENT_TYPE,
-        actor: ctx.actor,
-        session: ctx.session,
-        item: owningItem,
-        payload: {
-          source: candidate,
-          dest,
-          status_stripped: typeof status === "string" ? status : null,
-          owning_item: owningItem,
-        },
-      });
-    }
-    return dest;
+    const fileBasename = basename(candidate);
+    return {
+      candidate,
+      fileBasename,
+      dest: prdRelocationDest(fileBasename),
+      strippedFrontmatter: stripped,
+      body: doc.body,
+      prdStatus: typeof rawStatus === "string" ? rawStatus : undefined,
+    };
   }
   return undefined;
+}
+
+/**
+ * Materialize a resolved PRD into docs/prds/ and journal the relocation against
+ * the owning item — which by now exists on disk (importEpic creates it first,
+ * Finding 1). Idempotent via relocatePrd: a re-run that changes nothing writes
+ * nothing and emits no event.
+ */
+async function relocateResolvedPrd(
+  ctx: StoreContext,
+  env: Env,
+  resolved: ResolvedEpicPrd,
+  counts: ImportCounts,
+  relocatedBasenames: Set<string>,
+  owningItem: string,
+): Promise<void> {
+  relocatedBasenames.add(resolved.fileBasename);
+  const { dest, wrote } = await relocatePrd(
+    ctx.layout.root,
+    resolved.fileBasename,
+    resolved.strippedFrontmatter,
+    resolved.body,
+  );
+  if (!wrote) return;
+  counts.prds_relocated += 1;
+  await appendEvent(ctx.layout, env, {
+    type: IMPORT_PRD_RELOCATED_EVENT_TYPE,
+    actor: ctx.actor,
+    session: ctx.session,
+    item: owningItem,
+    payload: {
+      source: resolved.candidate,
+      dest,
+      status_stripped: resolved.prdStatus ?? null,
+      owning_item: owningItem,
+    },
+  });
 }
 
 /** Import one epic and its tasks; mutate() write-ahead-journals each creation. */
@@ -344,17 +384,12 @@ async function importEpic(
     taskPlans.push({ task, id, existing: match !== undefined, githubId, name });
   }
 
-  // PRD relocation runs whether or not the epic itself is new, so a partial
-  // prior run (item created, PRD not yet relocated) completes on re-run.
-  const prd = await relocateEpicPrd(
-    ctx,
-    env,
-    sourceRoot,
-    epic,
-    counts,
-    relocatedBasenames,
-    epicId,
-  );
+  // Resolve the PRD read-only (no journal writes): its docs/prds/ destination
+  // is deterministic, so the item can carry it as its `prd` field BEFORE the
+  // item exists — the actual relocation (which references the item) happens
+  // only after item creation below (PRD F8.3, Finding 1).
+  const resolvedPrd = await resolveEpicPrd(sourceRoot, epic);
+  const prd = resolvedPrd?.dest;
 
   // Create the epic item (feature, lane full) unless it already exists.
   if (epicMatch === undefined) {
@@ -405,6 +440,13 @@ async function importEpic(
     );
   } else {
     counts.items_skipped += 1;
+  }
+
+  // The epic item now exists on disk (freshly created or pre-existing), so the
+  // relocation event may safely reference it. Runs whether or not the epic was
+  // new, so a partial prior run (item created, PRD not yet relocated) heals.
+  if (resolvedPrd !== undefined) {
+    await relocateResolvedPrd(ctx, env, resolvedPrd, counts, relocatedBasenames, epicId);
   }
 
   // Create the tasks (feature/bug, lane direct, parented to the epic).

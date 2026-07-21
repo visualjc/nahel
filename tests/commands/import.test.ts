@@ -348,6 +348,36 @@ describe("nahel import --from-ccpm — the speed-count-game migration (PRD F8)",
   });
 });
 
+describe("nahel import — crash-window ordering (PRD F8.3, Finding 1 / PR #13)", () => {
+  test("the epic item.created event is journaled BEFORE any prd-relocated event referencing it — no journal event ever names an item absent from disk", async () => {
+    const { root, layout } = await destStore();
+    const source = await ccpmSource();
+    await importCommand.run(["--from-ccpm", "--source", source], seededEnv(), root);
+
+    const events = await journalEvents(layout);
+    const items = [...(await allItems(layout)).values()];
+    const epic = items.find((i) => i.name === "speed-count-cards-from-seed")!;
+
+    const createdAt = events.findIndex((e) => e.type === "item.created" && e.item === epic.id);
+    const relocatedAt = events.findIndex(
+      (e) => e.type === "import.prd-relocated" && e.item === epic.id,
+    );
+    expect(createdAt).toBeGreaterThanOrEqual(0);
+    expect(relocatedAt).toBeGreaterThanOrEqual(0);
+    // The item must be created before anything in the journal references it: a
+    // crash in the reverse window left a prd-relocated event pointing at an id
+    // no item ever backed.
+    expect(createdAt).toBeLessThan(relocatedAt);
+
+    // The invariant, stated directly: every item-referencing event names an
+    // item that actually exists on disk.
+    const onDisk = new Set(items.map((i) => i.id));
+    for (const e of events) {
+      if (e.item !== undefined) expect(onDisk.has(e.item)).toBe(true);
+    }
+  });
+});
+
 describe("nahel import --from-ccpm — github-mapping cross-check", () => {
   test("a mapping URL that disagrees with the task frontmatter is noted; frontmatter wins", async () => {
     const { root, layout } = await destStore();

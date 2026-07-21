@@ -162,6 +162,17 @@ export async function readSourceDoc(
 }
 
 /**
+ * The repo-relative path a relocated PRD basename lands at (`docs/prds/<name>`).
+ * Deterministic and I/O-free: the importer computes an epic item's `prd` field
+ * from it BEFORE the file is actually written, so a crash between item creation
+ * and relocation heals on re-run (the item already points at the eventual dest;
+ * relocatePrd materializes it idempotently). See import.ts (PRD F8.3).
+ */
+export function prdRelocationDest(fileBasename: string): string {
+  return join("docs", "prds", basename(fileBasename));
+}
+
+/**
  * Write a relocated PRD into the CURRENT repo's `docs/prds/` (ADR-0013). The
  * caller has already stripped the `status` field; this only materializes the
  * document. Idempotent: if `docs/prds/<basename>` already holds byte-identical
@@ -175,8 +186,7 @@ export async function relocatePrd(
   frontmatter: Record<string, unknown>,
   body: string,
 ): Promise<{ dest: string; wrote: boolean }> {
-  const safeName = basename(fileBasename);
-  const destRel = join("docs", "prds", safeName);
+  const destRel = prdRelocationDest(fileBasename);
   const destAbs = resolve(currentRoot, destRel);
   const text = serializeFrontmatter(frontmatter, body);
   const existing = await readFile(destAbs, "utf8").catch(() => null);

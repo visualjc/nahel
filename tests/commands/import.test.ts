@@ -378,6 +378,55 @@ describe("nahel import — crash-window ordering (PRD F8.3, Finding 1 / PR #13)"
   });
 });
 
+describe("nahel import — PRD/epic status conflict note (Finding 2 / PR #13)", () => {
+  async function sourceWith(epicStatus: string, prdStatus: string): Promise<string> {
+    const source = await tmp("nahel-import-prdconflict-");
+    const epicDir = join(source, ".claude", "epics", "demo");
+    await writeDoc(
+      join(epicDir, "epic.md"),
+      ["name: demo", `status: ${epicStatus}`, "prd: docs/prds/demo.md"],
+      "# Epic\n",
+    );
+    await writeDoc(
+      join(source, "docs", "prds", "demo.md"),
+      ["name: demo", `status: ${prdStatus}`],
+      "# PRD\n",
+    );
+    return source;
+  }
+
+  test("epic in-progress + PRD complete map to DIFFERENT universal statuses → a prd-status-conflict note names both; epic status still wins on the item", async () => {
+    const { root, layout } = await destStore();
+    const source = await sourceWith("in-progress", "complete");
+    await importCommand.run(["--from-ccpm", "--source", source], seededEnv(), root);
+
+    const items = [...(await allItems(layout)).values()];
+    const epic = items.find((i) => i.name === "demo")!;
+    // Epic status describes execution and wins; PRD status describes authoring.
+    expect(epic.status).toBe("in-progress");
+
+    const note = (await journalEvents(layout)).find(
+      (e) => e.type === "import.note" && e.payload["kind"] === "prd-status-conflict",
+    );
+    expect(note).toBeDefined();
+    expect(note!.item).toBe(epic.id);
+    expect(note!.payload["prd_status"]).toBe("complete");
+    expect(note!.payload["prd_mapped"]).toBe("done");
+    expect(note!.payload["item_status"]).toBe("in-progress");
+  });
+
+  test("epic completed + PRD complete both map to done → no conflict note", async () => {
+    const { root, layout } = await destStore();
+    const source = await sourceWith("completed", "complete");
+    await importCommand.run(["--from-ccpm", "--source", source], seededEnv(), root);
+
+    const note = (await journalEvents(layout)).find(
+      (e) => e.type === "import.note" && e.payload["kind"] === "prd-status-conflict",
+    );
+    expect(note).toBeUndefined();
+  });
+});
+
 describe("nahel import --from-ccpm — github-mapping cross-check", () => {
   test("a mapping URL that disagrees with the task frontmatter is noted; frontmatter wins", async () => {
     const { root, layout } = await destStore();

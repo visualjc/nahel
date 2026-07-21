@@ -312,6 +312,13 @@ async function resolveEpicPrd(
  * the owning item — which by now exists on disk (importEpic creates it first,
  * Finding 1). Idempotent via relocatePrd: a re-run that changes nothing writes
  * nothing and emits no event.
+ *
+ * The epic's status wins on the item (execution beats authoring), but a genuine
+ * CONFLICT must not pass silently (Finding 2): when the PRD's stripped status
+ * maps — via the same mapCcpmStatus table — to a DIFFERENT universal status
+ * than the owning item's, journal a prd-status-conflict note naming both
+ * originals and both mapped values. Tied to a real relocation (`wrote`) so it
+ * stays idempotent and heals with the relocation itself.
  */
 async function relocateResolvedPrd(
   ctx: StoreContext,
@@ -320,6 +327,7 @@ async function relocateResolvedPrd(
   counts: ImportCounts,
   relocatedBasenames: Set<string>,
   owningItem: string,
+  owningStatus: WorkItemStatus,
 ): Promise<void> {
   relocatedBasenames.add(resolved.fileBasename);
   const { dest, wrote } = await relocatePrd(
@@ -342,6 +350,25 @@ async function relocateResolvedPrd(
       owning_item: owningItem,
     },
   });
+
+  if (resolved.prdStatus !== undefined) {
+    const prdMapped = mapCcpmStatus(resolved.prdStatus).status;
+    if (prdMapped !== owningStatus) {
+      await emitNote(
+        ctx,
+        env,
+        counts,
+        {
+          kind: "prd-status-conflict",
+          prd_status: resolved.prdStatus,
+          prd_mapped: prdMapped,
+          item_status: owningStatus,
+          resolution: "epic status wins (execution over authoring)",
+        },
+        owningItem,
+      );
+    }
+  }
 }
 
 /** Import one epic and its tasks; mutate() write-ahead-journals each creation. */
@@ -391,13 +418,19 @@ async function importEpic(
   const resolvedPrd = await resolveEpicPrd(sourceRoot, epic);
   const prd = resolvedPrd?.dest;
 
+  // The epic's mapped status — used to create a new item and, either way, to
+  // detect a PRD/epic status conflict on relocation (Finding 2). An existing
+  // item's on-disk status is authoritative for that comparison.
+  const epicMapped = mapCcpmStatus(
+    typeof epic.frontmatter["status"] === "string"
+      ? (epic.frontmatter["status"] as string)
+      : undefined,
+  );
+  const owningStatus: WorkItemStatus = epicMatch?.frontmatter.status ?? epicMapped.status;
+
   // Create the epic item (feature, lane full) unless it already exists.
   if (epicMatch === undefined) {
-    const { status, original } = mapCcpmStatus(
-      typeof epic.frontmatter["status"] === "string"
-        ? (epic.frontmatter["status"] as string)
-        : undefined,
-    );
+    const { status, original } = epicMapped;
     const created = preserveTimestamp(epic.frontmatter["created"], env);
     const frontmatter: WorkItemFrontmatter = {
       id: epicId,
@@ -446,7 +479,15 @@ async function importEpic(
   // relocation event may safely reference it. Runs whether or not the epic was
   // new, so a partial prior run (item created, PRD not yet relocated) heals.
   if (resolvedPrd !== undefined) {
-    await relocateResolvedPrd(ctx, env, resolvedPrd, counts, relocatedBasenames, epicId);
+    await relocateResolvedPrd(
+      ctx,
+      env,
+      resolvedPrd,
+      counts,
+      relocatedBasenames,
+      epicId,
+      owningStatus,
+    );
   }
 
   // Create the tasks (feature/bug, lane direct, parented to the epic).

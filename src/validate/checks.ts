@@ -4,11 +4,15 @@ import {
   configSchema,
   observationFrontmatterSchema,
   runSchema,
+  skillsLockSchema,
+  skillsManifestSchema,
   workItemFrontmatterSchema,
   type Config,
   type JournalEvent,
   type ObservationFrontmatter,
   type Run,
+  type SkillsLock,
+  type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
@@ -78,6 +82,14 @@ export interface ValidationInput {
   runs: RawRunRecord[];
   observations: RawFrontmatterRecord[];
   segments: SegmentScan[];
+  /** `skills.yaml` — undefined text means absent (a repo may use no skills). */
+  skillsManifestPath: string;
+  skillsManifestText?: string;
+  skillsManifestError?: string;
+  /** `skills.lock` — undefined text means absent. */
+  skillsLockPath: string;
+  skillsLockText?: string;
+  skillsLockError?: string;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
@@ -99,6 +111,9 @@ interface ParsedState {
   /** Every valid event across all segments, in the ts → seq → id total order. */
   events: JournalEvent[];
   eventIds: Set<string>;
+  /** Parsed skills.yaml / skills.lock (undefined when absent or malformed). */
+  skillsManifest: SkillsManifest | undefined;
+  skillsLock: SkillsLock | undefined;
 }
 
 function zodIssues(error: z.ZodError): string {
@@ -126,6 +141,8 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     observations: new Map(),
     events: [],
     eventIds: new Set(),
+    skillsManifest: undefined,
+    skillsLock: undefined,
   };
 
   // Config.
@@ -164,6 +181,87 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
           path: input.configPath,
           message: `nahel/config is invalid: ${zodIssues(result.error)}`,
           fix: RESTORE_FIX,
+        });
+      }
+    }
+  }
+
+  // Skills manifest (skills.yaml, PRD F7). Absent is fine (undefined text);
+  // present-but-malformed is a schema error, so drift can trust what parsed.
+  if (input.skillsManifestError !== undefined) {
+    findings.push({
+      severity: "error",
+      check: "schema.skills-manifest",
+      path: input.skillsManifestPath,
+      message: `skills.yaml is unreadable: ${input.skillsManifestError}`,
+      fix: RESTORE_FIX,
+    });
+  } else if (input.skillsManifestText !== undefined) {
+    let parsed: unknown;
+    let yamlError: string | undefined;
+    try {
+      parsed = YAML.parse(input.skillsManifestText);
+    } catch (error) {
+      yamlError = errorMessage(error);
+    }
+    if (yamlError !== undefined) {
+      findings.push({
+        severity: "error",
+        check: "schema.skills-manifest",
+        path: input.skillsManifestPath,
+        message: `skills.yaml is not parseable YAML: ${yamlError}`,
+        fix: RESTORE_FIX,
+      });
+    } else {
+      const result = skillsManifestSchema.safeParse(parsed);
+      if (result.success) state.skillsManifest = result.data;
+      else {
+        findings.push({
+          severity: "error",
+          check: "schema.skills-manifest",
+          path: input.skillsManifestPath,
+          message: `skills.yaml is invalid: ${zodIssues(result.error)}`,
+          fix: RESTORE_FIX,
+        });
+      }
+    }
+  }
+
+  // Skills lockfile (skills.lock, PRD F7): JSON, same absent/malformed rules.
+  if (input.skillsLockError !== undefined) {
+    findings.push({
+      severity: "error",
+      check: "schema.skills-lock",
+      path: input.skillsLockPath,
+      message: `skills.lock is unreadable: ${input.skillsLockError}`,
+      fix: RESTORE_FIX,
+    });
+  } else if (input.skillsLockText !== undefined) {
+    let parsed: unknown;
+    let jsonError: string | undefined;
+    try {
+      parsed = JSON.parse(input.skillsLockText);
+    } catch (error) {
+      jsonError = errorMessage(error);
+    }
+    if (jsonError !== undefined) {
+      findings.push({
+        severity: "error",
+        check: "schema.skills-lock",
+        path: input.skillsLockPath,
+        message: `skills.lock is not parseable JSON: ${jsonError}`,
+        fix: "run `nahel skills lock` to regenerate it (or restore skills.lock from git)",
+      });
+    } else {
+      const result = skillsLockSchema.safeParse(parsed);
+      if (result.success) state.skillsLock = result.data;
+      else {
+        findings.push({
+          severity: "error",
+          check: "schema.skills-lock",
+          path: input.skillsLockPath,
+          message: `skills.lock is invalid: ${zodIssues(result.error)}`,
+          fix: "run `nahel skills lock` to regenerate it (or restore skills.lock from git)",
         });
       }
     }
@@ -872,6 +970,61 @@ function checkMaintenance(state: ParsedState): Finding[] {
   return findings;
 }
 
+/**
+ * Skills lockfile drift (PRD F7, ADR-0009): manifest and lock disagree.
+ * Deterministic — compares the two committed files only, NEVER the network.
+ * Three warnings, keyed by the source `repo`:
+ *   - a manifest source with no lock entry (needs `nahel skills lock`);
+ *   - a lock entry no longer in the manifest (an orphaned pin);
+ *   - a manifest source whose ref changed since it was locked (stale pin).
+ * A malformed manifest/lock produced a schema error already and leaves the
+ * parsed value undefined, so drift is skipped rather than reported twice.
+ */
+function checkSkillsDrift(state: ParsedState): Finding[] {
+  const manifest = state.skillsManifest;
+  const lock = state.skillsLock;
+  if (manifest === undefined && lock === undefined) return [];
+
+  const findings: Finding[] = [];
+  const lockByRepo = new Map((lock?.entries ?? []).map((entry) => [entry.repo, entry]));
+  const manifestRepos = new Set((manifest?.skills ?? []).map((source) => source.repo));
+
+  for (const source of manifest?.skills ?? []) {
+    const locked = lockByRepo.get(source.repo);
+    if (locked === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "skills.unlocked",
+        path: state.input.skillsManifestPath,
+        message: `skills.yaml lists ${source.repo} but skills.lock has no entry for it — the source is unpinned`,
+        fix: "run `nahel skills lock` to resolve and pin it",
+      });
+    } else if (locked.ref !== source.ref) {
+      findings.push({
+        severity: "warning",
+        check: "skills.stale",
+        path: state.input.skillsManifestPath,
+        message: `${source.repo} is pinned at ref ${locked.ref} (sha ${locked.sha}) but skills.yaml now asks for ref ${source.ref}`,
+        fix: "run `nahel skills lock` to re-resolve the changed ref",
+      });
+    }
+  }
+
+  for (const entry of lock?.entries ?? []) {
+    if (!manifestRepos.has(entry.repo)) {
+      findings.push({
+        severity: "warning",
+        check: "skills.orphaned",
+        path: state.input.skillsLockPath,
+        message: `skills.lock pins ${entry.repo} but skills.yaml no longer lists it`,
+        fix: "remove it from skills.lock (or restore the manifest source), then run `nahel skills lock`",
+      });
+    }
+  }
+
+  return findings;
+}
+
 /** Deterministic report order: errors first, then check, path, message. */
 function compareFindings(a: Finding, b: Finding): number {
   if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1;
@@ -898,6 +1051,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkDivergence(state),
     ...checkHotState(state),
     ...checkMaintenance(state),
+    ...checkSkillsDrift(state),
   );
   return findings.sort(compareFindings);
 }

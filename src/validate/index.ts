@@ -11,6 +11,8 @@ import {
   observationPath,
   readConfigText,
   readRunRecordText,
+  readSkillsLockText,
+  readSkillsManifestText,
   runRecordPath,
   type StoreLayout,
 } from "../store/layout";
@@ -71,12 +73,29 @@ export async function collectValidationInput(layout: StoreLayout): Promise<Valid
     runs: [],
     observations: [],
     segments: await scanSegments(layout),
+    skillsManifestPath: layout.skillsManifestPath,
+    skillsLockPath: layout.skillsLockPath,
   };
 
   try {
     input.configText = await readConfigText(layout);
   } catch (error) {
     input.configError = errorMessage(error);
+  }
+
+  // Skills manifest/lock are OPTIONAL: a null read means absent (no finding);
+  // only a real read failure becomes an error the checks report (PRD F7).
+  try {
+    const text = await readSkillsManifestText(layout);
+    if (text !== null) input.skillsManifestText = text;
+  } catch (error) {
+    input.skillsManifestError = errorMessage(error);
+  }
+  try {
+    const text = await readSkillsLockText(layout);
+    if (text !== null) input.skillsLockText = text;
+  } catch (error) {
+    input.skillsLockError = errorMessage(error);
   }
 
   // Ids below come from readdir (single path components — they cannot

@@ -9,6 +9,7 @@ const EXPECTED_STORE_FILES = [
   "actor.ts",
   "baseline.ts",
   "frontmatter.ts",
+  "healthcheck.ts",
   "hotstate.ts",
   "journal.ts",
   "layout.ts",
@@ -23,11 +24,13 @@ const FS_IMPORT = /from\s+["'](node:)?(fs|fs\/promises)["']/;
 const FORBIDDEN_EVERYWHERE = /from\s+["'](node:)?(net|http|https|http2|dns|tls)["']/;
 
 /**
- * Process spawning is store-layer I/O with exactly one legitimate use:
+ * Process spawning is store-layer I/O with exactly two legitimate uses:
  * baseline.ts spawning `git` for claim baselines and handback evidence
- * (PRD F9). Everywhere else it stays forbidden.
+ * (PRD F9), and healthcheck.ts spawning the run contract's healthcheck
+ * (PRD F2). Everywhere else it stays forbidden.
  */
 const PROCESS_SPAWN_IMPORT = /from\s+["'](node:)?(child_process|worker_threads)["']/;
+const SPAWN_ALLOWED = ["baseline.ts", "healthcheck.ts"];
 
 /** Ambient I/O and environment access forbidden in the store layer. */
 const FORBIDDEN_GLOBALS = [/\bfetch\s*\(/, /\bBun\.(file|write|spawn|serve|env)\b/, /\bprocess\.env\b/];
@@ -65,18 +68,20 @@ describe("store layer owns ALL fs I/O", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("spawning processes is store/baseline.ts's exclusive privilege (git evidence capture)", () => {
-    const baselinePath = join(STORE_DIR, "baseline.ts");
+  test("spawning processes is store-layer I/O, limited to baseline.ts (git) and healthcheck.ts (contract)", () => {
+    const allowedPaths = SPAWN_ALLOWED.map((name) => join(STORE_DIR, name));
     const offenders = tsFilesUnder(SRC_DIR)
-      .filter((path) => path !== baselinePath)
+      .filter((path) => !allowedPaths.includes(path))
       .filter((path) => PROCESS_SPAWN_IMPORT.test(readFileSync(path, "utf8")))
       .map((path) => relative(SRC_DIR, path));
     expect(offenders).toEqual([]);
-    // The exemption is load-bearing, not decorative: baseline.ts really does
-    // spawn git through child_process (and nothing broader).
-    const source = readFileSync(baselinePath, "utf8");
-    expect(source).toMatch(/from\s+["']node:child_process["']/);
-    expect(source).not.toMatch(/worker_threads/);
+    // The exemptions are load-bearing, not decorative: each allowed file really
+    // does spawn through child_process (and nothing broader).
+    for (const path of allowedPaths) {
+      const source = readFileSync(path, "utf8");
+      expect(source).toMatch(/from\s+["']node:child_process["']/);
+      expect(source).not.toMatch(/worker_threads/);
+    }
   });
 
   for (const file of EXPECTED_STORE_FILES) {

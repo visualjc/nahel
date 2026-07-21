@@ -7,6 +7,7 @@
 // inside each command.
 
 import { briefCommand } from "./commands/brief";
+import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
 import { installCommand } from "./commands/install";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
@@ -33,6 +34,13 @@ export interface CommandContext {
    * injected value (see store/actor.ts).
    */
   actorOverride?: string;
+  /**
+   * Whether a named environment variable is set on this machine (PRD F2). A
+   * PRESENCE predicate, never a value accessor: cli.ts is the single reader of
+   * the ambient process environment and hands `nahel doctor` only yes/no per
+   * name, so a secret VALUE has no path into any command (ADR-0014).
+   */
+  envPresent?: (name: string) => boolean;
   /** Write one line of normal output. */
   stdout: (text: string) => void;
   /** Write one line of error/warning output. */
@@ -63,6 +71,7 @@ function adapt(command: {
 export const COMMANDS: Record<string, Command> = {
   brief: briefCommand,
   claim: adapt(claimCommand),
+  doctor: doctorCommand,
   handback: adapt(handbackCommand),
   init: initCommand,
   install: installCommand,
@@ -126,6 +135,12 @@ if (import.meta.main) {
     env: systemEnv(),
     cwd: process.cwd(),
     actorOverride: process.env[NAHEL_ACTOR_VAR],
+    // A var is "set" only when present AND non-empty: an empty value in a .env
+    // is not a filled secret. Presence, never the value, crosses into commands.
+    envPresent: (name) => {
+      const value = process.env[name];
+      return typeof value === "string" && value.length > 0;
+    },
     stdout: console.log,
     stderr: console.error,
   });

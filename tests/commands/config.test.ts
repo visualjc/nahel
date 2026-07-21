@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { configCommand, SETTABLE_CONFIG_SECTIONS } from "../../src/commands/config";
 import type { JournalEvent } from "../../src/schema/records";
 import { listSegments, readJournal } from "../../src/store/journal";
@@ -222,5 +223,43 @@ describe("nahel config set — refusals (config untouched, nothing journaled)", 
     errs = [];
     expect(await configCommand.run(["get", "routing"], env, root)).toBe(1);
     expect(errs.join("\n")).toContain("usage");
+  });
+});
+
+describe("canonical workflow docs driving config set (F4, F3.2)", () => {
+  /** Read a shipped workflow doc and prove it valid per the canonical format. */
+  async function shippedWorkflow(file: string) {
+    const path = join(import.meta.dir, "../../nahel/workflows", file);
+    const { readFrontmatterFile } = await import("../../src/store/frontmatter");
+    const { parseWorkflowDoc } = await import("../../src/install/workflow");
+    const { frontmatter, body } = await readFrontmatterFile(path);
+    return { parsed: parseWorkflowDoc(file, frontmatter), body };
+  }
+
+  test("nahel/workflows/inception.md is a valid canonical doc driving the founding mechanics", async () => {
+    const { parsed, body } = await shippedWorkflow("inception.md");
+    expect(parsed.name).toBe("inception");
+    expect(parsed.description.length).toBeGreaterThan(0);
+    // The judgment lives in the doc; the mechanics are exactly this CLI.
+    expect(body).toContain("nahel config set inception");
+    expect(body).toContain("nahel config set governance");
+    expect(body).toContain("nahel config set contract");
+    expect(body).toContain("nahel item new");
+    // Tier vocabulary, brownfield mode, and the ratchet are stated in the doc.
+    for (const term of ["seed", "standard", "full", "rownfield", "ratchet"]) {
+      expect(body).toContain(term);
+    }
+  });
+
+  test("nahel/workflows/setup-routing.md is a valid canonical doc writing routing via the CLI", async () => {
+    const { parsed, body } = await shippedWorkflow("setup-routing.md");
+    expect(parsed.name).toBe("setup-routing");
+    expect(parsed.description.length).toBeGreaterThan(0);
+    expect(body).toContain("nahel config set routing");
+    // Detection covers the known agent CLIs; semantics are advisory (ADR-0015).
+    for (const cli of ["claude", "codex", "cursor-agent", "opencode"]) {
+      expect(body).toContain(cli);
+    }
+    expect(body.toLowerCase()).toContain("advisory");
   });
 });

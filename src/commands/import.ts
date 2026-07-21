@@ -263,17 +263,27 @@ interface ResolvedEpicPrd {
 }
 
 /**
- * Resolve the PRD an epic references (ADR-0013) WITHOUT writing anything: find
- * the first candidate that reads (its `prd:` path, else `.claude/prds/<name>.md`),
- * strip its status, and compute the deterministic docs/prds/ destination. Free
- * of journal/item side effects, so importEpic can create the epic item —
- * carrying this `dest` as its `prd` field — BEFORE any item-referencing
- * relocation event is emitted (PRD F8.3, Finding 1: no journal event may
- * reference an item not yet on disk; a crash in that window would dangle the
- * ref forever). The destination is deterministic, so a crash after item
- * creation but before relocation heals on re-run.
+ * Resolve the PRD an epic references (ADR-0013) WITHOUT writing item state:
+ * find the first candidate that reads (its `prd:` path, else
+ * `.claude/prds/<name>.md`), strip its status, and compute the deterministic
+ * docs/prds/ destination. Emits no item-referencing event — so importEpic can
+ * create the epic item carrying this `dest` as its `prd` field BEFORE any
+ * relocation event references the item (PRD F8.3, Finding 1). The destination
+ * is deterministic, so a crash after item creation but before relocation heals
+ * on re-run.
+ *
+ * A candidate that is genuinely ABSENT (readSourceDoc returns null on
+ * ENOENT/ENOTDIR) falls through to the next candidate silently. A candidate
+ * that FAILS to read — an unsafe path (CcpmSourceError) or malformed/unreadable
+ * frontmatter (a thrown parse/read error) — is not "no PRD": it drops that
+ * candidate WITH a journaled prd-unreadable note (Finding 4), so omitted
+ * knowledge is surfaced in counts.notes rather than reported as success. The
+ * note carries no item ref (the item may not exist yet — Finding 1).
  */
 async function resolveEpicPrd(
+  ctx: StoreContext,
+  env: Env,
+  counts: ImportCounts,
   sourceRoot: string,
   epic: CcpmEpic,
 ): Promise<ResolvedEpicPrd | undefined> {
@@ -286,8 +296,16 @@ async function resolveEpicPrd(
     let doc: CcpmUnitFile | null;
     try {
       doc = await readSourceDoc(sourceRoot, candidate);
-    } catch {
-      continue; // an unsafe path is skipped; the next candidate may resolve
+    } catch (error) {
+      // Unsafe path or parse/read failure — do NOT relocate this candidate, but
+      // do not silently degrade to "no PRD" either: name it so the omission is
+      // auditable. Try the next candidate.
+      await emitNote(ctx, env, counts, {
+        kind: "prd-unreadable",
+        candidate,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
     }
     if (doc === null) continue;
 
@@ -415,7 +433,7 @@ async function importEpic(
   // is deterministic, so the item can carry it as its `prd` field BEFORE the
   // item exists — the actual relocation (which references the item) happens
   // only after item creation below (PRD F8.3, Finding 1).
-  const resolvedPrd = await resolveEpicPrd(sourceRoot, epic);
+  const resolvedPrd = await resolveEpicPrd(ctx, env, counts, sourceRoot, epic);
   const prd = resolvedPrd?.dest;
 
   // The epic's mapped status — used to create a new item and, either way, to

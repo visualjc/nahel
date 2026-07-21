@@ -427,6 +427,43 @@ describe("nahel import — PRD/epic status conflict note (Finding 2 / PR #13)", 
   });
 });
 
+describe("nahel import — unreadable PRD candidate is noted, not silently dropped (Finding 4 / PR #13)", () => {
+  test("an epic PRD with malformed frontmatter completes the import with a prd-unreadable note naming the file", async () => {
+    const { root, layout } = await destStore();
+    const source = await tmp("nahel-import-badprd-");
+    const epicDir = join(source, ".claude", "epics", "demo");
+    await writeDoc(
+      join(epicDir, "epic.md"),
+      ["name: demo", "status: backlog", "prd: docs/prds/demo.md"],
+      "# Epic\n",
+    );
+    // The referenced PRD exists but its frontmatter never closes — parseFrontmatter
+    // throws. The old `catch { continue }` swallowed this as "no PRD".
+    await mkdir(join(source, "docs", "prds"), { recursive: true });
+    await writeFile(join(source, "docs", "prds", "demo.md"), "---\nname: demo\nstatus: complete", "utf8");
+
+    const code = await importCommand.run(["--from-ccpm", "--source", source], seededEnv(), root);
+    expect(code).toBe(0); // the import still completes
+    expect(errs.join("\n")).toBe("");
+
+    // The epic imported — the omission is surfaced, not hidden behind success.
+    const items = [...(await allItems(layout)).values()];
+    expect(items.find((i) => i.name === "demo")).toBeDefined();
+
+    // A journaled note names the unreadable candidate and its reason.
+    const note = (await journalEvents(layout)).find(
+      (e) => e.type === "import.note" && e.payload["kind"] === "prd-unreadable",
+    );
+    expect(note).toBeDefined();
+    expect(String(note!.payload["candidate"])).toContain("demo.md");
+    expect(String(note!.payload["reason"]).length).toBeGreaterThan(0);
+
+    // counts.notes reflects it (the summary event tallies the anomaly).
+    const summary = (await journalEvents(layout)).find((e) => e.type === "import.completed");
+    expect((summary!.payload["notes"] as number)).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("nahel import --from-ccpm — github-mapping cross-check", () => {
   test("a mapping URL that disagrees with the task frontmatter is noted; frontmatter wins", async () => {
     const { root, layout } = await destStore();

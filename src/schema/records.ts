@@ -143,7 +143,9 @@ export type JournalEvent = z.infer<typeof journalEventSchema>;
 /**
  * Observation frontmatter — one durable curated fact; sources are journal
  * event ids. `name` is the recall-searchable slug `nahel observe <slug>`
- * writes; optional because Phase-0 records predate it.
+ * writes; optional because Phase-0 records predate it. `item` optionally
+ * names the work item the fact is ABOUT (F5 — e.g. a repro waiver cites its
+ * bug), written by `nahel observe --item`.
  */
 export const observationFrontmatterSchema = z.strictObject({
   id: idField,
@@ -151,6 +153,7 @@ export const observationFrontmatterSchema = z.strictObject({
   created: timestampField,
   tags: z.array(nonEmptyString("tag")),
   sources: z.array(idField),
+  item: idField.optional(),
 });
 export type ObservationFrontmatter = z.infer<typeof observationFrontmatterSchema>;
 

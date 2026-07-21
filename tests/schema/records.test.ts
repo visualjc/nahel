@@ -512,6 +512,25 @@ describe("schema/records — observation frontmatter", () => {
     );
     expect(issues.some((i) => i.startsWith("name:") && i.includes("slug"))).toBe(true);
   });
+
+  test("accepts an optional item ref (F5: an observation about a work item, e.g. a repro waiver)", () => {
+    expectAccepted(
+      observationFrontmatterSchema,
+      { ...validObservation, item: "0gz8r4cm" },
+      "observation with item",
+    );
+    const parsed = observationFrontmatterSchema.parse({ ...validObservation, item: "0gz8r4cm" });
+    expect(parsed.item).toBe("0gz8r4cm");
+  });
+
+  test("rejects a malformed item ref (item refs are nahel ids)", () => {
+    const issues = rejectionIssues(
+      observationFrontmatterSchema,
+      { ...validObservation, item: "not-an-id" },
+      "observation bad item ref",
+    );
+    expect(issues.some((i) => i.startsWith("item:") && i.includes("base32"))).toBe(true);
+  });
 });
 
 describe("schema/records — config", () => {

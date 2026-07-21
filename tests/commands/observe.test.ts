@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { rm } from "node:fs/promises";
+import { itemCommand } from "../../src/commands/item";
 import { observeCommand } from "../../src/commands/observe";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
@@ -76,6 +77,16 @@ async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
   return Array.fromAsync(readJournal(layout));
 }
 
+/** Create a bug item through the real command; returns its printed id. */
+async function newItem(env: Env, root: string): Promise<string> {
+  const before = logs.length;
+  const code = await itemCommand.run(["new", "bug", "auth-500", "direct"], env, root);
+  expect(code).toBe(0);
+  const id = logs[before];
+  if (id === undefined) throw new Error("item new printed nothing");
+  return id;
+}
+
 describe("nahel observe — creating an observation", () => {
   test("creates the record via the choke point: printed id, frontmatter fields, write-ahead event", async () => {
     const { root, layout, env } = await setup();
@@ -138,6 +149,75 @@ describe("nahel observe — creating an observation", () => {
     expect(record.frontmatter.sources).toEqual([source]);
     expect(record.frontmatter.tags).toEqual(["single"]); // bare string normalized
     expect(record.body).toBe("The fact.\n");
+  });
+});
+
+describe("nahel observe — item reference (--item, F5)", () => {
+  test("--item records the referenced work item on the observation (repro-waiver shape)", async () => {
+    const { root, layout, env } = await setup();
+    const itemId = await newItem(env, root);
+    const source = await seedSourceEvent(layout, env);
+
+    const code = await observeCommand.run(
+      [
+        "repro-waived-auth-500",
+        "--item",
+        itemId,
+        "--data",
+        `sources=${source}`,
+        "--data",
+        "body=Repro waived: three attempts documented in the investigation failed.",
+        "--data",
+        'tags=["repro-waiver"]',
+      ],
+      env,
+      root,
+    );
+    expect(stderr()).toBe("");
+    expect(code).toBe(0);
+    const record = await readObservation(layout, logs[logs.length - 1]!);
+    expect(record.frontmatter.item).toBe(itemId);
+    expect(record.frontmatter.tags).toEqual(["repro-waiver"]);
+  });
+
+  test("without --item the record carries no item key at all", async () => {
+    const { root, layout, env } = await setup();
+    const source = await seedSourceEvent(layout, env);
+    const code = await observeCommand.run(
+      ["itemless", "--data", `sources=${source}`, "--data", "body=A fact."],
+      env,
+      root,
+    );
+    expect(stderr()).toBe("");
+    expect(code).toBe(0);
+    const record = await readObservation(layout, logs[logs.length - 1]!);
+    expect("item" in record.frontmatter).toBe(false);
+  });
+
+  test("--item must reference an existing work item — nothing written otherwise", async () => {
+    const { root, layout, env } = await setup();
+    const source = await seedSourceEvent(layout, env);
+    const code = await observeCommand.run(
+      ["ghost-item", "--item", "zzzzzzzz", "--data", `sources=${source}`, "--data", "body=x"],
+      env,
+      root,
+    );
+    expect(code).toBe(1);
+    expect(stderr()).toContain("zzzzzzzz");
+    expect(stderr()).toContain("existing work item");
+    expect(await listObservations(layout)).toEqual([]);
+  });
+
+  test("--item refuses a malformed id before touching the store", async () => {
+    const { root, layout, env } = await setup();
+    const code = await observeCommand.run(
+      ["bad-item-id", "--item", "not-an-id", "--data", "sources=aaaaaaaa", "--data", "body=x"],
+      env,
+      root,
+    );
+    expect(code).toBe(1);
+    expect(stderr()).toContain("not-an-id");
+    expect(await listObservations(layout)).toEqual([]);
   });
 });
 

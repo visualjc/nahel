@@ -8,6 +8,7 @@ import {
   type ObservationFrontmatter,
 } from "../schema/records";
 import { readJournal } from "../store/journal";
+import { itemExists } from "../store/layout";
 import { closeStoreContext, mutate } from "../store/mutate";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
 import { parseDataEntries } from "./log";
@@ -22,8 +23,10 @@ import { parseDataEntries } from "./log";
  */
 
 const USAGE = `usage:
-  nahel observe <slug> --data <json|key=val> [--data ...]
+  nahel observe <slug> [--item <id>] --data <json|key=val> [--data ...]
     Create an observation record (one fact per record) and print its id.
+    --item: the existing work item this observation is about (F5 — e.g. a
+    repro waiver cites its bug item).
     --data speaks \`nahel log\`'s dialect (a JSON object or key=value) with keys:
       body     (required) the fact itself, stored as the record's markdown body
       sources  (required) provenance journal event id(s) — a string or JSON array
@@ -43,12 +46,13 @@ interface ObserveInput {
   body: string;
   tags: string[];
   sources: string[];
+  item?: string;
 }
 
 function parseObserveArgs(args: string[]): ObserveInput {
   const { values, positionals } = parseArgs({
     args,
-    options: { data: { type: "string", multiple: true } },
+    options: { data: { type: "string", multiple: true }, item: { type: "string" } },
     allowPositionals: true,
   });
   if (positionals.length !== 1) {
@@ -84,7 +88,11 @@ function parseObserveArgs(args: string[]): ObserveInput {
     }
   }
   const tags = data["tags"] === undefined ? [] : stringList(data["tags"], "tags");
-  return { name, body: data["body"], tags, sources };
+  const item =
+    values.item === undefined
+      ? undefined
+      : requireValid(observationFrontmatterSchema.shape.item, values.item, "--item");
+  return { name, body: data["body"], tags, sources, ...(item === undefined ? {} : { item }) };
 }
 
 async function runObserve(
@@ -95,6 +103,14 @@ async function runObserve(
 ): Promise<number> {
   const input = parseObserveArgs(args);
   const ctx = await commandContext(cwd, env, actorOverride);
+
+  // Write-time referential check, `nahel log --item` style: an observation
+  // about a work item must cite one that exists.
+  if (input.item !== undefined && !(await itemExists(ctx.layout, input.item))) {
+    throw new UsageError(
+      `--item ${input.item} does not reference an existing work item — check the id`,
+    );
+  }
 
   // Provenance is verified against the real journal (active + archived —
   // event ids are stable across rotation, ADR-0012). Stream until every
@@ -117,6 +133,7 @@ async function runObserve(
     created: env.now(),
     tags: input.tags,
     sources: input.sources,
+    ...(input.item === undefined ? {} : { item: input.item }),
   });
   const body = input.body.endsWith("\n") ? input.body : `${input.body}\n`;
   await mutate(ctx, {

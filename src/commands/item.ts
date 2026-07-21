@@ -132,19 +132,22 @@ const CLOSED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
 const USAGE = `usage:
   nahel item new <type> <name> <lane> [--parent <id>] [--depends-on <id>]...
                  [--external-ref <provider>:<id>]... [--prd <path>]
+                 [--investigation <path>]
     Create a work item (status starts at backlog) and print its generated id.
       type: ${WORK_ITEM_TYPES.join(" | ")}
       lane: ${LANES.join(" | ")}
       --prd: repo-relative path to the item's PRD document (ADR-0013)
+      --investigation: repo-relative path to a bug's investigation document (F5)
 
   nahel item update <id> [--status <status>] [--lane <lane>] [--parent <id>]
                     [--depends-on <id>]... [--external-ref <provider>:<id>]...
-                    [--prd <path>] [--reopen] [--clear-parent]
-                    [--clear-depends-on] [--clear-external-refs] [--clear-prd]
+                    [--prd <path>] [--investigation <path>] [--reopen]
+                    [--clear-parent] [--clear-depends-on] [--clear-external-refs]
+                    [--clear-prd] [--clear-investigation]
     Update fields; the CLI maintains \`updated\`. Repeatable --depends-on and
     --external-ref replace the whole list; --clear-parent, --clear-depends-on,
-    --clear-external-refs and --clear-prd remove the field / empty the list
-    (each is mutually exclusive with its set flag).
+    --clear-external-refs, --clear-prd and --clear-investigation remove the
+    field / empty the list (each is mutually exclusive with its set flag).
       status: ${WORK_ITEM_STATUSES.join(" | ")}
       Any status transition is legal except re-opening a done or dropped item,
       which requires --reopen (guard against accidental resurrection);
@@ -163,6 +166,7 @@ async function itemNew(
       "depends-on": { type: "string", multiple: true },
       "external-ref": { type: "string", multiple: true },
       prd: { type: "string" },
+      investigation: { type: "string" },
     },
     allowPositionals: true,
   });
@@ -182,6 +186,14 @@ async function itemNew(
     values.prd === undefined
       ? undefined
       : requireValid(workItemFrontmatterSchema.shape.prd, values.prd, "--prd");
+  const investigation =
+    values.investigation === undefined
+      ? undefined
+      : requireValid(
+          workItemFrontmatterSchema.shape.investigation,
+          values.investigation,
+          "--investigation",
+        );
 
   const ctx = await commandContext(cwd, env, actorOverride);
   if (values.parent !== undefined) {
@@ -202,6 +214,7 @@ async function itemNew(
     depends_on: values["depends-on"] ?? [],
     external_refs: externalRefs,
     ...(prd === undefined ? {} : { prd }),
+    ...(investigation === undefined ? {} : { investigation }),
     created,
     updated: created,
   };
@@ -231,11 +244,13 @@ async function itemUpdate(
       "depends-on": { type: "string", multiple: true },
       "external-ref": { type: "string", multiple: true },
       prd: { type: "string" },
+      investigation: { type: "string" },
       reopen: { type: "boolean" },
       "clear-parent": { type: "boolean" },
       "clear-depends-on": { type: "boolean" },
       "clear-external-refs": { type: "boolean" },
       "clear-prd": { type: "boolean" },
+      "clear-investigation": { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -249,6 +264,7 @@ async function itemUpdate(
     ["depends-on", "clear-depends-on"],
     ["external-ref", "clear-external-refs"],
     ["prd", "clear-prd"],
+    ["investigation", "clear-investigation"],
   ] as const) {
     if (values[setFlag] !== undefined && values[clearFlag] === true) {
       throw new UsageError(
@@ -263,15 +279,17 @@ async function itemUpdate(
     values["depends-on"] !== undefined ||
     values["external-ref"] !== undefined ||
     values.prd !== undefined ||
+    values.investigation !== undefined ||
     values["clear-parent"] === true ||
     values["clear-depends-on"] === true ||
     values["clear-external-refs"] === true ||
-    values["clear-prd"] === true;
+    values["clear-prd"] === true ||
+    values["clear-investigation"] === true;
   if (!hasChange) {
     throw new UsageError(
       "nothing to update — pass at least one of --status, --lane, --parent, --depends-on, " +
-        "--external-ref, --prd, --clear-parent, --clear-depends-on, --clear-external-refs, " +
-        "--clear-prd",
+        "--external-ref, --prd, --investigation, --clear-parent, --clear-depends-on, " +
+        "--clear-external-refs, --clear-prd, --clear-investigation",
     );
   }
 
@@ -320,6 +338,15 @@ async function itemUpdate(
     // (ADR-0012: the PRD document may arrive by a later merge).
     next.prd = requireValid(workItemFrontmatterSchema.shape.prd, values.prd, "--prd");
   }
+  if (values.investigation !== undefined) {
+    // Same reference semantics as --prd: schema-hardened path, existence is
+    // validate's concern (ADR-0012: the document may arrive by a later merge).
+    next.investigation = requireValid(
+      workItemFrontmatterSchema.shape.investigation,
+      values.investigation,
+      "--investigation",
+    );
+  }
   // Clears build the full post-mutation record — "cleared" is an ABSENT
   // parent key (never parent: undefined/null), an empty list for the others.
   // The store's claim check still reads the CURRENT chain from disk starting
@@ -336,6 +363,9 @@ async function itemUpdate(
   }
   if (values["clear-prd"] === true) {
     delete next.prd;
+  }
+  if (values["clear-investigation"] === true) {
+    delete next.investigation;
   }
   next.updated = env.now();
 

@@ -520,6 +520,133 @@ describe("item update", () => {
     });
   });
 
+  // F5: bug items reference their investigation document by repo-relative
+  // path, following the --prd set/clear flag conventions exactly.
+  describe("investigation path (--investigation / --clear-investigation)", () => {
+    test("item new --investigation records the repo-relative path and round-trips it", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root, ["--investigation", "docs/investigations/auth-500.md"]);
+
+      const { frontmatter } = await readItem(layout, id);
+      expect(frontmatter.investigation).toBe("docs/investigations/auth-500.md");
+      // Journaled like any mutation: the write-ahead payload IS the record.
+      const events = await journalEvents(layout);
+      expect((events[0]!.payload["record"] as Record<string, unknown>)["investigation"]).toBe(
+        "docs/investigations/auth-500.md",
+      );
+    });
+
+    test("item new without --investigation records no investigation key at all", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root);
+      const { frontmatter } = await readItem(layout, id);
+      expect("investigation" in frontmatter).toBe(false);
+    });
+
+    test("item new --investigation rejects an absolute path with the repo-relative rule, nothing created", async () => {
+      const { root, layout, env } = await setup();
+      const code = await itemCommand.run(
+        ["new", "bug", "bad-investigation", "direct", "--investigation", "/etc/inv/x.md"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("repo-relative");
+      expect(await listItems(layout)).toEqual([]);
+    });
+
+    test('item new --investigation rejects a ".." traversal path, nothing created', async () => {
+      const { root, layout, env } = await setup();
+      const code = await itemCommand.run(
+        ["new", "bug", "bad-investigation", "direct", "--investigation", "../outside.md"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("..");
+      expect(await listItems(layout)).toEqual([]);
+    });
+
+    test("item update --investigation sets the path on an existing item, journaled", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root);
+      const code = await itemCommand.run(
+        ["update", id, "--investigation", "docs/investigations/test-item.md"],
+        env,
+        root,
+      );
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
+
+      const after = await readItem(layout, id);
+      expect(after.frontmatter.investigation).toBe("docs/investigations/test-item.md");
+      expect(after.frontmatter.updated > after.frontmatter.created).toBe(true);
+      const events = await journalEvents(layout);
+      expect(events[events.length - 2]!.payload["record"]).toEqual(after.frontmatter);
+    });
+
+    test("item update --investigation rejects an invalid path and writes nothing", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root);
+      const code = await itemCommand.run(
+        ["update", id, "--investigation", "docs/../../etc/passwd"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("..");
+      expect((await readItem(layout, id)).frontmatter.investigation).toBeUndefined();
+    });
+
+    test("--clear-investigation removes the field; the journaled record carries NO investigation key", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root, ["--investigation", "docs/investigations/test-item.md"]);
+
+      const code = await itemCommand.run(["update", id, "--clear-investigation"], env, root);
+      expect(stderr()).toBe("");
+      expect(code).toBe(0);
+
+      const after = await readItem(layout, id);
+      expect("investigation" in after.frontmatter).toBe(false);
+      const events = await journalEvents(layout);
+      const updated = events[events.length - 2]!;
+      expect(updated.type).toBe("item.updated");
+      expect("investigation" in (updated.payload["record"] as Record<string, unknown>)).toBe(false);
+    });
+
+    test("--clear-investigation counts as a change on its own — no 'nothing to update'", async () => {
+      const { root, env } = await setup();
+      const id = await newItem(env, root);
+      expect(await itemCommand.run(["update", id, "--clear-investigation"], env, root)).toBe(0);
+    });
+
+    test("--investigation and --clear-investigation together: mutually exclusive error, nothing written", async () => {
+      const { root, layout, env } = await setup();
+      const id = await newItem(env, root, ["--investigation", "docs/investigations/test-item.md"]);
+      const code = await itemCommand.run(
+        ["update", id, "--investigation", "docs/investigations/other.md", "--clear-investigation"],
+        env,
+        root,
+      );
+      expect(code).toBe(1);
+      expect(stderr()).toContain("mutually exclusive");
+      expect(stderr()).toContain("--clear-investigation");
+      expect((await readItem(layout, id)).frontmatter.investigation).toBe(
+        "docs/investigations/test-item.md",
+      );
+    });
+
+    test("a missing investigation file is NOT a write-time error — the path is a reference (ADR-0012)", async () => {
+      const { root, layout, env } = await setup();
+      // Nothing at docs/investigations/never-written.md; creation must still
+      // succeed — the document may arrive by a later merge.
+      const id = await newItem(env, root, ["--investigation", "docs/investigations/never-written.md"]);
+      expect((await readItem(layout, id)).frontmatter.investigation).toBe(
+        "docs/investigations/never-written.md",
+      );
+    });
+  });
+
   // PR #12 review: without explicit clear flags the CLI could SET
   // parent/depends_on/external_refs but never CLEAR them — forcing hand-edits,
   // which violates CLI-only mutation (hard constraint 3).

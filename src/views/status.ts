@@ -13,7 +13,21 @@ function runPhase(entry: RunSnapshot): string {
   return typeof mirrored === "string" ? mirrored : entry.run.phase;
 }
 
-function itemLine(node: ItemNode, depth: number, knownIds: ReadonlySet<string>): string {
+/**
+ * Rendering knobs. `showPrd` adds `prd=<path>` to item lines that carry one
+ * (F1, ADR-0013) — `nahel status` is the detailed view and turns it on; the
+ * default stays terse so brief's composed item-statuses section is unchanged.
+ */
+export interface RenderStatusOptions {
+  showPrd?: boolean;
+}
+
+function itemLine(
+  node: ItemNode,
+  depth: number,
+  knownIds: ReadonlySet<string>,
+  options: RenderStatusOptions,
+): string {
   const { item } = node;
   const parts = [
     `${"  ".repeat(depth + 1)}${item.name}`,
@@ -22,6 +36,7 @@ function itemLine(node: ItemNode, depth: number, knownIds: ReadonlySet<string>):
     `lane=${item.lane}`,
     `id=${item.id}`,
   ];
+  if (options.showPrd === true && item.prd !== undefined) parts.push(`prd=${item.prd}`);
   if (item.claimed_by !== undefined) parts.push(`claimed_by=${item.claimed_by}`);
   if (item.parent !== undefined && !knownIds.has(item.parent)) {
     parts.push(`parent=${item.parent} (missing)`);
@@ -33,11 +48,12 @@ function renderNodes(
   nodes: readonly ItemNode[],
   depth: number,
   knownIds: ReadonlySet<string>,
+  options: RenderStatusOptions,
   out: string[],
 ): void {
   for (const node of nodes) {
-    out.push(itemLine(node, depth, knownIds));
-    renderNodes(node.children, depth + 1, knownIds, out);
+    out.push(itemLine(node, depth, knownIds, options));
+    renderNodes(node.children, depth + 1, knownIds, options, out);
   }
 }
 
@@ -53,7 +69,7 @@ function runLine(entry: RunSnapshot): string {
 }
 
 /** Render the work-item tree (via parent), claims, and open runs with phases. */
-export function renderStatus(snapshot: Snapshot): string {
+export function renderStatus(snapshot: Snapshot, options: RenderStatusOptions = {}): string {
   const lines: string[] = [];
 
   if (snapshot.items.length === 0) {
@@ -61,7 +77,7 @@ export function renderStatus(snapshot: Snapshot): string {
   } else {
     lines.push("work items:");
     const knownIds = new Set(snapshot.items.map((item) => item.id));
-    renderNodes(buildItemTree(snapshot.items), 0, knownIds, lines);
+    renderNodes(buildItemTree(snapshot.items), 0, knownIds, options, lines);
   }
 
   lines.push("");

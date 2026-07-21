@@ -80,6 +80,24 @@ describe("renderStatus — work-item tree", () => {
   });
 });
 
+describe("renderStatus — prd paths (F1, ADR-0013)", () => {
+  test("with showPrd, an item carrying a prd renders prd=<path>; items without stay terse", () => {
+    const env = seededEnv();
+    const withPrd = makeFrontmatter(env, { name: "prd-item", prd: "docs/prds/auth.md" });
+    const without = makeFrontmatter(env, { name: "plain-item" });
+    const rendered = renderStatus({ items: [withPrd, without], runs: [] }, { showPrd: true });
+    const lines = rendered.split("\n");
+    expect(lines.find((line) => line.includes("prd-item"))).toContain("prd=docs/prds/auth.md");
+    expect(lines.find((line) => line.includes("plain-item"))).not.toContain("prd=");
+  });
+
+  test("default rendering never shows prd — brief's composed item-statuses section stays terse", () => {
+    const env = seededEnv();
+    const withPrd = makeFrontmatter(env, { name: "prd-item", prd: "docs/prds/auth.md" });
+    expect(renderStatus({ items: [withPrd], runs: [] })).not.toContain("prd=");
+  });
+});
+
 describe("renderStatus — runs", () => {
   test("open runs are listed with item ref, phase, status, and start time; ended runs are not", async () => {
     const store = await buildPopulatedStore(tempDirs);

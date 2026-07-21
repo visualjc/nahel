@@ -3,10 +3,10 @@ import { rm, writeFile } from "node:fs/promises";
 import type { CommandContext } from "../../src/cli";
 import { statusCommand } from "../../src/commands/status";
 import { hotStatePath } from "../../src/store/hotstate";
-import { ensureLayout, itemPath, writeConfig } from "../../src/store/layout";
+import { ensureLayout, itemPath, writeConfig, writeItem } from "../../src/store/layout";
 import { loadSnapshot, type Snapshot } from "../../src/views/snapshot";
 import { renderStatus } from "../../src/views/status";
-import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeFrontmatter, makeTempDir, seededEnv } from "../store/helpers";
 import { buildPopulatedStore } from "../views/helpers";
 
 /**
@@ -52,6 +52,27 @@ describe("nahel status — human output", () => {
     expect(result.stdout).toContain("demo-epic");
     expect(result.stdout).toContain("claimed_by=jim");
     expect(result.stdout).toContain("phase=building");
+  });
+
+  test("an item with a prd shows prd=<path> in the tree (status is the detailed view, F1)", async () => {
+    const root = await makeTempDir("nahel-status-prd-");
+    tempDirs.push(root);
+    const layout = await ensureLayout(root);
+    await writeConfig(layout, makeConfig());
+    const env = seededEnv();
+    await writeItem(
+      layout,
+      makeFrontmatter(env, { name: "prd-item", prd: "docs/prds/auth.md" }),
+      "",
+    );
+    await writeItem(layout, makeFrontmatter(env, { name: "plain-item" }), "");
+
+    const result = await runStatus([], root);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    const lines = result.stdout.split("\n");
+    expect(lines.find((line) => line.includes("prd-item"))).toContain("prd=docs/prds/auth.md");
+    expect(lines.find((line) => line.includes("plain-item"))).not.toContain("prd=");
   });
 
   test("an empty initialized store renders cleanly with exit 0", async () => {

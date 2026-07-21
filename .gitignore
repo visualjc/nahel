@@ -11,3 +11,7 @@ dist/
 .claude/settings.json
 .claude/settings.local.json
 .claude/.ccpmrc
+
+# Ephemeral scaffolding run state — never project state (constitution: .claude/ is tooling-only)
+.claude/state/
+.claude/context/

@@ -1,0 +1,2 @@
+{"id":"hwbwca28","ts":"2026-07-21T19:45:49Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"1ff9be1x","payload":{"target":"item","record":{"id":"1ff9be1x","name":"f4-inception-workflow","type":"feature","status":"in-review","lane":"full","parent":"y273p9tq","depends_on":["ekv79ymj","6ytwzt64"],"external_refs":[],"created":"2026-07-21T18:21:13Z","updated":"2026-07-21T19:45:49Z"},"body":""}}
+{"id":"24w6rpwa","ts":"2026-07-21T19:45:49Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

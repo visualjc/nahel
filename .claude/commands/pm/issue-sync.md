@@ -43,9 +43,9 @@ Do not bother the user with preflight checks progress ("I'm not going to ..."). 
 
 3. **Local Updates Check:**
    - Check if `.claude/epics/*/updates/$ARGUMENTS/` directory exists
-   - If not found, tell user: "❌ No local updates found for issue #$ARGUMENTS. Run: /pm:issue-start $ARGUMENTS"
+   - If not found, tell user: "❌ No local updates found for issue #$ARGUMENTS. Start work via the nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)"
    - Check if progress.md exists
-   - If not, tell user: "❌ No progress tracking found. Initialize with: /pm:issue-start $ARGUMENTS"
+   - If not, tell user: "❌ No progress tracking found. Start work via the nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)"
 
 4. **Check Last Sync:**
    - Read `last_sync` from progress.md frontmatter

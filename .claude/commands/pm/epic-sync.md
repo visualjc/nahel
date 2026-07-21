@@ -488,7 +488,7 @@ fi
 echo ""
 echo "Next steps:"
 echo "  - Start execution: /pm:epic-start ${ARGUMENTS}"
-echo "  - Or work on single issue: /pm:issue-start {issue_number}"
+echo "  - Or advance a single task via the nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)"
 echo "  - View epic: https://github.com/${repo}/issues/${epic_number}"
 ```
 

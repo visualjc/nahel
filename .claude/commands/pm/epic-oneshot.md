@@ -75,7 +75,7 @@ Step 2: GitHub Sync ✓
 
 Ready for development!
   Start work: /pm:epic-start $ARGUMENTS
-  Or single task: /pm:issue-start {task_number}
+  Or advance a single task via the nahel task-lifecycle workflow
 ```
 
 ## Important Notes

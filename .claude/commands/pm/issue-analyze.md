@@ -174,7 +174,7 @@ Parallelization potential: {factor}x speedup
 Files at risk of conflict:
   {list shared files if any}
 
-Next: Start work with /pm:issue-start $ARGUMENTS
+Next: start work via the nahel task-lifecycle workflow (nahel/workflows/task-lifecycle.md)
 ```
 
 ## Important Notes

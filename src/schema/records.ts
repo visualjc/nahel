@@ -55,6 +55,28 @@ export const externalRefSchema = z.strictObject({
 });
 export type ExternalRef = z.infer<typeof externalRefSchema>;
 
+/**
+ * The `prd` field: a repo-relative path to a PRD knowledge document
+ * (ADR-0013 — the plan item that authors a PRD records it as its
+ * deliverable; feature items reference it the same way). Hardened at the
+ * schema level like every path this repo commits: absolute paths (POSIX,
+ * drive-letter, UNC) and `..` traversal segments are rejected outright, so
+ * a record can never point outside the repo (hard constraint 2). The path
+ * is a REFERENCE only — existence on disk is a `nahel validate` warning,
+ * never a schema concern (ADR-0012: the document may arrive by later merge).
+ */
+const prdPathField = z
+  .string()
+  .min(1, "prd path must be a non-empty string")
+  .refine(
+    (path) => !path.startsWith("/") && !path.startsWith("\\") && !/^[A-Za-z]:[/\\]/.test(path),
+    "prd path must be repo-relative — absolute paths are rejected (hard constraint 2: nothing outside the repo)",
+  )
+  .refine(
+    (path) => !path.split(/[/\\]/).includes(".."),
+    'prd path must not contain ".." segments — no traversal outside the repo (hard constraint 2)',
+  );
+
 /** Work item frontmatter — the unit of intent (markdown body carries the prose). */
 export const workItemFrontmatterSchema = z.strictObject({
   id: idField,
@@ -65,6 +87,7 @@ export const workItemFrontmatterSchema = z.strictObject({
   parent: idField.optional(),
   depends_on: z.array(idField),
   external_refs: z.array(externalRefSchema),
+  prd: prdPathField.optional(),
   claimed_by: nonEmptyString("claimed_by actor id").optional(),
   created: timestampField,
   updated: timestampField,

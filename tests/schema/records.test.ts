@@ -196,6 +196,50 @@ describe("schema/records — work item frontmatter", () => {
     expect(issues.some((i) => i.startsWith("claimed_by:"))).toBe(true);
   });
 
+  test("accepts an optional prd as a repo-relative path (ADR-0013: feature items reference the PRD by path)", () => {
+    expectAccepted(
+      workItemFrontmatterSchema,
+      { ...validItem, prd: "docs/prds/phase-1-core-loop.md" },
+      "item with prd",
+    );
+    const parsed = workItemFrontmatterSchema.parse({
+      ...validItem,
+      prd: "docs/prds/phase-1-core-loop.md",
+    });
+    expect(parsed.prd).toBe("docs/prds/phase-1-core-loop.md");
+  });
+
+  test("rejects an absolute prd path (POSIX and Windows forms), naming the repo-relative rule", () => {
+    for (const absolute of ["/etc/prds/x.md", "C:\\prds\\x.md", "C:/prds/x.md", "\\\\host\\share\\x.md"]) {
+      const issues = rejectionIssues(
+        workItemFrontmatterSchema,
+        { ...validItem, prd: absolute },
+        `item absolute prd ${absolute}`,
+      );
+      expect(issues.some((i) => i.startsWith("prd:") && i.includes("repo-relative"))).toBe(true);
+    }
+  });
+
+  test('rejects a prd path with a ".." segment (no traversal outside the repo)', () => {
+    for (const traversal of ["../outside.md", "docs/../../etc/passwd", "docs/prds/..", "..\\outside.md"]) {
+      const issues = rejectionIssues(
+        workItemFrontmatterSchema,
+        { ...validItem, prd: traversal },
+        `item traversal prd ${traversal}`,
+      );
+      expect(issues.some((i) => i.startsWith("prd:") && i.includes(".."))).toBe(true);
+    }
+  });
+
+  test("rejects an empty prd path (absent means no PRD; empty is a mistake)", () => {
+    const issues = rejectionIssues(
+      workItemFrontmatterSchema,
+      { ...validItem, prd: "" },
+      "item empty prd",
+    );
+    expect(issues.some((i) => i.startsWith("prd:"))).toBe(true);
+  });
+
   test("rejects a non-UTC created timestamp, naming the required format", () => {
     const issues = rejectionIssues(
       workItemFrontmatterSchema,

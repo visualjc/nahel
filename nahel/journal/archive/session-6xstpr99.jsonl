@@ -1,0 +1,2 @@
+{"id":"kh50qkbh","ts":"2026-07-21T20:38:19Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"mhgzgj1e","payload":{"target":"item","record":{"id":"mhgzgj1e","name":"f8-import-from-ccpm","type":"feature","status":"in-review","lane":"full","parent":"y273p9tq","depends_on":["mtxrxqcd","ab394bmh"],"external_refs":[],"created":"2026-07-21T18:21:14Z","updated":"2026-07-21T20:38:19Z"},"body":""}}
+{"id":"n68ys1xq","ts":"2026-07-21T20:38:19Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

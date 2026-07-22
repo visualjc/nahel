@@ -1,0 +1,2 @@
+{"id":"wkfr4qwa","ts":"2026-07-22T22:04:05Z","seq":0,"type":"note","actor":{"kind":"human","id":"jim"},"item":"d8sa37p8","payload":{"summary":"Phase 1 exit test judged PASS by Jim (chat, 2026-07-22). All four criteria met on speed-count-game. Phase 1 formally complete. Recorded by agent:claude-code as scribe."}}
+{"id":"f9m6k0q9","ts":"2026-07-22T22:04:05Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"jim"},"payload":{}}

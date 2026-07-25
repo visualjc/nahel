@@ -1,5 +1,6 @@
 {
-  "phase": "green",
-  "status": "active",
-  "updated": "2026-07-25T19:26:45Z"
+  "phase": "success",
+  "status": "ended",
+  "updated": "2026-07-25T19:27:35Z",
+  "outcome": "success"
 }

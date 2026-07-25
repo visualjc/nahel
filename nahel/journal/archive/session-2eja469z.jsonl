@@ -1,0 +1,2 @@
+{"id":"r1jv4r3d","ts":"2026-07-25T16:00:03Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"b5e07bmt","payload":{"target":"item","record":{"id":"b5e07bmt","name":"test-baseline-json-unescaped-test-cmd","type":"bug","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T16:00:03Z","updated":"2026-07-25T16:00:03Z"},"body":""}}
+{"id":"mdn0dvvh","ts":"2026-07-25T16:00:03Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

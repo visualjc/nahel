@@ -1,0 +1,2 @@
+{"id":"ts0we1y8","ts":"2026-07-25T16:13:08Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"33b2j3kq","payload":{"summary":"PR #15 merged 2026-07-25T16:12:41Z under Jim's pre-authorized committee merge-on-agreement (codex MERGE-READY with live crash repro verification, cursor MERGE-READY, zero findings both). Item left in-review: done stays the human's flip per bug-lane."}}
+{"id":"984ckaxs","ts":"2026-07-25T16:13:08Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

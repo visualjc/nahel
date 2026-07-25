@@ -1,0 +1,2 @@
+{"id":"mgbch9w7","ts":"2026-07-25T16:14:07Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"b95x0sar","payload":{"target":"item","record":{"id":"b95x0sar","name":"phase-2-prd","type":"plan","status":"in-progress","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-25T15:36:52Z","updated":"2026-07-25T16:14:07Z","prd":"docs/prds/phase-2-afk-engine.md"},"body":""}}
+{"id":"8a08yn8x","ts":"2026-07-25T16:14:07Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

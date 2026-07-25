@@ -1,0 +1,1 @@
+{"id":"cjymz9sm","ts":"2026-07-25T15:52:43Z","seq":0,"type":"run.started","actor":{"kind":"agent","id":"claude-code"},"run":"q6wydewg","item":"0k83q678","payload":{"target":"run","record":{"id":"q6wydewg","item":"0k83q678","actor":{"kind":"agent","id":"claude-code"},"lane":"direct","phase":"starting","status":"active","started":"2026-07-25T15:52:43Z"}}}

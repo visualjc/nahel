@@ -13,9 +13,9 @@ red-first, at most three rounds — and then the merge decision. The loop runs
 on an OPEN PR: its rounds annotate that PR's body and its merge decision acts
 on it, so the PR exists before the loop starts. This document owns ALL merge
 mechanics; `nahel/workflows/afk-run.md` invokes it (its step 11, after the
-draft PR its step 10 opens) and deliberately does not restate any of them. Whoever drives the loop, the
-rule is the same: reviewing is not merging, and merging is not yours unless
-the recorded authority says it is.
+draft PR its step 10 opens) and deliberately does not restate any of them.
+Whoever drives the loop, the rule is the same: reviewing is not merging, and
+merging is not yours unless the recorded authority says it is.
 
 Every step below is a shell command or a paragraph of judgment, so the loop is
 drivable by pure conversation — no host-agent feature is required and nothing

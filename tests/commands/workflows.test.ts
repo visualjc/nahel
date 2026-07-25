@@ -312,3 +312,120 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     }
   });
 });
+
+/**
+ * The review loop (Phase 2 PRD F3), codifying what PRs #13–#18 proved:
+ * two cross-vendor reviewers, findings validated against HEAD before they may
+ * be fixed, red-first fixes, a hard three-round cap, and — owned here and
+ * nowhere else — the merge decision. afk-run invokes this doc (its step 9) and
+ * deliberately does not restate any of it, so a line softened here is a rule
+ * that exists nowhere: a loop that counts two same-vendor reviews as two, that
+ * fixes a stale finding blind, that grinds past the cap instead of parking, or
+ * that merges a PR the recorded authority says a human must merge.
+ */
+describe("review-loop canonical workflow doc (F3)", () => {
+  test("two reviewer slots, both named by config; same-vendor is refused, never counted (F3.1)", async () => {
+    const { parsed, body } = await shippedWorkflow("review-loop.md");
+    expect(parsed.name).toBe("review-loop");
+    expect(parsed.description.length).toBeGreaterThan(0);
+
+    // Both slots resolve from the committed routing map, not from preference.
+    expect(body).toContain("routing.review");
+    expect(body).toContain("routing.default");
+    expect(body).toContain("routing.implementation");
+    expect(body).toContain("cross-vendor");
+
+    // Slot 1 is DISPATCHED, which is what attributes its verdict to its own
+    // vendor; a list written on a reviewer's behalf is one reviewer, not two.
+    expect(body).toContain("nahel dispatch review --item <item-id>");
+    expect(body).toContain("its own `NAHEL_ACTOR`");
+    expect(body).toContain("--data verdict=<approve|request-changes>");
+    // Slot 2 reviews independently — before it can be anchored by slot 1.
+    expect(body).toContain("BEFORE you read slot 1's findings");
+
+    // The refusal: cross-vendor is the bar, and a single-vendor project fails
+    // it — including the fall-through case where `review` is simply unset.
+    expect(body).toContain("two same-vendor reviews are not two reviewers");
+    expect(body).toContain("REFUSE");
+    expect(body).toContain("nahel/workflows/setup-routing.md");
+  });
+
+  test("every finding is validated against HEAD; stale ones are dismissed with a note, never fixed blind (F3.2)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    // The round is bound to an exact revision, so "stale" is decidable.
+    expect(body).toContain("git rev-parse HEAD");
+    expect(body).toContain("git diff <sha>..HEAD");
+    // Live vs stale, and the journaled dismissal that replaces a blind fix.
+    expect(body).toContain("STALE");
+    expect(body).toContain("no longer exists at HEAD");
+    expect(body).toContain("--data disposition=dismissed-stale");
+    expect(body).toContain("Never fix a finding blind");
+  });
+
+  test("accepted findings are fixed red-first, re-reviewed, and capped at three rounds (F3.3)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    // Red-first where testable, with the TDD posture's non-negotiable.
+    expect(body).toContain("red-first");
+    expect(body).toContain("--phase red");
+    expect(body).toContain("Never weaken an existing assertion");
+    // The cap: three rounds, counted per item, journaled so it survives a
+    // fresh session — and re-review means BOTH slots read the new HEAD.
+    expect(body).toContain("THREE rounds");
+    expect(body).toContain("review round <n> of 3");
+    expect(body).toContain("nahel progress --item <item-id>");
+    // Cap reached parks with the loop history — never merges over objections,
+    // never stalls the caller's other work.
+    expect(body).toContain("reached its 3-round cap");
+    expect(body).toContain("nahel item update <item-id> --status blocked");
+    expect(body).toContain("Never merge over objections");
+    expect(body).toContain("never let a cap-reached park stall the rest of the run");
+  });
+
+  test("merge authority: refused under human, provenance-gated under on-approve, used sparingly (F3.4)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    // Authority is READ from the brief's resolved surface, never inferred from
+    // the config file's text or from an approval count.
+    expect(body).toContain("nahel brief");
+    expect(body).toContain("merge: human");
+    expect(body).toContain("regardless of how many approvals it carries");
+    // A validly human-authorized flag merges — and journals who authorized it:
+    // the standing config act plus both reviewers' sign-offs.
+    expect(body).toContain("merge: on-approve");
+    expect(body).toContain("gh pr merge");
+    expect(body).toContain("--data authorized_by=<event-id>");
+    // An agent-set (or unprovable, or ambiguous) flag is inert: behave as
+    // `merge: human`, park, and expect validate's warning by name.
+    expect(body).toContain("inert");
+    expect(body).toContain("agent-set");
+    expect(body).toContain("merge.unauthorized");
+    expect(body).toContain("nahel validate");
+    // The use-sparingly guidance the PRD requires this doc to carry.
+    expect(body).toContain("SPARINGLY — small items, or changes QA testing covers well");
+    // Merging is not accepting: `done` on a leaf stays the human's.
+    expect(body).toContain("Leaf-item `done` stays human-only");
+  });
+
+  test("both reviewers reconcile into one journaled disposition list the PR body carries (F3.1, F3.3)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    expect(body).toContain("ONE disposition list");
+    for (const disposition of ["accepted", "dismissed-stale", "dismissed-disagreed", "deferred"]) {
+      expect(body).toContain(disposition);
+    }
+    expect(body).toContain("--data finding=<finding-event-id>");
+    // The PR body is the trail afk-run's step 11 quotes.
+    expect(body).toContain("gh pr edit");
+    expect(body).toContain("rounds, findings, dispositions, and verdicts");
+    expect(body).toContain("nahel/workflows/afk-run.md");
+  });
+
+  test("agent-neutral and conversation-drivable, with a degraded-environment fallback", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    expect(body).toContain("NAHEL_ACTOR");
+    expect(body).toContain("pure conversation");
+    expect(body).toContain("Fallback");
+    // Executable by any host: no vendor-specific tooling named anywhere.
+    for (const claudeism of ["Claude", "Codex", "Task tool", "subagent", "slash command"]) {
+      expect(body).not.toContain(claudeism);
+    }
+  });
+});

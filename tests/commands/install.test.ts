@@ -352,6 +352,7 @@ describe("nahel install --agent claude", () => {
       "epic-decompose.md",
       "task-lifecycle.md",
       "afk-run.md",
+      "review-loop.md",
     ]) {
       expect(shims).toContain(shim);
       const content = await readFile(join(shimDir(root), shim), "utf8");

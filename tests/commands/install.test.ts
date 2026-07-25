@@ -231,6 +231,18 @@ describe("nahel install --agent claude", () => {
     expect((await readdir(shimDir(root))).sort()).toEqual(["brief.md"]);
   });
 
+  test("prunes around a directory named *.md instead of crashing with EISDIR (bug 33b2j3kq)", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    // A directory whose name ends in .md is not a doc; unlinking it raises
+    // EISDIR (macOS) / EPERM (Linux). Install must complete around it.
+    await mkdir(join(shimDir(root), "junk.md"), { recursive: true });
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect((await readdir(shimDir(root))).sort()).toEqual(["brief.md", "junk.md"]);
+  });
+
   test("unknown agent: exit 1 with the known-agent list", async () => {
     const root = await makeRepo();
     const result = await runInstall(["--agent", "emacs"], root);

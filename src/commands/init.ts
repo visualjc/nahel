@@ -240,6 +240,6 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
 
 export const initCommand: Command = {
   description:
-    "scaffold nahel/ state structure, config, and knowledge templates (non-interactive, re-run safe)",
+    'scaffold nahel/ state structure, config, and knowledge templates (non-interactive, re-run safe); --hands-off "<paragraph>" records a hands-off founding',
   run: runInit,
 };

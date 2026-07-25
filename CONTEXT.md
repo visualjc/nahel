@@ -24,7 +24,7 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 
 - **Constitution** — the human-owned core of PRODUCT.md: goal, domain facts, hard constraints, non-goals. Immutable without human sign-off in every mode.
 - **Legislation** — delegable downstream decisions: priorities, PRD approvals, ADRs, architecture evolution.
-- **Delegated governance** — a project mode where agent roles own legislation via cross-vendor consensus + append-only decisions + digests.
+- **Delegated governance** — a project mode where agent roles own legislation via cross-vendor consensus + append-only decisions + digests. Ships in slices: Phase 2 delivers the product slice only (`governance.product` — plan-item/PRD approval by cross-vendor consensus, no roles, no digest); role charters, architecture delegation, and `nahel digest` are Phase 4.
 - **Role** — an agent-neutral charter (product-owner, architect) grounded in the knowledge layer; reviews at gates.
 - **Gate** — an artifact transition requiring a verdict (PRD `draft→approved`, epic plan sign-off, diff review). Roles review at gates, not continuously.
 - **Digest** — rendered summary of delegated decisions for human audit (`nahel digest`). Audit, not approval.

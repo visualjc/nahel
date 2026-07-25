@@ -45,3 +45,4 @@ Every change to this document is recorded here with the human sign-off that auth
 
 - **2026-07-15** — Drafted by the founding agent, transcribed from Jim Carter's decisions in the founding grilling session (2026-07-14/15).
 - **2026-07-15** — Reviewed and blessed by Jim Carter; change-log section added under the same sign-off.
+- **2026-07-25** — Hard constraint 6 amended (Jim Carter, via chat, journaled on plan item `b95x0sar`): PRs merge by humans or under a human-granted standing authorization (`merge: on-approve` per-project config), to be used sparingly. ADR-0011 amended in the same act.

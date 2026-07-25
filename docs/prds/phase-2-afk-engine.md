@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T17:48:13Z
+updated: 2026-07-25T18:42:08Z
 ---
 
 # Phase 2 — AFK engine
@@ -42,7 +42,7 @@ Per ADR-0016: dispatch owns invocation mechanics and nothing else.
 
 **Acceptance criteria**
 
-- [ ] Given a committed routing map, `nahel dispatch implementation -- <task args>` spawns the mapped agent CLI with the mapped model and a correctly attributed run record; the journal shows the dispatch and the spawned agent's own mutations under its own actor id.
+- [ ] Given a committed routing map, `nahel dispatch implementation --item <id> -- <task args>` spawns the mapped agent CLI with the mapped model and a correctly attributed run record; the journal shows the dispatch and the spawned agent's own mutations under its own actor id.
 - [ ] The composed invocation recorded with the dispatch contains the `nahel brief` orientation preamble **ahead of the task prompt** — provable by inspecting the journaled dispatch record, and absent (or trailing) it the criterion fails (F1.1).
 - [ ] With no responsibility-specific route but a configured default, dispatch resolves to the default; with neither, dispatch exits non-zero naming the missing route and the `nahel config set` command that fixes it.
 - [ ] A dispatch invocation-config entry with an unknown agent kind is rejected as a schema error by `validate` and by dispatch itself (F1.3).

@@ -2,9 +2,12 @@ import { parseArgs } from "node:util";
 import {
   composeInvocation,
   resolveAgent,
+  resolveReviewSlotRoute,
   resolveRoute,
+  REVIEW_SLOTS,
   type ComposedInvocation,
   type ResolvedRoute,
+  type ReviewSlot,
 } from "../dispatch/invocation";
 import {
   ROUTING_RESPONSIBILITIES,
@@ -52,7 +55,7 @@ const FAILURE = "failure";
 const NOT_FOUND_EXIT = 127;
 
 const USAGE = `usage:
-  nahel dispatch <responsibility> --item <id> -- <task args...>
+  nahel dispatch <responsibility> [--slot 2] --item <id> -- <task args...>
     Spawn the agent CLI the routing map assigns to <responsibility>
     (${ROUTING_RESPONSIBILITIES.join(" | ")}), with the mapped model, the
     worker's own NAHEL_ACTOR identity, and an orientation preamble telling it
@@ -60,6 +63,10 @@ const USAGE = `usage:
     prompt, passed through untouched.
     --item is required: every dispatch belongs to a work item, and the
     dispatch opens and closes a run record for it.
+    --slot <${REVIEW_SLOTS.join("|")}> applies to \`review\` only: it names which
+    reviewer slot to fill, resolving through that slot's routing chain
+    (slot 2: routing.review2, then implementation, then default) so any
+    capable vendor can drive the review loop.
     Exit status is 0 when the worker exited 0, 1 otherwise; the composed
     invocation and the outcome are journaled either way.`;
 
@@ -67,6 +74,8 @@ interface DispatchArgs {
   responsibility: RoutingResponsibility;
   item: string;
   task: string;
+  /** Reviewer slot to fill (`review` only); undefined is the plain route. */
+  slot?: ReviewSlot;
 }
 
 function requireResponsibility(value: string): RoutingResponsibility {
@@ -82,7 +91,8 @@ function requireResponsibility(value: string): RoutingResponsibility {
     const role =
       value === "default"
         ? "an unrouted responsibility falls back to routing.default"
-        : "routing.review2 names the review loop's second reviewer slot, which its driver fills itself";
+        : "routing.review2 names the review loop's second reviewer slot — " +
+          "fill it with `nahel dispatch review --slot 2`";
     throw new UsageError(
       `"${value}" is a routing map KEY, not a dispatchable responsibility — ` +
         `dispatch one of: ${known} (${role})`,
@@ -106,11 +116,33 @@ function splitArgv(argv: string[]): { own: string[]; task: string[] } {
     : { own: argv.slice(0, separator), task: argv.slice(separator + 1) };
 }
 
+/**
+ * `--slot` names a REVIEW slot and nothing else: slots are the review loop's
+ * two-reviewer structure (PRD F3.1), so a slot on `implementation` is a
+ * misunderstanding worth refusing rather than silently ignoring.
+ */
+function requireSlot(value: string, responsibility: RoutingResponsibility): ReviewSlot {
+  if (responsibility !== "review") {
+    throw new UsageError(
+      `--slot applies to the \`review\` responsibility only — reviewer slots are the review ` +
+        `loop's structure, and "${responsibility}" has none. Drop --slot, or dispatch review.`,
+    );
+  }
+  const slot = REVIEW_SLOTS.find((known) => String(known) === value);
+  if (slot === undefined) {
+    throw new UsageError(
+      `unknown review slot ${JSON.stringify(value)} — expected one of: ` +
+        `${REVIEW_SLOTS.join(", ")} (slot 1 is the review route, slot 2 the second reviewer)`,
+    );
+  }
+  return slot;
+}
+
 function parseDispatchArgs(argv: string[]): DispatchArgs {
   const { own, task } = splitArgv(argv);
   const { values, positionals } = parseArgs({
     args: own,
-    options: { item: { type: "string" } },
+    options: { item: { type: "string" }, slot: { type: "string" } },
     allowPositionals: true,
   });
   if (positionals.length !== 1) {
@@ -136,7 +168,13 @@ function parseDispatchArgs(argv: string[]): DispatchArgs {
         "--item <id> -- implement the parser`)",
     );
   }
-  return { responsibility, item: values.item, task: task.join(" ") };
+  const slot = values.slot === undefined ? undefined : requireSlot(values.slot, responsibility);
+  return {
+    responsibility,
+    item: values.item,
+    task: task.join(" "),
+    ...(slot === undefined ? {} : { slot }),
+  };
 }
 
 /** Journal the intent, carrying the invocation exactly as it will be spawned. */
@@ -156,6 +194,7 @@ async function journalStart(
       responsibility: route.responsibility,
       agent: route.agent,
       ...(route.model === undefined ? {} : { model: route.model }),
+      ...(args.slot === undefined ? {} : { slot: args.slot }),
       via: route.via,
       invocation: {
         binary: invocation.binary,
@@ -194,7 +233,12 @@ async function runDispatch(
   // state changes, so a misrouted dispatch is inert (no run, no events).
   const ctx = await commandContext(cwd, env, actorOverride);
   const config = await readConfig(ctx.layout);
-  const route = resolveRoute(config.routing, args.responsibility);
+  // A slot dispatch is the SAME responsibility down a different chain, so the
+  // enum stays one `review` (ADR-0015) while either reviewer can be spawned.
+  const route =
+    args.slot === undefined
+      ? resolveRoute(config.routing, args.responsibility)
+      : resolveReviewSlotRoute(config.routing, args.slot);
   const spec = resolveAgent(route.agent, config.dispatch);
 
   // Composition can refuse too (a route naming a model the agent spec has no
@@ -261,12 +305,15 @@ async function runDispatch(
 
   const where = ` (run ${run.id})`;
   const model = route.model === undefined ? "" : ` on ${route.model}`;
+  const what = args.slot === undefined
+    ? args.responsibility
+    : `${args.responsibility} slot ${args.slot}`;
   if (outcome === SUCCESS) {
-    console.log(`✅ dispatched ${args.responsibility} → ${route.agent}${model}${where}`);
+    console.log(`✅ dispatched ${what} → ${route.agent}${model}${where}`);
     return 0;
   }
   console.error(
-    `❌ ${route.agent} exited ${result.exitCode} for ${args.responsibility}${where}` +
+    `❌ ${route.agent} exited ${result.exitCode} for ${what}${where}` +
       (result.exitCode === NOT_FOUND_EXIT
         ? ` — exit ${NOT_FOUND_EXIT} usually means the agent binary was not found: ` +
           `check config.dispatch.${route.agent}.binary`

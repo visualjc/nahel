@@ -651,6 +651,23 @@ describe("review-loop canonical workflow doc (F3)", () => {
     expect(body).toContain("routing.default");
   });
 
+  test("any capable vendor can drive: slot 2 is filled in-session or DISPATCHED (F3.1)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    // Pinning slot 2 to "the driver reviews it itself" made the loop drivable
+    // by exactly one vendor — routing.review2's — and every other capable host
+    // had to park. Both fills are legitimate; which one applies is mechanical.
+    expect(body).toContain("nahel dispatch review --slot 2 --item <item-id>");
+    expect(body).toContain("in-session");
+    // The rule that picks between them, and the enum discipline that survives:
+    // `--slot` is a flag on the review responsibility, not a new one.
+    expect(body).toContain("your vendor IS");
+    expect(body).toContain("not a fourth responsibility");
+    expect(body).toContain("nahel dispatch review2` is refused");
+    // Parking is now reserved for a slot nothing can fill — never for "the
+    // driver is the wrong vendor".
+    expect(body).toContain("no longer a park");
+  });
+
   test("every finding is validated against HEAD; stale ones are dismissed with a note, never fixed blind (F3.2)", async () => {
     const { body } = await shippedWorkflow("review-loop.md");
     // The round is bound to an exact revision, so "stale" is decidable.

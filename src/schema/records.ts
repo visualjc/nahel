@@ -271,11 +271,14 @@ export type RoutingEntry = z.infer<typeof routingEntrySchema>;
  * `review2` is F3.1's "second review slot" design call: the review loop needs
  * two reviewer VENDORS and one `review` key can only name one, so the second
  * slot is a config key rather than a fourth enum member — ADR-0015's
- * vocabulary discipline holds, `nahel dispatch review2` stays refused, and the
- * loop's driver fills the slot under its own actor. Naming it in committed
+ * vocabulary discipline holds and `nahel dispatch review2` stays refused. The
+ * slot is filled through the `review` responsibility instead: its driver
+ * reviews it in-session when the driver IS that vendor, and dispatches it with
+ * `nahel dispatch review --slot 2` otherwise, so any capable vendor can drive
+ * the loop. Naming it in committed
  * state is what lets `nahel validate` catch a same-vendor pairing before a run
  * discovers it; optional, so every map written before it existed stays valid
- * (the loop then falls back to its runtime rule).
+ * (the slot-2 chain then falls through to implementation, then default).
  *
  * Strict: unknown responsibilities are rejected so the vocabulary stays a
  * deliberate schema change, never an accidental typo. Advisory in Phase 1

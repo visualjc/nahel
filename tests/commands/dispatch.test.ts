@@ -373,6 +373,118 @@ describe("nahel dispatch — routing enforcement (F1.2)", () => {
   });
 });
 
+/**
+ * `--slot 2` (PRD F3.1): the review loop's second reviewer slot, dispatchable.
+ * Without it the loop could only be driven by `routing.review2`'s own vendor —
+ * every other capable host had to park, which contradicts "any capable agent
+ * can be the runner". The flag stays inside the `review` responsibility
+ * (ADR-0015: no fourth enum member); only the resolution CHAIN changes.
+ */
+describe("nahel dispatch — review slot 2 (F3.1)", () => {
+  const CROSS_VENDOR: Config["routing"] = {
+    implementation: { agent: "codex", model: "gpt-5" },
+    review: { agent: "codex", model: "gpt-5" },
+    review2: { agent: "claude", model: "claude-opus-5" },
+  };
+
+  test("`review --slot 2` resolves through routing.review2 and journals the slot it filled", async () => {
+    // Only `claude` is wired to the stub, so a dispatch that resolved through
+    // the slot-1 chain (codex) could not even spawn: the run proves the chain.
+    const repo = await setup({ routing: CROSS_VENDOR });
+    const code = await dispatch(repo, [
+      "review",
+      "--slot",
+      "2",
+      "--item",
+      repo.item.id,
+      "--",
+      "review the diff",
+    ]);
+    console.log("[slot 2 stderr]", errs.join("\n"));
+    expect(code).toBe(0);
+
+    const invocation = await invocationRecord(repo);
+    console.log("[slot 2 invocation]", invocation.argv.slice(0, 3), invocation.actor);
+    expect(invocation.argv.slice(0, 3)).toEqual(["-p", "--model", "claude-opus-5"]);
+    // The worker's actor is slot 2's vendor, which is what makes its verdict
+    // independent of the loop driver's own.
+    expect(invocation.actor).toBe("agent:claude");
+
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["responsibility"]).toBe("review");
+    expect(started?.payload["via"]).toBe("routing.review2");
+    expect(started?.payload["slot"]).toBe(2);
+    expect(started?.payload["agent"]).toBe("claude");
+
+    const run = await onlyRun(repo.layout);
+    expect(run.actor).toEqual({ kind: "agent", id: "claude" });
+    expect(run.phase).toBe("success");
+  });
+
+  test("without --slot, `review` still resolves through the slot-1 chain (review, then default)", async () => {
+    const repo = await setup({
+      routing: {
+        review: { agent: "claude", model: "slot-1-model" },
+        review2: { agent: "codex", model: "gpt-5" },
+      },
+    });
+    expect(await dispatch(repo, ["review", "--item", repo.item.id, "--", "review it"])).toBe(0);
+    expect((await invocationRecord(repo)).argv.slice(0, 3)).toEqual([
+      "-p",
+      "--model",
+      "slot-1-model",
+    ]);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["via"]).toBe("routing.review");
+    // No slot flag, no slot key: the payload says what was asked for.
+    expect(started?.payload["slot"]).toBeUndefined();
+  });
+
+  test("--slot is refused on any responsibility but review — slots are a review-loop concept", async () => {
+    const repo = await setup({ routing: CROSS_VENDOR });
+    const code = await dispatch(repo, [
+      "implementation",
+      "--slot",
+      "2",
+      "--item",
+      repo.item.id,
+      "--",
+      "work",
+    ]);
+    const message = errs.join("\n");
+    console.log("[slot on implementation]", message);
+    expect(code).toBe(1);
+    expect(message).toContain("--slot");
+    expect(message).toContain("review");
+    // A refusal is inert: nothing spawned, nothing journaled.
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
+    expect(await events(repo.layout)).toEqual([]);
+  });
+
+  test("a slot outside {1, 2} is a usage error naming the two slots", async () => {
+    const repo = await setup({ routing: CROSS_VENDOR });
+    const code = await dispatch(repo, ["review", "--slot", "3", "--item", repo.item.id, "--", "x"]);
+    const message = errs.join("\n");
+    console.log("[bad slot]", message);
+    expect(code).toBe(1);
+    expect(message).toContain("3");
+    expect(message).toContain("1");
+    expect(message).toContain("2");
+    expect(await events(repo.layout)).toEqual([]);
+  });
+
+  test("a slot-2 chain no key answers refuses with the config fix, journaling nothing", async () => {
+    const repo = await setup({ routing: { review: { agent: "claude", model: "m" } } });
+    const code = await dispatch(repo, ["review", "--slot", "2", "--item", repo.item.id, "--", "x"]);
+    const message = errs.join("\n");
+    console.log("[slot 2 unrouted]", message);
+    expect(code).not.toBe(0);
+    expect(message).toContain("routing.review2");
+    expect(message).toContain("nahel config set routing --data");
+    expect(await events(repo.layout)).toEqual([]);
+  });
+});
+
 describe("nahel dispatch — unknown agent kinds fail as schema errors (F1.3)", () => {
   const withGemini = (base: Config) => ({
     ...base,

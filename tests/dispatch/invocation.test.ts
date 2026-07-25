@@ -8,7 +8,10 @@ import {
   DispatchRoutingError,
   ORIENTATION_COMMAND,
   resolveAgent,
+  resolveReviewSlotRoute,
+  resolveReviewSlots,
   resolveRoute,
+  REVIEW_SLOT_CHAINS,
   UnknownAgentKindError,
 } from "../../src/dispatch/invocation";
 import type { Routing } from "../../src/schema/records";
@@ -181,6 +184,94 @@ describe("routing resolution (F1.2 — responsibility first, then default)", () 
 
   test("resolution is deterministic — the same config resolves identically every time", () => {
     expect(resolveRoute(ROUTING, "review")).toEqual(resolveRoute(ROUTING, "review"));
+  });
+});
+
+/**
+ * The review loop's second slot as a DISPATCHABLE route (PRD F3.1). Slot 2 was
+ * reviewable only in-session, which made the loop drivable by exactly one
+ * vendor — `routing.review2`'s — and every other capable host had to park,
+ * contradicting "any capable agent can be the runner". The slot keeps its
+ * routing-key shape (ADR-0015: no fourth responsibility); what changes is that
+ * the `review` responsibility can be dispatched THROUGH slot 2's chain.
+ */
+describe("review slot routes (F3.1 — slot 2 is dispatchable through the review responsibility)", () => {
+  test("slot 2 resolves through review2 first, and reports the key that answered", () => {
+    const routing: Routing = {
+      implementation: { agent: "claude", model: "claude-opus-5" },
+      review: { agent: "codex", model: "gpt-5" },
+      review2: { agent: "cursor-agent", model: "auto" },
+    };
+    expect(resolveReviewSlotRoute(routing, 2)).toEqual({
+      responsibility: "review",
+      agent: "cursor-agent",
+      model: "auto",
+      via: "routing.review2",
+    });
+    // Slot 1 stays dispatch's own chain — same answer as resolveRoute.
+    expect(resolveReviewSlotRoute(routing, 1)).toEqual(resolveRoute(routing, "review"));
+  });
+
+  test("with review2 unset, slot 2 falls through to implementation, then to default", () => {
+    const noReview2: Routing = {
+      implementation: { agent: "claude", model: "claude-opus-5" },
+      review: { agent: "codex" },
+    };
+    expect(resolveReviewSlotRoute(noReview2, 2)).toEqual({
+      responsibility: "review",
+      agent: "claude",
+      model: "claude-opus-5",
+      via: "routing.implementation",
+    });
+    const defaultOnly: Routing = { review: { agent: "codex" }, default: { agent: "claude" } };
+    expect(resolveReviewSlotRoute(defaultOnly, 2).via).toBe("routing.default");
+  });
+
+  test("the slot-2 chain is the SAME chain the same-vendor warning walks — one definition", () => {
+    // A warning resolving slot 2 differently from the dispatch that fills it
+    // would tell a project its pairing is fine and then dispatch the wrong
+    // vendor (or vice versa). Both read REVIEW_SLOT_CHAINS.
+    expect(REVIEW_SLOT_CHAINS[1]).toEqual(["review", "default"]);
+    expect(REVIEW_SLOT_CHAINS[2]).toEqual(["review2", "implementation", "default"]);
+    const routing: Routing = {
+      implementation: { agent: "claude" },
+      review: { agent: "codex" },
+      review2: { agent: "cursor-agent" },
+    };
+    const slots = resolveReviewSlots(routing)!;
+    expect(slots.slot1.agent).toBe(resolveReviewSlotRoute(routing, 1).agent);
+    expect(slots.slot2.agent).toBe(resolveReviewSlotRoute(routing, 2).agent);
+    expect(slots.slot2.via).toBe(resolveReviewSlotRoute(routing, 2).via);
+  });
+
+  test("a slot 2 no key answers refuses loudly, naming every key in its chain and the fix", () => {
+    let error: unknown;
+    try {
+      resolveReviewSlotRoute({ review: { agent: "codex" } }, 2);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(DispatchRoutingError);
+    const message = (error as Error).message;
+    console.log("[no slot-2 route]", message);
+    expect(message).toContain("routing.review2");
+    expect(message).toContain("routing.implementation");
+    expect(message).toContain("routing.default");
+    expect(message).toContain("nahel config set routing --data");
+    // The offered fix proposes the review2 entry, keeping what is configured.
+    expect(message).toContain('"review":{"agent":"codex"}');
+    expect(message).toContain('"review2"');
+  });
+
+  test("an entry naming a model but no agent is skipped, not fatal — the chain keeps walking", () => {
+    // resolveReviewSlots already treats an agentless entry as "answers
+    // nothing" (a vendor IS an agent id); the dispatchable route must agree,
+    // or a half-written review2 would break a loop the warning calls fine.
+    const routing: Routing = {
+      review2: { model: "auto" },
+      implementation: { agent: "claude", model: "claude-opus-5" },
+    };
+    expect(resolveReviewSlotRoute(routing, 2).via).toBe("routing.implementation");
   });
 });
 

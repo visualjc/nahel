@@ -48,17 +48,31 @@ merge around a claim.
      a run discovers it the expensive way. It is a routing KEY,
      not a fourth responsibility: the ADR-0015 enum still carries one
      `review`, and
-     `nahel dispatch review2` is refused. You review this slot under your own
-     actor (step 3b), so the vendor driving this loop must BE
-     `routing.review2`'s agent; a different driver is the wrong driver for
-     this loop — park (step 11) rather than reviewing as a vendor the slot
-     does not name.
+     `nahel dispatch review2` is refused. The slot is dispatched THROUGH the
+     review responsibility instead, on its own chain — `--slot 2`.
 
      With `routing.review2` unset — every map written before it existed — slot
      2 falls back to the OTHER vendor the same map already names for this
-     work: the vendor driving this loop, whose id the map names under
-     `routing.implementation` or `routing.default`. Same bar, resolved at
-     runtime instead of from config.
+     work: `routing.implementation`, then `routing.default`. Same bar,
+     resolved down the same chain `--slot 2` walks.
+
+     **Who fills slot 2 depends on who is driving, and it is mechanical.**
+     Compare your own actor's vendor against the agent the slot resolved to:
+
+     - **your vendor IS the slot's agent** — review it yourself, in-session,
+       under your own actor (step 3b). Today's path, unchanged.
+     - **anything else** — DISPATCH it, so the verdict lands under the
+       vendor the slot actually names:
+
+           nahel dispatch review --slot 2 --item <item-id> -- <the slot-2 review task, exactly as in step 3a>
+
+       The dispatched worker journals its own findings and verdict under its
+       own actor, which is what makes slot 2 independent of you.
+
+     A driver whose vendor the slot does not name is therefore no longer a park
+     — any capable host can drive this loop, which is the whole point of
+     agent-neutrality. Park only when the slot resolves to NOTHING (dispatch
+     refuses, naming the config fix) or to slot 1's vendor.
 
    Then compare the two VENDORS — the agent ids, not the models:
 
@@ -101,7 +115,9 @@ merge around a claim.
       A findings list you write on a reviewer's behalf is your own review
       wearing its name — the loop counts it as one reviewer, not two.
 
-   b. Slot 2, yourself, under your own actor — and do it
+   b. Slot 2. Dispatched (step 1) when the slot names a vendor other than
+      yours — same task text as (a), and the worker journals its own findings
+      and verdict. Otherwise yourself, under your own actor — and do it
       BEFORE you read slot 1's findings. Reading them first turns an
       independent review into a confirmation of someone else's:
 
@@ -318,9 +334,10 @@ merge around a claim.
     the brief's pending human decisions, and the reason is what makes it
     actionable.
 
-    Park, never ask, on: both reviewer slots resolving to one vendor; a
-    `routing.review2` naming a vendor other than the one driving this loop; a
-    slot that will not review; the three-round cap with anything unresolved; a
+    Park, never ask, on: both reviewer slots resolving to one vendor; a slot 2
+    chain no routing key answers (dispatch refuses it, naming the config fix);
+    a slot that will not review; the three-round cap with anything unresolved;
+    a sign-off gone stale at the merge decision with the cap already spent; a
     merge under `merge: human`; a `merge: on-approve` the brief marks inert;
     and a claim standing over the item.
 

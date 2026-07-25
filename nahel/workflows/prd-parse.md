@@ -39,7 +39,7 @@ Before any `nahel` command: if you are an agent, set
 5. Journal the link so the trail survives compaction:
 
        nahel log note --item <feature-id> \
-         --data body="Parses docs/prds/<slug>.md (authored by plan item <plan-id>)"
+         --data summary="Parses docs/prds/<slug>.md (authored by plan item <plan-id>)"
 
 6. Next: `direct` goes straight to the task-lifecycle workflow;
    `epic-lite` and `full` go to epic-decompose first.

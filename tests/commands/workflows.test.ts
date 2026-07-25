@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseWorkflowDoc } from "../../src/install/workflow";
 import { readFrontmatterFile } from "../../src/store/frontmatter";
+import { MUTATION_PAYLOAD_KEYS } from "../../src/store/mutate";
 
 /**
  * The feature-lane canonical workflow docs (PRD F1): prd-new, prd-parse,
@@ -148,5 +150,43 @@ describe("feature-lane canonical workflow docs (F1)", () => {
     expect(body).toContain("STOP");
     expect(body).toContain("Fallback");
     expect(body).toContain("NAHEL_ACTOR");
+  });
+});
+
+/**
+ * The docs are the product, so every CLI example they carry must be one the
+ * CLI accepts. `nahel log` bans MUTATION_PAYLOAD_KEYS (`target`, `record`,
+ * `body` — src/store/mutate.ts) from `--data`, so a doc instructing
+ * `nahel log note --data body="..."` sends every follower into a hard exit 1
+ * (bug rgm43hvc: task-lifecycle, prd-parse, and epic-decompose all did).
+ * This sweep is driven off MUTATION_PAYLOAD_KEYS itself, so a key added to
+ * the reservation later fails any doc still teaching it. `nahel observe`
+ * lines are deliberately out of scope — observe REQUIRES `body`.
+ */
+describe("shipped workflow docs vs `nahel log` reserved payload keys (rgm43hvc)", () => {
+  test("no `nahel log` example in any shipped doc uses a reserved mutation payload key", async () => {
+    const dir = join(import.meta.dir, "../../nahel/workflows");
+    const files = (await readdir(dir)).filter((file) => file.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+
+    let scanned = 0;
+    const violations: string[] = [];
+    for (const file of files) {
+      const { body } = await readFrontmatterFile(join(dir, file));
+      // Join backslash-continued lines first, so a reserved key on a
+      // continuation line of a multi-line invocation is still caught.
+      for (const line of body.replace(/\\\n\s*/g, " ").split("\n")) {
+        if (!line.includes("nahel log")) continue;
+        scanned++;
+        for (const key of MUTATION_PAYLOAD_KEYS) {
+          if (line.includes(`--data ${key}=`)) {
+            violations.push(`${file}: reserved --data key ${JSON.stringify(key)} in: ${line.trim()}`);
+          }
+        }
+      }
+    }
+    // The sweep must have real coverage — the lane docs all carry examples.
+    expect(scanned).toBeGreaterThan(0);
+    expect(violations).toEqual([]);
   });
 });

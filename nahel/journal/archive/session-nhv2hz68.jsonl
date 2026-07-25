@@ -1,0 +1,2 @@
+{"id":"e952ptx7","ts":"2026-07-25T20:29:32Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"pz5x9d6z","payload":{"target":"item","record":{"id":"pz5x9d6z","name":"afk-run-invariants","type":"feature","status":"in-progress","lane":"direct","parent":"f6kwws23","depends_on":["yc7cahha"],"external_refs":[],"created":"2026-07-25T17:01:30Z","updated":"2026-07-25T20:29:32Z"},"body":""}}
+{"id":"f92b65ne","ts":"2026-07-25T20:29:32Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

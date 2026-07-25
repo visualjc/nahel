@@ -1,0 +1,2 @@
+{"id":"4tze6zk5","ts":"2026-07-25T20:06:15Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"s6b0mhgk","payload":{"target":"item","record":{"id":"s6b0mhgk","name":"knowledge-first-inception","type":"feature","status":"in-review","lane":"direct","parent":"f6kwws23","depends_on":["mwzxhxan"],"external_refs":[],"created":"2026-07-25T17:01:30Z","updated":"2026-07-25T20:06:15Z"},"body":""}}
+{"id":"5e2jv0gg","ts":"2026-07-25T20:06:15Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

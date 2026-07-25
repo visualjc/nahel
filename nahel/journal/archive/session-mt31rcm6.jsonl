@@ -1,0 +1,2 @@
+{"id":"8mbz4cs0","ts":"2026-07-25T20:29:32Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"rs1prdta","payload":{"target":"item","record":{"id":"rs1prdta","name":"prototype-lane","type":"feature","status":"in-review","lane":"direct","parent":"f6kwws23","depends_on":["fzdzssc0"],"external_refs":[],"created":"2026-07-25T17:01:30Z","updated":"2026-07-25T20:29:32Z"},"body":""}}
+{"id":"2vj53tpd","ts":"2026-07-25T20:29:32Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

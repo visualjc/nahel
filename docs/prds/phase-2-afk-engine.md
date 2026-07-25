@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T16:57:23Z
+updated: 2026-07-25T17:48:13Z
 ---
 
 # Phase 2 — AFK engine
@@ -208,5 +208,5 @@ Pass = both transports, judged by Jim. Failure anywhere feeds the backlog before
 
 1. **`epic-oneshot` retirement** — flagged during Phase 1 (journal `xfkr09sy`) as semantically weakened and a Phase 2 deletion candidate. Whether it dies here or gets rebuilt atop `afk-run` should be decided when F2 lands and shows whether anything still needs it; a direct-lane chore either way, not scoped as an F-requirement.
 2. **Remote transport choice for the exit test** — the bar requires *a* remote transport (Claude Code remote, OpenClaw, Hermes…); which one is exercised depends on what is set up on Jim's infrastructure by phase end. The invariant is transport-agnostic; the test needs one real instance.
-3. **Dispatch invocation-config shape** — F1.3 makes per-agent-CLI knowledge config data; whether it ships as a built-in table with config overrides or pure config with shipped defaults is an implementation call for the F1 design, bounded by "unknown agent kinds fail with a schema error."
+3. ~~Dispatch invocation-config shape~~ — **resolved 2026-07-25** while building F1: a shipped table keyed by a fixed agent-kind enum (`claude | codex | cursor-agent`), each entry replaceable wholesale through an additive `config.dispatch` section, prompt always the trailing argument. Unknown kinds are a schema error from `validate` and from dispatch. Recorded as the ADR-0016 addendum.
 4. ~~Hard constraint 6 amendment for `merge: on-approve`~~ — **resolved 2026-07-25**: Jim approved the amendment (chat, journaled on `b95x0sar`); HC6 and ADR-0011 now permit `on-approve` as a human-granted standing authorization, with use-sparingly guidance (F3.4).

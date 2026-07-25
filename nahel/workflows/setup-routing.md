@@ -9,10 +9,10 @@ args: ""
 Load and follow this workflow to set (or refresh) the responsibility routing
 map: which agent CLI and/or model this project prefers for each kind of
 judgment — `architecture`, `implementation`, `review` — plus a `default`.
-The map is ADVISORY in this phase (ADR-0015): `nahel brief` surfaces it so
-interactive sessions can honor it (e.g. spawning implementation subagents on
-the mapped model); nothing blocks on it. Enforcement arrives with autonomous
-dispatch.
+The map is ADVISORY to interactive sessions (ADR-0015): `nahel brief` surfaces
+it so they can honor it (e.g. spawning implementation subagents on the mapped
+model); nothing blocks on it. It is ENFORCED by `nahel dispatch`, which
+refuses to launch anything a route does not name.
 
 Before any `nahel` command: if you are an agent, set
 `NAHEL_ACTOR=agent:<your-id>` so every journal event carries your identity.
@@ -41,8 +41,23 @@ Before any `nahel` command: if you are an agent, set
        }'
 
    Only the responsibilities above exist — the CLI rejects any other key.
+   An `agent` must be one `nahel dispatch` knows how to invoke — `claude`,
+   `codex`, or `cursor-agent`; anything else (opencode today) is fine to
+   detect and report, but routing to it makes dispatch refuse. A route with
+   no `agent` at all is advisory-only for the same reason: dispatch needs a
+   CLI to spawn.
 5. Verify: `nahel brief` now shows the routing map. It is committed config,
    so a fresh clone gets the same map with zero local setup.
+6. Only if a detected CLI is not on PATH under its own name, or needs
+   standing flags, record how to invoke it — the shipped defaults otherwise
+   need no config at all:
+
+       nahel config set dispatch --data '{
+         "claude": {"binary": "/opt/homebrew/bin/claude", "args": ["-p"], "model_flag": "--model"}
+       }'
+
+   The section replaces wholesale per agent kind, and the prompt is always
+   passed as the trailing argument (ADR-0016 addendum).
 
 Fallback (degraded environment): if the `nahel` CLI is unavailable, report
 the detected CLIs and the proposed map as notes, but make NO state

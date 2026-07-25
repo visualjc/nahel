@@ -56,3 +56,22 @@ export type InceptionTier = (typeof INCEPTION_TIERS)[number];
  */
 export const GOVERNANCE_MODES = ["human", "delegated"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
+
+/**
+ * Responsibility (glossary): the kind of judgment routing maps to an
+ * executor. Exactly the keys of `config.routing` minus its `default`
+ * fallback — `default` is what resolution falls back TO, never something
+ * `nahel dispatch <responsibility>` can be asked for (ADR-0015).
+ */
+export const ROUTING_RESPONSIBILITIES = ["architecture", "implementation", "review"] as const;
+export type RoutingResponsibility = (typeof ROUTING_RESPONSIBILITIES)[number];
+
+/**
+ * The agent CLIs `nahel dispatch` knows how to invoke (PRD F1.3). Each kind
+ * ships an invocation default (src/dispatch/invocation.ts) that the optional
+ * `config.dispatch` section may override; a kind outside this list is a
+ * schema error, so teaching nahel a new agent CLI is a deliberate change
+ * here — routing's vocabulary discipline (ADR-0015) applied to executors.
+ */
+export const DISPATCH_AGENT_KINDS = ["claude", "codex", "cursor-agent"] as const;
+export type DispatchAgentKind = (typeof DISPATCH_AGENT_KINDS)[number];

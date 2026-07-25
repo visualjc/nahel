@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
 import { CORE_EVENT_TYPES } from "../schema/events";
 import { generateId, InvalidIdError } from "../schema/id";
-import { runSchema, type Run } from "../schema/records";
+import { runSchema, type Actor, type Run, type WorkItemFrontmatter } from "../schema/records";
 import { writeHotState } from "../store/hotstate";
 import { readItem, readRun } from "../store/layout";
 import { mutate, type StoreContext } from "../store/mutate";
@@ -82,6 +82,51 @@ async function readOpenRun(ctx: StoreContext, runId: string, closing: boolean): 
   return run;
 }
 
+/**
+ * Open a run for an item: the journaled record write plus its hot state.
+ * Shared with `nahel dispatch`, which brackets a spawned worker with a run
+ * of its own — the run's `actor` is the executor doing the work, which for a
+ * dispatch is the routed agent rather than the dispatching session.
+ */
+export async function startRun(
+  ctx: StoreContext,
+  item: WorkItemFrontmatter,
+  options: { actor?: Actor; phase?: string } = {},
+): Promise<Run> {
+  const run: Run = {
+    id: generateId(ctx.env),
+    item: item.id,
+    actor: options.actor ?? ctx.actor,
+    lane: item.lane,
+    phase: options.phase ?? INITIAL_PHASE,
+    status: "active",
+    started: ctx.env.now(),
+  };
+  await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runStarted, run });
+  await writeHotState(ctx.layout, run.id, hotStateFor(run, run.started));
+  return run;
+}
+
+/**
+ * Close a run: the outcome becomes its final phase (the Run record has no
+ * dedicated outcome field), hot state echoes it, and the run's journal
+ * segment is provably closed — so rotation may archive it. Shared with
+ * `nahel dispatch`, which ends the run on the worker's exit status.
+ */
+export async function endRun(ctx: StoreContext, run: Run, outcome: string): Promise<Run> {
+  const ended = ctx.env.now();
+  const closed: Run = { ...run, phase: outcome, status: "ended", ended };
+  await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runEnded, run: closed });
+  // Keyed by the parsed record's id, never raw argv (blocker 2 amendment).
+  await writeHotState(ctx.layout, closed.id, { ...hotStateFor(closed, ended), outcome });
+  // The run.ended event is the segment's final line and the record now says
+  // ended, so the run's segment is provably closed — archive it, sweeping any
+  // other eligible closed segments opportunistically (PRD F1). Bounded,
+  // deterministic, silent when nothing is eligible.
+  await rotateJournal(ctx.layout);
+  return closed;
+}
+
 async function runStart(
   args: string[],
   env: Env,
@@ -97,17 +142,7 @@ async function runStart(
   await requireExistingItem(ctx.layout, itemId, "item");
   const { frontmatter: item } = await readItem(ctx.layout, itemId);
 
-  const run: Run = {
-    id: generateId(env),
-    item: item.id,
-    actor: ctx.actor,
-    lane: item.lane,
-    phase: INITIAL_PHASE,
-    status: "active",
-    started: env.now(),
-  };
-  await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runStarted, run });
-  await writeHotState(ctx.layout, run.id, hotStateFor(run, run.started));
+  const run = await startRun(ctx, item);
   console.log(run.id);
   return 0;
 }
@@ -157,16 +192,7 @@ async function runEnd(
 
   const ctx = await commandContext(cwd, env, actorOverride);
   const run = await readOpenRun(ctx, runId, true);
-  const ended = env.now();
-  const closed: Run = { ...run, phase: outcome, status: "ended", ended };
-  await mutate(ctx, { target: "run", eventType: CORE_EVENT_TYPES.runEnded, run: closed });
-  // Keyed by the parsed record's id, never raw argv (blocker 2 amendment).
-  await writeHotState(ctx.layout, closed.id, { ...hotStateFor(closed, ended), outcome });
-  // The run.ended event is the segment's final line and the record now says
-  // ended, so the run's segment is provably closed — archive it, sweeping any
-  // other eligible closed segments opportunistically (PRD F1). Bounded,
-  // deterministic, silent when nothing is eligible.
-  await rotateJournal(ctx.layout);
+  await endRun(ctx, run, outcome);
   return 0;
 }
 

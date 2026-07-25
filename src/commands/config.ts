@@ -27,6 +27,7 @@ export const CONFIG_UPDATED_EVENT_TYPE = "config.updated";
 export const SETTABLE_CONFIG_SECTIONS = [
   "compaction",
   "contract",
+  "dispatch",
   "governance",
   "inception",
   "routing",

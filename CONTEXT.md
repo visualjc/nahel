@@ -43,6 +43,7 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 
 - **Responsibility** — a kind of judgment a project needs done: `architecture | implementation | review`. The unit routing maps to an executor; orthogonal to work-item type (one item exercises several responsibilities).
 - **Routing map** — the committed config mapping each responsibility to a preferred executor (agent CLI and/or model), plus a default. Advisory to interactive sessions via the brief; enforced by autonomous dispatch.
+- **Dispatch** — the deterministic act of launching a routed executor (`nahel dispatch <responsibility> -- <task>`): resolve the route, compose the agent CLI's invocation (binary, model flag, `NAHEL_ACTOR`, an orientation preamble pointing at the brief), spawn it, record the run. Mechanics only — what to dispatch, when, and whether to stop are the host agent's judgment (ADR-0016).
 
 ## Interfaces
 

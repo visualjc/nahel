@@ -276,6 +276,37 @@ export const routingSchema = z.strictObject({
 export type Routing = z.infer<typeof routingSchema>;
 
 /**
+ * One agent CLI's invocation knowledge (PRD F1.3, ADR-0016 addendum): the
+ * `binary` to spawn, the `args` that precede the prompt (headless flags, a
+ * subcommand), and the `model_flag` the CLI takes its model on. Dispatch
+ * always delivers the prompt as the TRAILING argument — true of every agent
+ * CLI shipped — so there is deliberately no prompt-delivery field. A config
+ * entry REPLACES the shipped default for that kind wholesale, matching
+ * `config set`'s replace-the-section semantics.
+ */
+export const dispatchAgentSchema = z.strictObject({
+  binary: nonEmptyString("dispatch binary"),
+  args: z.array(nonEmptyString("dispatch args entry")),
+  model_flag: nonEmptyString("dispatch model_flag").optional(),
+});
+export type DispatchAgent = z.infer<typeof dispatchAgentSchema>;
+
+/**
+ * Dispatch invocation config — `config.dispatch` (PRD F1.3): per-agent-CLI
+ * overrides of the shipped invocation defaults, keyed by agent kind. Strict
+ * over the fixed kind enum: an unknown agent kind is a schema error here (so
+ * `nahel validate` and `nahel dispatch` both refuse it) rather than a silent
+ * entry nothing ever reads. Omitting the section entirely is the normal
+ * case — the defaults cover every known kind.
+ */
+export const dispatchSchema = z.strictObject({
+  claude: dispatchAgentSchema.optional(),
+  codex: dispatchAgentSchema.optional(),
+  "cursor-agent": dispatchAgentSchema.optional(),
+});
+export type Dispatch = z.infer<typeof dispatchSchema>;
+
+/**
  * Compaction thresholds — `config.compaction` (PRD F6.2, ADR-0004): when
  * `nahel validate` warns that un-distilled ARCHIVED journal events (events in
  * archived segments with no marker in nahel/journal/distilled/) are overdue
@@ -325,9 +356,10 @@ export type Governance = z.infer<typeof governanceSchema>;
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
  * The optional `validate` block tunes the maintenance-warning thresholds
  * (PRD F8, ADR-0004); the optional `compaction` (PRD F6.2), `contract`
- * (ADR-0014) and `routing` (ADR-0015) sections are additive too, so existing
- * configs stay valid — as are `inception` and `governance` (PRD F4), written
- * by the inception workflow through `nahel config set`.
+ * (ADR-0014), `routing` (ADR-0015) and `dispatch` (Phase 2 F1.3) sections are
+ * additive too, so existing configs stay valid — as are `inception` and
+ * `governance` (PRD F4), written by the inception workflow through
+ * `nahel config set`.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -349,6 +381,7 @@ export const configSchema = z.strictObject({
   compaction: compactionSchema.optional(),
   contract: contractSchema.optional(),
   routing: routingSchema.optional(),
+  dispatch: dispatchSchema.optional(),
   inception: inceptionSchema.optional(),
   governance: governanceSchema.optional(),
 });

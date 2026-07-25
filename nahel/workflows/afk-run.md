@@ -64,13 +64,31 @@ on it (step 3); never work around a claim.
 
           nahel doctor
 
-      Exit 0 proceeds. Exit 2 refuses: "no passing run contract — the
-      `contract` section is missing; run the inception workflow
-      (`nahel/workflows/inception.md`)". Exit 3 refuses naming the unset env
-      vars doctor listed (they belong in this machine's gitignored env file);
-      exit 4 refuses naming the failing healthcheck. A run that cannot prove
-      the app runs cannot verify by driving (step 10), so this is a gate, not
-      a warning.
+      The gate is satisfied by EITHER of two states, and by nothing else:
+
+      - **Exit 0** — the contract holds on this machine. Proceed.
+      - **Exit 3 or Exit 4 WITH a journaled first-scaffold obligation** — the
+        deferred-proof case, and the only failure the gate admits. A founding
+        on an empty repo records `standard` with the doctor proof deferred as
+        an obligation (`nahel/workflows/inception.md`, "Tier honesty"),
+        because a contract's proof cannot precede the app it checks. Read the
+        obligation from recorded state before relying on it:
+
+            nahel progress | grep "first-scaffold obligation"
+
+        With that event present, the run starts and the obligation is
+        DISCHARGED at step 9a — `nahel doctor` must exit 0 there, before any
+        PR opens. Without it, exit 3 refuses naming the unset env vars doctor
+        listed (they belong in this machine's gitignored env file), and exit 4
+        refuses naming the failing healthcheck.
+
+      **Exit 2 refuses always**, obligation or not: "no passing run contract —
+      the `contract` section is missing; run the inception workflow
+      (`nahel/workflows/inception.md`)". Same for a malformed config (exit 1).
+      The obligation defers the run contract's PROOF and
+      never the contract itself — an unrecorded contract has nothing to prove
+      later, and a run that cannot even name how the app launches cannot
+      verify by driving (step 9).
 
    c. **A recorded inception tier:** `nahel/config`'s `inception` section
       must carry `tier`. Refusal: "no recorded inception tier — run the
@@ -98,9 +116,9 @@ on it (step 3); never work around a claim.
    that is the whole check.
 
    **The boundaries, all of them**: before every dispatch (step 8);
-   before every phase transition on an item — handing it to review (step 9),
-   and the verify run's `run start` / `run update --phase` (step 10);
-   and before every PR open (step 11).
+   before every phase transition on an item — the verify run's `run start` /
+   `run update --phase` (step 9), and handing it to review (step 11);
+   and before every PR open (step 10).
    Wave ordering (step 7) applies it too, so a claimed item never reaches a
    dispatch in the first place.
    Checking once at the top of the run is not checking: the human intervenes
@@ -357,23 +375,10 @@ on it (step 3); never work around a claim.
      read the item's journal and either re-dispatch with what you learned, or
      park it.
 
-9. Review. When an item's worker reports completion (its run ended, its status
-   is `in-review`), run the checkpoint check (step 3) — handing an item to
-   review is a phase transition on it — then invoke the review loop —
-   `nahel/workflows/review-loop.md` — on its epic's PR-bound work. That
-   workflow owns the reviewing: two independent cross-vendor reviewers,
-   findings validated against HEAD, red-first fixes, the iteration cap, and
-   ALL merge mechanics including merge authority. Do not restate its rules
-   here, and do not merge anything yourself.
-
-   Yours is the timing only: review when a coherent slice is complete — not
-   per commit, not once at the very end — and stop when the loop signs off or
-   parks. A cap-reached park is the loop's decision: honor it, and keep the
-   rest of the run moving.
-
-10. Verify by driving, before any PR opens — EVERY lane, no exception, no
-    silent skip (hard constraint 6, ADR-0011). This is where an AFK run earns
-    the right to open a PR at all.
+9. Verify by driving, before any PR opens — EVERY lane, no exception, no
+    silent skip (hard constraint 6, ADR-0011). An item's worker reporting
+    completion (its run ended, its status is `in-review`) is what brings it
+    here. This is where an AFK run earns the right to open a PR at all.
 
     **The invariant is per lane, not per happy path.**
     A `direct`-lane one-liner verifies exactly like a `full`-lane epic.
@@ -385,8 +390,20 @@ on it (step 3); never work around a claim.
     a phase transition, and `run start` on a claimed item is refused anyway.
 
     a. Satisfy the run contract on this machine: `nahel doctor` exits 0.
-       Anything else is step 1b's refusal reaching you late — park (e) rather
-       than driving against a contract that does not hold.
+
+       This is also where gate 1b's deferred proof comes due. A run admitted
+       on a journaled first-scaffold obligation (`nahel/workflows/inception.md`,
+       "Tier honesty") has by now scaffolded the app that contract describes,
+       so the obligation is DISCHARGED here — before any PR opens — and the
+       discharge is journaled, not remembered:
+
+           nahel log note --item <item-id> \
+             --data summary="first-scaffold obligation discharged: nahel doctor exits 0 on this machine" \
+             --data obligation=<the first-scaffold obligation event id>
+
+       Anything other than exit 0 is gate 1b's refusal reaching you late —
+       park (e) rather than driving against a contract that does not hold. An
+       undischarged obligation blocks the PR rather than being forgiven.
     b. Launch the app with the contract's `launch` command (and `seed` where
        the contract defines one). The app a human would open, actually
        running — not a test harness standing in for it.
@@ -415,7 +432,7 @@ on it (step 3); never work around a claim.
        the run ref, so the claim is attributable to someone; the summary
        carries enough specificity to audit WITHOUT re-running anything —
        which flow, which steps, in what order, and what you saw. "Verified the
-       feature" is not evidence. Keep the event id: step 11's PR body cites it.
+       feature" is not evidence. Keep the event id: step 10's PR body cites it.
 
        Drove it and it FAILED? That is a finding, not a park: the item is not
        done. End the verify run `failure`, journal what broke, then either
@@ -435,11 +452,11 @@ on it (step 3); never work around a claim.
              --data summary="parked: cannot verify by driving — <which of the three, named> — <what you tried>" \
              --data park=cannot-drive
 
-       A silent skip is the one forbidden outcome. Every item reaching step 11
+       A silent skip is the one forbidden outcome. Every item reaching step 10
        carries EITHER journaled driving evidence OR a park — there is no third
        option, and "the change is obviously fine" is not one.
 
-11. Open ONE draft PR per epic, on that epic's branch (`epic/<slug>`, per
+10. Open ONE draft PR per epic, on that epic's branch (`epic/<slug>`, per
     task-lifecycle's git discipline). Run the checkpoint check (step 3) first.
     A run that touched two epics opens two PRs — never one combined PR,
     however convenient the diff.
@@ -448,14 +465,21 @@ on it (step 3); never work around a claim.
 
     The body carries the run trail, so the PR is auditable without the
     journal: the kickoff line; the waves and their order; each item's lane and
-    why; review dispositions from step 9;
-    the verify-by-driving evidence from step 10 — quoted, citing its
+    why; the verify-by-driving evidence from step 9 — quoted, citing its
     journal event ids and the verifying actor, for every item it carries;
     every waiver in force (repro waivers —
     `nahel brief` surfaces them) stated plainly; and every park with its
     reason.
 
-    An item that parked at step 10 is not PR-bound, and an epic whose changed
+    The one part of the trail this step does NOT write is the
+    review dispositions, because no review has run yet — and a round faked
+    into that list is a review that never happened.
+    The review loop (step 11) appends them to this body as it goes, round by
+    round, through `gh pr edit`. That append-per-round shape is the trail
+    PRs #13–#18 proved out, and it is why the PR opens BEFORE the review: the
+    loop annotates and merges an existing PR, it does not create one.
+
+    An item that parked at step 9 is not PR-bound, and an epic whose changed
     flow was never driven does not get a PR at all — its park stands in the
     PR's place until a host that can drive picks it up.
 
@@ -463,6 +487,21 @@ on it (step 3); never work around a claim.
     the human; under a validly activated `merge: on-approve` the review loop
     may merge on sign-off. Either way the invariant here is one trail-carrying
     PR per epic.
+
+11. Review. The draft PR from step 10 is what gets reviewed: run the
+    checkpoint check (step 3) — handing an item to review is a phase
+    transition on it — then invoke the review loop —
+    `nahel/workflows/review-loop.md` — on that epic's PR-bound work. That
+    workflow owns the reviewing: two independent cross-vendor reviewers,
+    findings validated against HEAD, red-first fixes, the iteration cap, the
+    per-round `gh pr edit` that writes each round into the PR body, and ALL
+    merge mechanics including merge authority. Do not restate its rules here,
+    and do not merge anything yourself.
+
+    Yours is the timing only: review when a coherent slice is complete — not
+    per commit, not once at the very end — and stop when the loop signs off or
+    parks. A cap-reached park is the loop's decision: honor it, and keep the
+    rest of the run moving.
 
 12. Park anything you are not authorized to decide — this is how an AFK run
     ends a question without asking one:
@@ -497,8 +536,8 @@ AFK. The autonomy gate cannot be checked, no worker can be dispatched under
 routing, and no park can be recorded — an AFK run without the CLI is an
 unrecorded run. Report the kickoff line, the scope you would have discovered,
 and that the run is blocked on the CLI; make no state mutations until it is
-back. If the host cannot drive the app, step 10 already covers it: the
+back. If the host cannot drive the app, step 9 already covers it: the
 affected items park rather than the run continuing blind. If no PR tooling is
-available, stop before step 11 with the branch pushed and say the PR is
-pending — an epic without its trail-carrying PR is unfinished work, not a
+available, stop before step 10 with the branch pushed and say the PR is
+pending — the review loop needs that PR too, so step 11 does not run either — an epic without its trail-carrying PR is unfinished work, not a
 delivered run.

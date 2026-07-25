@@ -186,6 +186,62 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     expect(body).toContain("Interactive work is ungated");
   });
 
+  test("gate 1b admits an honest greenfield: a healthcheck-only failure WITH the journaled obligation (F7.1, F9.3)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const gate = body.slice(
+      body.indexOf("b. **A passing run contract"),
+      body.indexOf("c. **A recorded inception tier"),
+    );
+    expect(gate.length).toBeGreaterThan(0);
+    // The contradiction this fixes: inception (F9.3) records `standard` on an
+    // empty repo with the doctor proof DEFERRED as a journaled obligation, so
+    // a gate demanding exit 0 outright means an honest greenfield can never
+    // start an AFK run at all. The gate takes EITHER branch.
+    expect(gate).toContain("EITHER");
+    expect(gate).toContain("first-scaffold obligation");
+    expect(gate).toContain("nahel progress");
+    // Only the env/healthcheck exits are deferrable — those are the ones the
+    // obligation is about (nothing to prove yet on an empty repo).
+    expect(gate).toContain("Exit 3");
+    expect(gate).toContain("Exit 4");
+    // A missing or malformed contract still refuses outright: the obligation
+    // defers the PROOF, never the contract itself.
+    expect(gate).toContain("Exit 2 refuses");
+    expect(gate).toContain("never the contract itself");
+    // The gate and the verify step point at each other, so the deferral is
+    // discharged rather than forgiven.
+    expect(gate).toContain("step 9a");
+    const step = verifyStep(body);
+    expect(step).toContain("first-scaffold obligation");
+    expect(step).toContain("gate 1b");
+    expect(step).toContain("discharge");
+  });
+
+  test("the exit path is ordered verify → PR → review, so the loop always has a PR to annotate (F4)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    // review-loop's mechanics (`gh pr edit`, `gh pr ready`, `gh pr merge`) all
+    // need an EXISTING PR, and F4 forbids opening one before the changed flow
+    // was driven. Only one order satisfies both: verify, open, review.
+    const verifyAt = body.indexOf("9. Verify by driving");
+    const prAt = body.indexOf("10. Open ONE draft PR");
+    const reviewAt = body.indexOf("11. Review.");
+    expect(verifyAt).toBeGreaterThan(0);
+    expect(prAt).toBeGreaterThan(verifyAt);
+    expect(reviewAt).toBeGreaterThan(prAt);
+
+    // The review step says which PR it is reviewing, so the dependency is
+    // stated rather than left to a runner to infer.
+    const reviewStep = body.slice(reviewAt, body.indexOf("12. Park anything"));
+    expect(reviewStep).toContain("step 10");
+    expect(reviewStep).toContain("gh pr edit");
+
+    // The trail list stays on the PR-open step; review rounds append to the
+    // body afterwards — the PRs #13–#18 pattern the loop's step 10 codifies.
+    const prStep = body.slice(prAt, reviewAt);
+    expect(prStep).toContain("review dispositions");
+    expect(prStep).toContain("step 11");
+  });
+
   test("scope discovery and lane picks run through the CLI, with the reasoning journaled (F2.1, F2.2)", async () => {
     const { body } = await shippedWorkflow("afk-run.md");
     // F2.1: the kickoff line is resolved against recorded state — brief,
@@ -339,7 +395,10 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
 
   test("the signed constitution is checked before EVERY implementation dispatch, on every lane (F9.5)", async () => {
     const { body } = await shippedWorkflow("afk-run.md");
-    const dispatchStep = body.slice(body.indexOf("8. Dispatch the worker"), body.indexOf("9. Review."));
+    const dispatchStep = body.slice(
+      body.indexOf("8. Dispatch the worker"),
+      body.indexOf("9. Verify by driving"),
+    );
     expect(dispatchStep.length).toBeGreaterThan(0);
     // Not only at the Full-lane approval gate: a one-line direct-lane chore
     // gets the same check, and a contradiction parks instead of dispatching.
@@ -360,7 +419,7 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
    * park-instead-of-skip outcome to exact prose.
    */
   const verifyStep = (body: string) =>
-    body.slice(body.indexOf("10. Verify by driving"), body.indexOf("11. Open ONE draft PR"));
+    body.slice(body.indexOf("9. Verify by driving"), body.indexOf("10. Open ONE draft PR"));
 
   test("verify-by-driving binds EVERY lane — direct included, least ceremony still drives or parks (F4.1)", async () => {
     const { body } = await shippedWorkflow("afk-run.md");
@@ -425,11 +484,11 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
 
   test("the PR body links each item's driving evidence, and an undriven epic gets no PR (F4.2, F4.3)", async () => {
     const { body } = await shippedWorkflow("afk-run.md");
-    const prStep = body.slice(body.indexOf("11. Open ONE draft PR"), body.indexOf("12. Park anything"));
+    const prStep = body.slice(body.indexOf("10. Open ONE draft PR"), body.indexOf("11. Review."));
     expect(prStep.length).toBeGreaterThan(0);
-    // Step 11's trail list must name the driving evidence and cite it by
+    // The PR step's trail list must name the driving evidence and cite it by
     // event id — a PR body that only asserts verification is unauditable.
-    expect(prStep).toContain("verify-by-driving evidence from step 10");
+    expect(prStep).toContain("verify-by-driving evidence from step 9");
     expect(prStep).toContain("journal event ids");
     expect(prStep).toContain("verifying actor");
     // The AC's teeth: no evidence and no park means no PR.
@@ -463,9 +522,9 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     const markers = [
       "7. Order the work into waves",
       "8. Dispatch the worker",
-      "9. Review.",
-      "10. Verify by driving",
-      "11. Open ONE draft PR",
+      "9. Verify by driving",
+      "10. Open ONE draft PR",
+      "11. Review.",
       "12. Park anything",
     ];
     const offsets = markers.map((marker) => {
@@ -544,7 +603,7 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
  * The review loop (Phase 2 PRD F3), codifying what PRs #13–#18 proved:
  * two cross-vendor reviewers, findings validated against HEAD before they may
  * be fixed, red-first fixes, a hard three-round cap, and — owned here and
- * nowhere else — the merge decision. afk-run invokes this doc (its step 9) and
+ * nowhere else — the merge decision. afk-run invokes this doc (its step 11) and
  * deliberately does not restate any of it, so a line softened here is a rule
  * that exists nowhere: a loop that counts two same-vendor reviews as two, that
  * fixes a stale finding blind, that grinds past the cap instead of parking, or
@@ -654,10 +713,12 @@ describe("review-loop canonical workflow doc (F3)", () => {
       expect(body).toContain(disposition);
     }
     expect(body).toContain("--data finding=<finding-event-id>");
-    // The PR body is the trail afk-run's step 11 quotes.
+    // The PR body is the trail afk-run's step 10 opens and this loop appends
+    // to, round by round — the PRs #13–#18 pattern.
     expect(body).toContain("gh pr edit");
     expect(body).toContain("rounds, findings, dispositions, and verdicts");
     expect(body).toContain("nahel/workflows/afk-run.md");
+    expect(body).toContain("its step 10");
   });
 
   test("agent-neutral and conversation-drivable, with a degraded-environment fallback", async () => {
@@ -877,7 +938,7 @@ describe("knowledge-first inception (F9)", () => {
     expect(body).toContain("first-scaffold obligation");
     expect(body).toContain("nahel doctor");
     expect(body).toContain("verify-by-driving");
-    expect(body).toContain("nahel/workflows/afk-run.md` step 10");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 9a");
     // A cut-short NEW founding records seed; a re-founding never lowers a
     // committed tier (the ratchet, kept from Phase 1).
     expect(body).toContain("cut short");

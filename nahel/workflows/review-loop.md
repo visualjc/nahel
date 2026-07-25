@@ -9,9 +9,11 @@ args: "<item-id>"
 Load and follow this workflow to take one item's PR-bound work from "the work
 is done" to signed off: two independent cross-vendor reviewers, every finding
 validated against HEAD before it may be fixed, accepted findings fixed
-red-first, at most three rounds — and then the merge decision. This document
-owns ALL merge mechanics; `nahel/workflows/afk-run.md` invokes it (its step 9)
-and deliberately does not restate any of them. Whoever drives the loop, the
+red-first, at most three rounds — and then the merge decision. The loop runs
+on an OPEN PR: its rounds annotate that PR's body and its merge decision acts
+on it, so the PR exists before the loop starts. This document owns ALL merge
+mechanics; `nahel/workflows/afk-run.md` invokes it (its step 11, after the
+draft PR its step 10 opens) and deliberately does not restate any of them. Whoever drives the loop, the
 rule is the same: reviewing is not merging, and merging is not yours unless
 the recorded authority says it is.
 
@@ -282,7 +284,9 @@ merge around a claim.
     became of it.
 
     This is the trail `nahel/workflows/afk-run.md` expects the PR body to
-    carry (its step 11): rounds, findings, dispositions, and verdicts.
+    carry: its step 10 opens the PR with the run trail up to that point, and
+    each round here APPENDS to that body rather than replacing the run's own
+    account — rounds, findings, dispositions, and verdicts.
 
 11. Park anything you are not authorized to decide — the way this loop ends a
     question without asking one:

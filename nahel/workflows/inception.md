@@ -343,10 +343,13 @@ that proof DEFERRED as a journaled first-scaffold obligation:
 
     nahel log note --data summary="first-scaffold obligation: run contract unproven on an empty repo — nahel doctor must exit 0 before any verify-by-driving PR opens"
 
-The AFK run discharges it: `nahel/workflows/afk-run.md` step 10a requires
-`nahel doctor` to exit 0 before it drives anything, and no PR opens without
-verify-by-driving evidence — so an undischarged obligation blocks the PR
-rather than being forgiven. Journaled, not remembered.
+That journaled obligation is also what lets an honest greenfield START an AFK
+run at all: `nahel/workflows/afk-run.md` gate 1b admits a doctor that fails on
+env or healthcheck ONLY when this event is present (a missing contract still
+refuses outright). The AFK run then discharges it:
+`nahel/workflows/afk-run.md` step 9a requires `nahel doctor` to exit 0 before
+it drives anything, and no PR opens without verify-by-driving evidence — so an undischarged obligation
+blocks the PR rather than being forgiven. Journaled, not remembered.
 
 Everything else stays honest the hard way:
 

@@ -12,7 +12,7 @@ Autonomous agents route around soft rules ("I couldn't repro it" is the easiest 
 2. **Prototypes never merge**: prototype branches are terminal; promotion = mini-PRD → feature lane re-implementation with the prototype as reference.
 3. **Verify-by-driving**: every AFK run satisfies the run contract, launches the app, and exercises the changed flow before its draft PR opens. No lane skips it.
 4. **QA ratchet**: exploratory agentic judgment is spent once per flow, then captured as deterministic e2e tests that run in CI forever.
-5. **Humans merge**: autonomous runs end at draft PRs. Never weaken tests or revert feature code to go green.
+5. **Humans merge**: autonomous runs end at draft PRs, unless the project has opted into `merge: on-approve` — a human-granted standing authorization in per-project config that lets reviewer sign-off merge; use sparingly (small items, or changes QA testing covers well), and every such merge journals who authorized it. Never weaken tests or revert feature code to go green. *(Amended 2026-07-25, Jim-signed via chat, alongside the matching HC6 amendment — resolving the Phase 2 PRD's open question 4.)*
 
 ## Consequences
 

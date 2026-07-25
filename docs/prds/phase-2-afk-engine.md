@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T16:10:07Z
+updated: 2026-07-25T16:26:49Z
 ---
 
 # Phase 2 — AFK engine
@@ -73,7 +73,7 @@ yolo-pr-review rebuilt as a canonical workflow, codifying the pattern proven on 
 - **F3.1** Two cross-vendor reviewers review the PR independently; findings are reconciled into one disposition list. The config surface names **both** reviewers (the exact shape — a reviewer list under the `review` responsibility or a second review slot — is an F1/F3 design call within ADR-0015's enum discipline); "second vendor is config, not architecture," but cross-vendor is the bar: the workflow refuses to count two same-vendor reviews as satisfying it.
 - **F3.2** Every finding is validated against HEAD before fixing — findings against stale diffs are dismissed with a note, not fixed blind.
 - **F3.3** Fix/re-loop: accepted findings are fixed red-first where testable; the loop re-reviews after fixes, capped at **3 iterations**; cap-reached parks the item for human review, never merges over objections, never stalls the rest of the run.
-- **F3.4** Merge authority is per-project config: `merge: human` (default) — the PR waits; `merge: on-approve` (opt-in) — reviewer sign-off merges. The config lives in the schema-validated `nahel/config`; the workflow refuses to merge under `human` regardless of approvals. **Constitution prerequisite:** hard constraint 6 and ADR-0011 currently read "PRs are merged by humans only," which `on-approve` contradicts as written. `on-approve` therefore ships **inert**: enabling it in any project requires a human-signed constitution amendment (e.g. "…or under a human-granted standing authorization recorded in config") — an explicit human resolution this PRD surfaces but cannot make. Until that amendment, only `merge: human` is operative.
+- **F3.4** Merge authority is per-project config: `merge: human` (default) — the PR waits; `merge: on-approve` (opt-in) — reviewer sign-off merges, journaling who authorized it. The config lives in the schema-validated `nahel/config`; the workflow refuses to merge under `human` regardless of approvals. `on-approve` is legitimate under HC6 and ADR-0011 **as amended 2026-07-25 (Jim-signed, resolving this PRD's former open question 4)**: the committed config flip is the human's standing authorization. Guidance carried by the workflow doc and setup surfaces: use **sparingly** — small items, or changes QA testing covers well; `merge: human` stays the default everywhere.
 
 **Acceptance criteria**
 
@@ -81,7 +81,7 @@ yolo-pr-review rebuilt as a canonical workflow, codifying the pattern proven on 
 - [ ] A config that resolves both review slots to the same vendor is refused by the workflow (and flagged by `validate`) rather than counted as two reviewers.
 - [ ] A seeded stale finding — one whose cited code no longer exists at HEAD — is dismissed with a journaled note, not fixed (F3.2).
 - [ ] With `merge: human`, a fully approved PR remains unmerged and parks as a pending human decision.
-- [ ] **Inertness is provable pre-amendment:** with `merge: on-approve` configured but no human-signed amendment recorded — the amendment must cover **both** blockers F3.4 names, HC6 and ADR-0011's "humans merge" invariant (amended or superseded); the recorded representation is an F3.4 design scope, deterministic like F7.2 — a fully approved PR still does not merge (the loop behaves exactly as under `merge: human`) and `validate` warns that the setting is inert. Only with the amendment recorded does the same state merge, journaling who authorized it.
+- [ ] With `merge: on-approve` configured, the same fully approved state merges and the journal records who authorized it (the reviewers' sign-offs and the standing config authorization); the workflow surfaces the use-sparingly guidance when the setup workflow writes the flag.
 - [ ] An artificial cap-breach (finding that keeps regressing) parks the item with the loop history journaled; the run continues on other items.
 
 ### F4 — Verify-by-driving invariant
@@ -181,4 +181,4 @@ Pass = both transports, judged by Jim. Failure anywhere feeds the backlog before
 1. **`epic-oneshot` retirement** — flagged during Phase 1 (journal `xfkr09sy`) as semantically weakened and a Phase 2 deletion candidate. Whether it dies here or gets rebuilt atop `afk-run` should be decided when F2 lands and shows whether anything still needs it; a direct-lane chore either way, not scoped as an F-requirement.
 2. **Remote transport choice for the exit test** — the bar requires *a* remote transport (Claude Code remote, OpenClaw, Hermes…); which one is exercised depends on what is set up on Jim's infrastructure by phase end. The invariant is transport-agnostic; the test needs one real instance.
 3. **Dispatch invocation-config shape** — F1.3 makes per-agent-CLI knowledge config data; whether it ships as a built-in table with config overrides or pure config with shipped defaults is an implementation call for the F1 design, bounded by "unknown agent kinds fail with a schema error."
-4. **Hard constraint 6 amendment for `merge: on-approve`** — decision C wants the opt-in; the constitution as written forbids it (F3.4). The amendment is a human-signed act outside this PRD's power: approve the PRD with `on-approve` shipping inert, and amend (or decline to amend) HC6 when the first project wants the opt-in.
+4. ~~Hard constraint 6 amendment for `merge: on-approve`~~ — **resolved 2026-07-25**: Jim approved the amendment (chat, journaled on `b95x0sar`); HC6 and ADR-0011 now permit `on-approve` as a human-granted standing authorization, with use-sparingly guidance (F3.4).

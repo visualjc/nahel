@@ -19,7 +19,7 @@ Enable a solo builder to run an AFK software development team: durable, tool-agn
 3. Agents never hand-edit state file internals (frontmatter, journals); they mutate state through the CLI.
 4. External issue trackers are **one-way mirrors** of local state, never peers.
 5. Every workflow must be drivable through **pure conversation** — slash commands are conveniences, never the only door.
-6. Quality invariants are never silently skipped: failing repro test before bug fix (waiver = logged + surfaced), prototype code never merges, AFK runs verify-by-driving before opening a PR, PRs are merged by humans only.
+6. Quality invariants are never silently skipped: failing repro test before bug fix (waiver = logged + surfaced), prototype code never merges, AFK runs verify-by-driving before opening a PR, PRs are merged by humans — or under a human-granted standing authorization recorded in per-project config (`merge: on-approve`), an opt-in to be used **sparingly**: small items, or changes QA testing covers well. *(Amended 2026-07-25 at Jim's direction; originally "merged by humans only".)*
 7. Open source (MIT), TypeScript on Bun, dual-distributed (npm + compiled binaries).
 
 ## Non-goals

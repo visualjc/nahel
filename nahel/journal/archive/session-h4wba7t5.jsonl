@@ -1,0 +1,2 @@
+{"id":"sam46w7t","ts":"2026-07-25T16:17:48Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"0k83q678","payload":{"target":"item","record":{"id":"0k83q678","name":"test-baseline-grep-under-set-e","type":"bug","status":"in-review","lane":"direct","depends_on":[],"external_refs":[],"investigation":"docs/investigations/0k83q678.md","created":"2026-07-21T16:27:28Z","updated":"2026-07-25T16:17:48Z"},"body":""}}
+{"id":"j9x2xsf5","ts":"2026-07-25T16:17:48Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

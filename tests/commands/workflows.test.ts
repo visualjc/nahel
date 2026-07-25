@@ -711,3 +711,73 @@ describe("knowledge-first inception (F9)", () => {
     expect(text).toContain("nahel/workflows/inception.md");
   });
 });
+
+describe("prototype-lane canonical workflow doc (F5)", () => {
+  test("variants → explore: the CLI spawns the workspaces, ceremony is stripped by name (F5.1)", async () => {
+    const { parsed, body } = await shippedWorkflow("prototype-lane.md");
+    expect(parsed.name).toBe("prototype-lane");
+    expect(parsed.description.length).toBeGreaterThan(0);
+
+    // The lane is the TYPE's, and the spawn is one deterministic CLI call.
+    expect(body).toContain("nahel item new prototype");
+    expect(body).toContain("nahel prototype start <item-id> --variants");
+    expect(body).toContain("--approach");
+    // Each variant gets its own workspace and its own approach statement.
+    expect(body).toContain("prototype/<slug>/variant-<n>");
+    expect(body).toContain("docs/prototypes/<slug>/variant-<n>.md");
+    // Ceremony stripped — named explicitly so nobody re-adds it out of habit.
+    expect(body).toContain("no TDD");
+    expect(body).toContain("no review loop");
+    expect(body).toContain("no consensus");
+  });
+
+  test("the never-merge invariant is stated AND pinned to its mechanism (F5.2)", async () => {
+    const { body } = await shippedWorkflow("prototype-lane.md");
+    expect(body).toContain("never merges");
+    // Both mechanical seams, by name — prose alone does not satisfy F5.2.
+    expect(body).toContain("`in-review`");
+    expect(body).toContain("`done`");
+    expect(body).toContain("prototype.merge-refused");
+    expect(body).toContain("nahel validate");
+    expect(body).toContain("prototype.merged");
+    expect(body).toContain("prototype.pushed");
+    // No PR, no push — the workflow states the human-side half of the rule.
+    expect(body).toContain("Never open a PR");
+    expect(body).toContain("dropped");
+  });
+
+  test("judge → promote: mini-PRD onto the plan lane, approval per governance (F5.3)", async () => {
+    const { body } = await shippedWorkflow("prototype-lane.md");
+    expect(body).toContain("nahel prototype promote <variant-item-id>");
+    expect(body).toContain("nahel/workflows/prd-new.md");
+    expect(body).toContain("nahel/workflows/prd-parse.md");
+    expect(body).toContain("governance.product");
+    // Delegated consensus and the human gate are afk-run's mechanics, referenced.
+    expect(body).toContain("nahel/workflows/afk-run.md");
+    expect(body).toContain("reference-only");
+    // The prototype code stays out of the promoted feature's diff.
+    expect(body).toContain("Never copy");
+  });
+
+  test("promotion refuses on a seed-tier project, naming the upgrade (F5.4)", async () => {
+    const { body } = await shippedWorkflow("prototype-lane.md");
+    expect(body).toContain("seed");
+    expect(body).toContain("upgrade inception first");
+    expect(body).toContain("nahel/workflows/inception.md");
+    expect(body).toContain("standard");
+  });
+
+  test("disposal is journaled for every variant, winner included (F5.3)", async () => {
+    const { body } = await shippedWorkflow("prototype-lane.md");
+    expect(body).toContain("nahel prototype dispose <variant-item-id>");
+    expect(body).toContain("--reason");
+    expect(body).toContain("--force");
+  });
+
+  test("the degraded fallback keeps the invariant when the CLI is unavailable", async () => {
+    const { body } = await shippedWorkflow("prototype-lane.md");
+    expect(body).toContain("Fallback (degraded environment)");
+    expect(body).toContain("NO");
+    expect(body).toContain("never merges");
+  });
+});

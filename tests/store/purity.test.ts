@@ -16,6 +16,7 @@ const EXPECTED_STORE_FILES = [
   "journal.ts",
   "layout.ts",
   "mutate.ts",
+  "prototype.ts",
   "rotate.ts",
   "skills.ts",
 ];
@@ -27,16 +28,23 @@ const FS_IMPORT = /from\s+["'](node:)?(fs|fs\/promises)["']/;
 const FORBIDDEN_EVERYWHERE = /from\s+["'](node:)?(net|http|https|http2|dns|tls)["']/;
 
 /**
- * Process spawning is store-layer I/O with exactly four legitimate uses:
+ * Process spawning is store-layer I/O with exactly five legitimate uses:
  * baseline.ts spawning `git` for claim baselines and handback evidence
  * (PRD F9), healthcheck.ts spawning the run contract's healthcheck (PRD F2),
  * skills.ts spawning `git` / the `skills` CLI to fetch pinned skills
- * (PRD F7, ADR-0009), and dispatch.ts spawning the routed agent CLI
- * (Phase 2 F1.4, ADR-0016 — the allowlist joined deliberately). Everywhere
- * else it stays forbidden.
+ * (PRD F7, ADR-0009), dispatch.ts spawning the routed agent CLI
+ * (Phase 2 F1.4, ADR-0016 — the allowlist joined deliberately), and
+ * prototype.ts spawning `git` for variant worktrees and the never-merge ref
+ * scan (Phase 2 F5). Everywhere else it stays forbidden.
  */
 const PROCESS_SPAWN_IMPORT = /from\s+["'](node:)?(child_process|worker_threads)["']/;
-const SPAWN_ALLOWED = ["baseline.ts", "dispatch.ts", "healthcheck.ts", "skills.ts"];
+const SPAWN_ALLOWED = [
+  "baseline.ts",
+  "dispatch.ts",
+  "healthcheck.ts",
+  "prototype.ts",
+  "skills.ts",
+];
 
 /** Ambient I/O and environment access forbidden in the store layer. */
 const FORBIDDEN_GLOBALS = [/\bfetch\s*\(/, /\bBun\.(file|write|spawn|serve|env)\b/, /\bprocess\.env\b/];
@@ -74,7 +82,7 @@ describe("store layer owns ALL fs I/O", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("spawning processes is store-layer I/O, limited to baseline.ts (git), healthcheck.ts (contract), skills.ts and dispatch.ts (agent CLI)", () => {
+  test("spawning processes is store-layer I/O, limited to baseline.ts and prototype.ts (git), healthcheck.ts (contract), skills.ts and dispatch.ts (agent CLI)", () => {
     const allowedPaths = SPAWN_ALLOWED.map((name) => join(STORE_DIR, name));
     const offenders = tsFilesUnder(SRC_DIR)
       .filter((path) => !allowedPaths.includes(path))

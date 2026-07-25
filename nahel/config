@@ -5,3 +5,6 @@ knowledge:
 actor:
   kind: human
   id: maintainer
+governance:
+  product: human
+  architecture: human

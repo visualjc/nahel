@@ -5,8 +5,10 @@ type: bug
 status: in-review
 lane: direct
 depends_on: []
-external_refs: []
+external_refs:
+  - provider: github
+    id: "16"
 investigation: docs/investigations/rgm43hvc.md
 created: 2026-07-25T19:25:17Z
-updated: 2026-07-25T19:27:35Z
+updated: 2026-07-25T19:34:41Z
 ---

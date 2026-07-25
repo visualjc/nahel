@@ -8,21 +8,24 @@ import {
   ensureLayout,
   knowledgePaths,
   readConfig,
+  readTextFile,
   storeLayout,
   writeConfig,
 } from "../store/layout";
-import { AGENTS_TEMPLATE } from "../templates/agents";
+import { mergeAgentsSection } from "../templates/agents";
 import { CONTEXT_TEMPLATE } from "../templates/context";
 import { productTemplate } from "../templates/product";
 
 /**
- * `nahel init` (PRD F2): non-interactive scaffold. Creates the `nahel/`
+ * `nahel init` (PRD F2, F8.3): non-interactive scaffold. Creates the `nahel/`
  * structure, writes config with flag-overridable knowledge-path defaults, and
- * emits the three knowledge templates. Never overwrites anything: existing
- * files are kept and reported, so re-running is always safe — a full re-run
- * no-ops, a partial one restores only what is missing (per the recorded
- * config, not fresh flags). Zero prompts, zero ambient time — the change-log
- * seed date comes from the injected Env.
+ * emits the three knowledge templates. Never overwrites human content:
+ * existing files are kept and reported, so re-running is always safe — a full
+ * re-run no-ops, a partial one restores only what is missing (per the recorded
+ * config, not fresh flags). The single exception is AGENTS.md's explicitly
+ * marked nahel section, which is generator-owned and merged in (F8.3);
+ * everything outside those markers survives byte for byte. Zero prompts, zero
+ * ambient time — the change-log seed date comes from the injected Env.
  */
 
 const DEFAULT_KNOWLEDGE = {
@@ -126,7 +129,6 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
   const templates = [
     { label: config.knowledge.product, path: paths.product, content: productTemplate(date) },
     { label: config.knowledge.context, path: paths.context, content: CONTEXT_TEMPLATE },
-    { label: "AGENTS.md", path: join(ctx.cwd, "AGENTS.md"), content: AGENTS_TEMPLATE },
   ];
   for (const { label, path, content } of templates) {
     if (await fileExists(path)) {
@@ -135,6 +137,27 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
       await writeFileAtomic(path, content);
       created.push(`${label} created`);
     }
+  }
+
+  // AGENTS.md is the one merged file (PRD F8.3): a repo that already has one
+  // gets the nahel orientation section appended instead of being skipped —
+  // the section is regenerated in place afterwards, the rest is untouched.
+  const agentsPath = join(ctx.cwd, "AGENTS.md");
+  try {
+    const merge = mergeAgentsSection(await readTextFile(agentsPath));
+    if (merge.outcome === "unchanged") {
+      kept.push("AGENTS.md exists — nahel section already current");
+    } else {
+      await writeFileAtomic(agentsPath, merge.content);
+      created.push(
+        merge.outcome === "created"
+          ? "AGENTS.md created"
+          : "AGENTS.md — nahel orientation section merged in (your content preserved)",
+      );
+    }
+  } catch (error) {
+    ctx.stderr(`⚠️ AGENTS.md left untouched: ${error instanceof Error ? error.message : String(error)}`);
+    kept.push("AGENTS.md exists — left untouched (unmergeable nahel section markers)");
   }
 
   if (created.length === 0) {

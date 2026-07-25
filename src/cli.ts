@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 // nahel — deterministic CLI for the Nahel state model.
 // Dispatch structure: a registry table of thin command verbs over the store
-// layer. All ambient process access (argv, cwd, exit, real clock) happens
-// here at the entry point and is injected down — commands stay pure over
-// their CommandContext, per-command flags are parsed with node:util parseArgs
-// inside each command.
+// layer. All ambient process access (argv, cwd, home dir, exit, real clock)
+// happens here at the entry point and is injected down — commands stay pure
+// over their CommandContext, per-command flags are parsed with node:util
+// parseArgs inside each command.
 
+import { homedir } from "node:os";
 import { briefCommand } from "./commands/brief";
 import { configCommand } from "./commands/config";
 import { distillCommand } from "./commands/distill";
@@ -34,6 +35,13 @@ export interface CommandContext {
   env: Env;
   /** Repo root the command operates on. */
   cwd: string;
+  /**
+   * The user's home directory, injected at the entry point (PRD F8.2). Needed
+   * only by generators whose target lives outside the repo — codex reads its
+   * custom prompts from ~/.codex/prompts and nowhere else. Optional: commands
+   * that need it say so when it is absent rather than guessing a path.
+   */
+  homeDir?: string;
   /**
    * NAHEL_ACTOR spec value (`kind:id[:session]`), if set. The entry point
    * reads it from the process environment; commands only ever see this
@@ -140,12 +148,14 @@ export async function main(argv: string[], ctx: CommandContext): Promise<number>
 }
 
 if (import.meta.main) {
-  // cli.ts is the single ambient-process reader: argv, cwd, exit, the real
-  // clock, and the NAHEL_ACTOR environment override are all read here and
-  // injected down — no other src/ layer touches process.env.
+  // cli.ts is the single ambient-process reader: argv, cwd, the home
+  // directory, exit, the real clock, and the NAHEL_ACTOR environment override
+  // are all read here and injected down — no other src/ layer touches the
+  // ambient process.
   const code = await main(Bun.argv.slice(2), {
     env: systemEnv(),
     cwd: process.cwd(),
+    homeDir: homedir(),
     actorOverride: process.env[NAHEL_ACTOR_VAR],
     // A var is "set" only when present AND non-empty: an empty value in a .env
     // is not a filled secret. Presence, never the value, crosses into commands.

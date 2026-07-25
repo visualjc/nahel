@@ -51,20 +51,40 @@ The body is the procedure, written for any capable agent or human:
 ## Shim generation: `nahel install`
 
 ```
-nahel install --agent claude [--prefix nd]
+nahel install --agent claude[,codex] [--prefix nd]
 ```
 
 For every workflow doc with valid frontmatter, the generator writes a 3-line
-shim under the agent's command directory (`.claude/commands/<prefix>/<name>.md`
-for Claude Code, default prefix `nd`). The shim's whole job is "load canonical
-workflow X"; the `description` and `args` fields become the agent-native
-command metadata.
+shim into each named agent's command location (default prefix `nd`). The shim's
+whole job is "load canonical workflow X"; the `description` and `args` fields
+become the agent-native command metadata — both current targets take the same
+`description` / `argument-hint` frontmatter and expand `$ARGUMENTS`.
+
+| agent | location | invoked as |
+| --- | --- | --- |
+| `claude` | `.claude/commands/<prefix>/<name>.md` (repo) | `/nd:brief` |
+| `codex` | `~/.codex/prompts/<prefix>-<name>.md` (home) | `/prompts:nd-brief` |
+
+Codex reads custom prompts only from `$CODEX_HOME/prompts` (default
+`~/.codex/prompts`), scanning top-level markdown files — no subdirectories, no
+repo-level `.codex/prompts`. So codex shims land outside the repo, stay flat,
+and the prefix becomes a **file-name namespace** instead of a directory. They
+do not travel with a clone: each machine runs `nahel install --agent codex`
+once. AGENTS.md is what travels, and it makes nahel discoverable with no shims
+at all.
 
 Semantics:
 
 - **Idempotent**: identical workflow docs produce byte-identical shims.
-- **Mirroring**: the prefix directory is generator-owned; shims whose workflow
-  was deleted (or any foreign `.md` placed there) are pruned on regeneration.
+- **Mirroring**: the generator's namespace is made to mirror the workflow set;
+  shims whose workflow was deleted are pruned on regeneration. That namespace
+  is the whole prefix directory when the agent gets one of its own (claude —
+  foreign `.md` files placed there are pruned too), and the `<prefix>-` name
+  namespace when the directory belongs to the user (codex — the user's own
+  prompts are never touched).
+- **All-or-nothing targets**: every agent in the list is resolved before any
+  file is written, so an unknown agent (or an unresolvable home directory)
+  leaves the invocation with nothing generated.
 - **Tolerant scan**: a doc with invalid frontmatter is skipped with a warning;
   the remaining workflows still install.
 - **Additive agents**: targets live in a lookup table

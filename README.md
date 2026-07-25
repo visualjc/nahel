@@ -38,9 +38,12 @@ bun run build:all  # macOS + Linux, arm64 + x64
 Then, in any repo:
 
 ```sh
-nahel init   # scaffold state
-nahel brief  # orient
+nahel init                          # scaffold state (merges its section into an existing AGENTS.md)
+nahel brief                         # orient
+nahel install --agent claude,codex  # slash-command shims for the canonical workflows
 ```
+
+Claude Code shims land in the repo (`.claude/commands/nd/`, committed); codex prompts land in `~/.codex/prompts/nd-*.md`, since codex reads custom prompts from your home directory only — so that one is per machine, not per clone.
 
 ## Lineage & attribution
 

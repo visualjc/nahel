@@ -126,7 +126,7 @@ describe("nahel config set — writing optional sections", () => {
 
   test("founding is settable here too — the conversational door of the mode capture (F9.4, HC5)", async () => {
     const { root, layout, env } = await setup();
-    const paragraph = '  A "speed count" game for kids.\n  Playable one-handed.  ';
+    const paragraph = 'A "speed count" game for kids.\nPlayable one-handed.';
     const code = await configCommand.run(
       ["set", "founding", "--data", "mode=hands-off", "--data", `paragraph=${paragraph}`],
       env,
@@ -146,6 +146,23 @@ describe("nahel config set — writing optional sections", () => {
     expect(act.payload["value"]).toEqual({ mode: "hands-off", paragraph });
     const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
     expect(errors).toEqual([]);
+  });
+
+  test("the JSON --data form preserves a paragraph the key=value dialect would trim", async () => {
+    // The shared `--data` dialect trims each entry (log/observe speak it too),
+    // so a paragraph whose leading/trailing whitespace is load-bearing must go
+    // through the JSON form — or through `nahel init --hands-off`, which never
+    // touches it. Recorded here because "verbatim" is the whole promise (F9.5).
+    const { root, layout, env } = await setup();
+    const paragraph = "  Two lines,\n  with outer space and a trailing newline.\n";
+    const code = await configCommand.run(
+      ["set", "founding", "--data", JSON.stringify({ mode: "hands-off", paragraph })],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).founding?.paragraph).toBe(paragraph);
   });
 
   test("a hands-off founding with no paragraph is refused — the paragraph IS the signed content", async () => {

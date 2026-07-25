@@ -1,9 +1,11 @@
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import type { Config } from "../schema/records";
-import { parseActorSpec } from "../store/actor";
+import { CONFIG_UPDATED_EVENT_TYPE } from "../schema/events";
+import type { Config, Founding } from "../schema/records";
+import { parseActorSpec, resolveActor } from "../store/actor";
 import { readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
+import { appendEvent, newSessionSegmentId } from "../store/journal";
 import {
   ensureLayout,
   knowledgePaths,
@@ -12,6 +14,7 @@ import {
   storeLayout,
   writeConfig,
 } from "../store/layout";
+import { closeStoreContext } from "../store/mutate";
 import { mergeAgentsSection } from "../templates/agents";
 import { CONTEXT_TEMPLATE } from "../templates/context";
 import { productTemplate } from "../templates/product";
@@ -26,6 +29,13 @@ import { productTemplate } from "../templates/product";
  * marked nahel section, which is generator-owned and merged in (F8.3);
  * everything outside those markers survives byte for byte. Zero prompts, zero
  * ambient time — the change-log seed date comes from the injected Env.
+ *
+ * `--hands-off "<paragraph>"` (Phase 2 F9.4) is the founding mode capture's
+ * shortcut door: it records `config.founding` — the mode plus the human's
+ * paragraph, VERBATIM — and journals the `config.updated` act whose ACTOR is
+ * that paragraph's signature provenance (F9.5). Deterministic recording only;
+ * every judgment the paragraph triggers belongs to the inception workflow.
+ * Absent, init behaves exactly as before: no section, no journal event.
  */
 
 const DEFAULT_KNOWLEDGE = {
@@ -60,10 +70,26 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
       context: { type: "string" },
       adr: { type: "string" },
       actor: { type: "string" },
+      "hands-off": { type: "string" },
     },
     strict: true,
     allowPositionals: false,
   });
+
+  // Flag input is validated before anything touches disk. A blank paragraph
+  // is refused outright rather than recorded: under a hands-off founding the
+  // paragraph is the whole of the human's constitutional input (F9.5), so
+  // "nothing" is not a founding — it is a mistake worth stopping for.
+  const handsOff = values["hands-off"];
+  if (handsOff !== undefined && handsOff.trim().length === 0) {
+    ctx.stderr(
+      "❌ --hands-off needs the founding paragraph: a blank paragraph founds nothing — " +
+        'it is the constitution\'s only human-signed content (`nahel init --hands-off "<paragraph>"`)',
+    );
+    return 1;
+  }
+  const founding: Founding | undefined =
+    handsOff === undefined ? undefined : { mode: "hands-off", paragraph: handsOff };
 
   const layout = storeLayout(ctx.cwd);
 
@@ -82,8 +108,17 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
       ctx.stderr("Fix or remove nahel/config, then re-run `nahel init` — init never overwrites it.");
       return 1;
     }
-    if (values.product !== undefined || values.context !== undefined || values.adr !== undefined || values.actor !== undefined) {
+    if (values.product !== undefined || values.context !== undefined || values.adr !== undefined || values.actor !== undefined || founding !== undefined) {
       ctx.stderr("⚠️ nahel/config already exists — flags ignored, recorded config used");
+    }
+    if (founding !== undefined) {
+      // init never rewrites a recorded config, so the paragraph cannot land
+      // here — but it must not be silently dropped either: name the door that
+      // does work on an initialized repo (hard constraint 5, F9.4).
+      ctx.stderr(
+        "⚠️ founding paragraph NOT recorded — the HUMAN records it on an initialized repo with: " +
+          'nahel config set founding --data mode=hands-off --data paragraph="<the paragraph>"',
+      );
     }
   }
 
@@ -95,6 +130,7 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
       adr: values.adr ?? DEFAULT_KNOWLEDGE.adr,
     },
     actor: parseActorSpec(values.actor ?? DEFAULT_ACTOR_SPEC),
+    ...(existing === undefined && founding !== undefined ? { founding } : {}),
   };
   const config = existing ?? freshConfig;
 
@@ -116,11 +152,38 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
   const kept: string[] = [];
 
   if (existing === undefined) {
-    await writeConfig(layout, freshConfig);
+    if (freshConfig.founding !== undefined) {
+      // Write-ahead, exactly as `config set` does it: the ACT lands in the
+      // journal before the config it authorizes, because the act's actor is
+      // the paragraph's signature (F9.5) and unprovable is not signed. The
+      // session segment is closed after the write so the segment can rotate.
+      const context = {
+        layout,
+        env: ctx.env,
+        actor: resolveActor(freshConfig.actor, ctx.actorOverride),
+        session: newSessionSegmentId(ctx.env),
+      };
+      await appendEvent(layout, ctx.env, {
+        type: CONFIG_UPDATED_EVENT_TYPE,
+        actor: context.actor,
+        session: context.session,
+        payload: { section: "founding", value: freshConfig.founding },
+      });
+      await writeConfig(layout, freshConfig);
+      await closeStoreContext(context);
+    } else {
+      await writeConfig(layout, freshConfig);
+    }
     const { knowledge, actor } = freshConfig;
     created.push(
       `nahel/config created (knowledge: ${knowledge.product}, ${knowledge.context}, ${knowledge.adr}; actor: ${actor.kind}:${actor.id})`,
     );
+    if (freshConfig.founding !== undefined) {
+      created.push(
+        "founding recorded (mode: hands-off) — the paragraph is the constitution's only signed content; " +
+          "found the project with the inception workflow (nahel/workflows/inception.md)",
+      );
+    }
   } else {
     kept.push("nahel/config exists — kept");
   }

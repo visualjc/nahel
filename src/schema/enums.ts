@@ -50,6 +50,18 @@ export const INCEPTION_TIERS = ["seed", "standard", "full"] as const;
 export type InceptionTier = (typeof INCEPTION_TIERS)[number];
 
 /**
+ * How a founding is RUN (glossary: Inception; PRD F9.4): `guided` — the human
+ * is grilled and corrects the drafts; `hands-off` — the human hands over one
+ * paragraph and leaves. These are INTERACTION modes of the one inception
+ * workflow, never two workflows and never two mining procedures: mining is
+ * knowledge-first in both, and the mode decides only who answers the questions
+ * the drafts raise — and, under `hands-off`, what those answers are worth
+ * (only the human's paragraph is signed constitutional content, F9.5).
+ */
+export const FOUNDING_MODES = ["guided", "hands-off"] as const;
+export type FoundingMode = (typeof FOUNDING_MODES)[number];
+
+/**
  * Who owns legislation for a governance area (glossary: Delegated
  * governance): `human` — agents propose, the human approves; `delegated` —
  * agent roles decide via consensus. Recorded in Phase 1, enforced later.

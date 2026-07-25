@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ACTOR_KINDS,
+  FOUNDING_MODES,
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
   LANES,
@@ -362,6 +363,42 @@ export const inceptionSchema = z.strictObject({
 export type Inception = z.infer<typeof inceptionSchema>;
 
 /**
+ * Founding record — `config.founding` (Phase 2 F9.4): which interaction mode
+ * the founding was started in, and — under `hands-off` — the human's founding
+ * `paragraph`, stored VERBATIM.
+ *
+ * The paragraph is not a description of the constitution; under a hands-off
+ * founding it IS the constitution's only human-signed content (F9.5), so this
+ * field is reproduced into the constitution document word for word and
+ * compared against later. Nothing normalizes it: no trim, no reflow, no case
+ * folding — only blank is refused, because a blank paragraph founds nothing.
+ *
+ * Provenance lives where merge authority's does (governance/authority.ts): the
+ * `config.updated` act that wrote THIS section carries the actor, and only a
+ * human-attributed act is a signature. That is why the section is separate
+ * from `inception` — `config set` replaces a section wholesale, so the tier
+ * record (which an agent writes when it finishes founding) would otherwise
+ * overwrite the human's act with its own.
+ */
+export const foundingSchema = z
+  .strictObject({
+    mode: z.enum(FOUNDING_MODES),
+    paragraph: z
+      .string()
+      .refine(
+        (paragraph) => paragraph.trim().length > 0,
+        "founding.paragraph must not be blank — the paragraph is the founding's only human-signed content",
+      )
+      .optional(),
+  })
+  .refine((founding) => founding.mode !== "hands-off" || founding.paragraph !== undefined, {
+    message:
+      "founding.paragraph is required when founding.mode is hands-off — the paragraph IS the signed content",
+    path: ["paragraph"],
+  });
+export type Founding = z.infer<typeof foundingSchema>;
+
+/**
  * Governance — `config.governance` (PRD F4, roadmap §7): who owns
  * legislation per area — product (priorities, PRD approvals) and
  * architecture (ADRs, architecture evolution). Both areas are declared
@@ -397,7 +434,8 @@ export type Merge = z.infer<typeof mergeSchema>;
  * (ADR-0014), `routing` (ADR-0015) and `dispatch` (Phase 2 F1.3) sections are
  * additive too, so existing configs stay valid — as are `inception` and
  * `governance` (PRD F4), written by the inception workflow through
- * `nahel config set`, and `merge` (Phase 2 F3.4).
+ * `nahel config set`, `merge` (Phase 2 F3.4), and `founding` (Phase 2 F9.4),
+ * written by `nahel init --hands-off` or the same `config set` door.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -421,6 +459,7 @@ export const configSchema = z.strictObject({
   routing: routingSchema.optional(),
   dispatch: dispatchSchema.optional(),
   inception: inceptionSchema.optional(),
+  founding: foundingSchema.optional(),
   governance: governanceSchema.optional(),
   merge: mergeSchema.optional(),
 });

@@ -20,13 +20,20 @@ import { parseDataEntries } from "./log";
  * constraint 3). Core sections (knowledge paths, actor) are set at init and
  * deliberately NOT settable here.
  *
- * The journaled ACTOR is load-bearing for one section: `merge` (PRD F3.4).
+ * The journaled ACTOR is load-bearing for two sections. `merge` (PRD F3.4):
  * `merge: on-approve` counts as the human's standing merge authorization only
  * when THIS event's actor is a human; an agent-attributed flip is inert
- * (src/governance/authority.ts). The actor a checkout runs as is therefore
- * not bookkeeping there — it IS the authorization. Which is why a set whose
- * value is already committed still journals: re-running the command as a
- * human is exactly how an agent-set section's provenance is repaired.
+ * (src/governance/authority.ts). And `founding` (Phase 2 F9.5): a hands-off
+ * founding's paragraph is the constitution's only signed content, so the act
+ * that records it is its signature — an agent-run founding act signs nothing.
+ * The actor a checkout runs as is therefore not bookkeeping there — it IS the
+ * authorization. Which is why a set whose value is already committed still
+ * journals: re-running the command as a human is exactly how an agent-set
+ * section's provenance is repaired.
+ *
+ * `founding` is also written by `nahel init --hands-off` (F9.4), which
+ * journals the same `config.updated` act — one section, one provenance rule,
+ * whichever door the founder came through (hard constraint 5).
  */
 
 /** The optional config sections `config set` may replace. */
@@ -34,6 +41,7 @@ export const SETTABLE_CONFIG_SECTIONS = [
   "compaction",
   "contract",
   "dispatch",
+  "founding",
   "governance",
   "inception",
   "merge",

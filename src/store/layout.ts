@@ -228,10 +228,17 @@ export function workflowsDir(layout: StoreLayout): string {
  * store export for `nahel install` (task #11): the workflow scan and the
  * shim-directory scan are directory listings the command layer may not do
  * itself — fs is the store's exclusive privilege (see tests/store/purity).
+ * Directories are excluded even when named `*.md` — a directory is not a
+ * doc, and unlinking one raises EISDIR (bug 33b2j3kq); symlinks pass, since
+ * both consumers handle them (unlink removes the link, the doc reader
+ * warns-and-skips anything unreadable).
  */
 export async function listMarkdownDocs(dir: string): Promise<string[]> {
-  const entries = await readdir(dir).catch(() => [] as string[]);
-  return entries.filter((name) => name.endsWith(".md")).sort();
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.name.endsWith(".md") && !entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
 }
 
 /**

@@ -726,6 +726,78 @@ describe("schema/records — responsibility routing (F3.1, ADR-0015)", () => {
   });
 });
 
+describe("schema/records — dispatch invocation config (F1.3, ADR-0016 addendum)", () => {
+  const withDispatch = (dispatch: unknown) => ({ ...validConfig, dispatch });
+
+  test("a config with no dispatch section stays valid (shipped defaults cover every kind)", () => {
+    expectAccepted(configSchema, validConfig, "config no dispatch");
+  });
+
+  test("accepts an override for each known agent kind", () => {
+    expectAccepted(
+      configSchema,
+      withDispatch({
+        claude: { binary: "/opt/bin/claude", args: ["-p"], model_flag: "--model" },
+        codex: { binary: "codex", args: ["exec"], model_flag: "--model" },
+        "cursor-agent": { binary: "cursor-agent", args: ["-p"], model_flag: "--model" },
+      }),
+      "dispatch full",
+    );
+  });
+
+  test("accepts an entry with no model_flag (a CLI that takes no model flag)", () => {
+    expectAccepted(
+      configSchema,
+      withDispatch({ claude: { binary: "claude", args: [] } }),
+      "dispatch no model flag",
+    );
+  });
+
+  test("rejects an unknown agent kind, naming it — a new kind is a deliberate schema change", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withDispatch({ gemini: { binary: "gemini", args: [] } }),
+      "dispatch unknown kind",
+    );
+    expect(issues.some((i) => i.includes("gemini"))).toBe(true);
+  });
+
+  test("rejects an entry missing its binary", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withDispatch({ claude: { args: ["-p"] } }),
+      "dispatch no binary",
+    );
+    expect(issues.some((i) => i.includes("binary"))).toBe(true);
+  });
+
+  test("rejects an empty binary and an empty arg (nothing spawnable)", () => {
+    expect(
+      rejectionIssues(
+        configSchema,
+        withDispatch({ claude: { binary: "", args: [] } }),
+        "dispatch empty binary",
+      ).some((i) => i.includes("binary")),
+    ).toBe(true);
+    expect(
+      rejectionIssues(
+        configSchema,
+        withDispatch({ claude: { binary: "claude", args: [""] } }),
+        "dispatch empty arg",
+      ).some((i) => i.includes("args")),
+    ).toBe(true);
+  });
+
+  test("rejects an unknown key inside a dispatch entry (strict object)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withDispatch({ claude: { binary: "claude", args: [], prompt: "stdin" } }),
+      "dispatch entry unknown key",
+    );
+    expect(issues.some((i) => i.includes("prompt"))).toBe(true);
+  });
+});
+
 describe("schema/records — compaction thresholds (F6.2)", () => {
   const withCompaction = (compaction: unknown) => ({ ...validConfig, compaction });
 

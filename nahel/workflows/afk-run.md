@@ -51,6 +51,15 @@ on it (step 3); never work around a claim.
       signature themselves." Never infer a signature from prose in the
       constitution document; the gate reads recorded state only.
 
+      One founding spends the human's single act elsewhere. When
+      `nahel/config` carries a `founding` section with `mode: hands-off`, the
+      signed content is that section's verbatim paragraph — so the act to
+      check for human attribution is the `config.updated` that wrote
+      `founding`, and the tier record itself may be agent-attributed (the
+      human was gone by then; `nahel/workflows/inception.md`). Only the act
+      being read changes: an agent-attributed founding act is no signature
+      either, and `constitution_signed_by` must still be recorded.
+
    b. **A passing run contract:**
 
           nahel doctor
@@ -273,6 +282,14 @@ on it (step 3); never work around a claim.
      neither, dispatch exits non-zero naming the `nahel config set` command
      that fixes it — a setup failure, so park and say so rather than working
      around it.
+   - Check the item against the SIGNED constitution before dispatching it, on
+     every lane. The Full-lane approval gate (step 6) covers PRDs only, and a
+     direct-lane one-liner never passes through it — so this check is where
+     the small work gets caught. Work that would contradict the constitution
+     parks (step 12); it is never dispatched. Under a hands-off founding the
+     signed content is the founding paragraph alone
+     (`nahel/workflows/inception.md`): the elaboration below it is unconfirmed
+     and can never authorize contradicting it.
    - The task text tells the worker which lane workflow to follow
      (`nahel/workflows/task-lifecycle.md`, or `nahel/workflows/bug-lane.md`
      for a bug) and what "done" means for this item.

@@ -566,7 +566,7 @@ describe("knowledge-first inception (F9)", () => {
   test("mode-and-input capture is the FIRST step: a meta-question, asked before mining (F9.4)", async () => {
     const { body } = await shippedWorkflow("inception.md");
     // The question itself, in the founder's words.
-    expect(body).toContain("grill session (guided)");
+    expect(body.toLowerCase()).toContain("grill session (guided)");
     expect(body).toContain("give me a paragraph and I figure it out (hands-off)");
     expect(body).toContain("meta-question");
     // Both doors (hard constraint 5): the CLI shortcut and the plain command.

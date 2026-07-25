@@ -458,17 +458,25 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     expect(step).toContain("Checking once at the top of the run is not checking");
     // And the steps that own those boundaries each point back at it, so the
     // rule cannot be honored in the abstract and skipped in the concrete.
-    for (const marker of [
+    // Sliced marker-to-next-marker: a reference in step 8 must not satisfy
+    // the assertion for step 7.
+    const markers = [
       "7. Order the work into waves",
       "8. Dispatch the worker",
       "9. Review.",
       "10. Verify by driving",
       "11. Open ONE draft PR",
-    ]) {
-      const start = body.indexOf(marker);
-      expect(start).toBeGreaterThan(0);
-      const end = body.indexOf("\n\n1", start + marker.length);
-      expect(body.slice(start, end === -1 ? undefined : end)).toContain("checkpoint check (step 3)");
+      "12. Park anything",
+    ];
+    const offsets = markers.map((marker) => {
+      const at = body.indexOf(marker);
+      expect(at).toBeGreaterThan(0);
+      return at;
+    });
+    // Markers appear in document order, or the slices below are meaningless.
+    for (let i = 1; i < offsets.length; i += 1) expect(offsets[i]!).toBeGreaterThan(offsets[i - 1]!);
+    for (let i = 0; i < markers.length - 1; i += 1) {
+      expect(body.slice(offsets[i]!, offsets[i + 1]!)).toContain("checkpoint check (step 3)");
     }
   });
 

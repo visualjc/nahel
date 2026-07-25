@@ -89,27 +89,83 @@ on it (step 3); never work around a claim.
    The line is the run's charter; the trail must show what was asked, not only
    what you decided it meant.
 
-3. The checkpoint check. Run it before every dispatch (step 8), before every
-   phase transition on an item, and before every PR open (step 11):
+3. The checkpoint check — where a human's intervention actually reaches a
+   running loop. Run it at every checkpoint boundary:
 
        nahel status
 
-   - A claim on the item — its own, or any ancestor's, since claims cover the
-     whole subtree — means STAND DOWN on that item: start nothing further on
-     it, journal the stand-down, and continue the run on other items.
+   That one read renders every item's `claimed_by` and every run's status;
+   that is the whole check.
 
-         nahel log note --item <item-id> --data summary="stood down at checkpoint: claimed by <claimant>"
+   **The boundaries, all of them**: before every dispatch (step 8);
+   before every phase transition on an item — handing it to review (step 9),
+   and the verify run's `run start` / `run update --phase` (step 10);
+   and before every PR open (step 11).
+   Wave ordering (step 7) applies it too, so a claimed item never reaches a
+   dispatch in the first place.
+   Checking once at the top of the run is not checking: the human intervenes
+   WHILE you work, and a boundary you crossed without looking is an
+   intervention you overrode.
 
-   - A paused run means dispatch nothing further for it from the pause onward.
-   - **Never kill a worker.** Intervention is state-level. A worker already in
-     flight on a claimed item runs to its own natural exit; because the claim
-     freezes that run against the worker's own mutations, YOU journal its exit
-     and its final output, then abandon the output. No kill, no terminate, no
-     interrupt mid-write.
-   - Resuming after a handback needs no memory of the previous session: the
-     `nahel handback` event carries what changed while the human held the
-     claim, so re-read `nahel progress --item <item-id>` and continue from
-     state alone — including the human's edits.
+   - **A claim on the item — its own, or any ancestor's, since claims cover
+     the whole subtree — means STAND DOWN on that item.** Clean stand-down,
+     exactly:
+     start nothing further on it, finish nothing already started on it,
+     open no PR for it, and attempt no mutation of it — the CLI would refuse
+     you, and a refusal you provoked is noise in a trail a human is about to
+     read. Journal the stand-down, then carry the run on with the other
+     items; a claim on one item never ends the run.
+
+         nahel log note --item <item-id> \
+           --data summary="stood down at checkpoint: claimed by <claimant>" \
+           --data checkpoint=<dispatch|phase|pr-open> \
+           --data claim=<the claimed item id — this item, or the ancestor covering it>
+
+   - **A paused run means zero further dispatches for it, from the pause
+     onward.** Not "one more, it was already decided": the journal must show
+     the `run.paused` event followed by no dispatch for that run's item until
+     a human resumes it. Resume is the human's act, never yours.
+
+   - **Never kill a worker.** Intervention is state-level:
+     no kill, no terminate, no interrupt mid-write, at any boundary.
+     A worker already in flight on a claimed item runs to its own
+     NATURAL exit — you wait for the dispatch to return, never shorten it.
+
+     Then YOU journal what it did, because it no longer can. The claim froze
+     that run against agent mutations, so the worker cannot close its own run
+     record and `nahel run end` on it is refused. Do not force it: the claimed
+     run stays `paused` and claimed rather than force-ended, and that
+     preserved state IS the evidence that nothing was killed. Journaling
+     stays open to you — notes are claim-exempt, because a note mutates no
+     record — so an event naming the item and tied to the claimed run lands:
+
+         nahel log note --item <item-id> --run <run-id> \
+           --data summary="worker exited naturally under claim: <how it ended>" \
+           --data exit=<the worker's exit code> \
+           --data claim=<the claimed item id> \
+           --data output=<the worker's final output, recorded then abandoned>
+
+     Then abandon that output: it is recorded for the human who claimed the
+     item, never merged, never built on. (If a future CLI ever refuses notes
+     on claimed items, journal the same event on your own session — drop
+     `--item` and `--run`, name the item inside the payload — rather than
+     losing the trail.)
+
+   - **Handback resumes from state alone.** The human's `nahel handback`
+     clears the claim and journals `item.handback` carrying deterministic
+     evidence of what they changed: the commits since the claim baseline, the
+     diff summary baseline→HEAD, and the dirty state. So a session with
+     NO memory of the claim — a different runner, a later day — continues
+     correctly by reading:
+
+         nahel progress --item <item-id>
+         nahel log note --item <item-id> \
+           --data summary="resumed after handback: <what the human changed, read from the handback evidence>" \
+           --data handback=<the item.handback event id>
+
+     Re-read before you re-dispatch: the human's edit may have already done
+     the work, changed its shape, or made it wrong. The next dispatch's task
+     text states what you read, not what you remember.
 
 4. Discover scope. Resolve the kickoff line against recorded state, never
    against your assumptions:
@@ -248,7 +304,10 @@ on it (step 3); never work around a claim.
 7. Order the work into waves from the `depends_on` edges — `nahel status`
    renders the tree, `nahel validate` proves the graph is a DAG. Every item
    with no unmet dependency is dispatchable now; run them in parallel only as
-   far as you can actually supervise.
+   far as you can actually supervise. Apply the checkpoint check (step 3) as
+   you order: a claimed item and a paused run are not dispatchable, whatever
+   the graph says — drop them from the wave rather than discovering the claim
+   at the dispatch itself.
 
    **COMPLETION-THEN-DISPATCH** — the bar an AFK run may never lower.
    Dispatch an item only after EVERY declared dependency has reached journaled
@@ -299,7 +358,8 @@ on it (step 3); never work around a claim.
      park it.
 
 9. Review. When an item's worker reports completion (its run ended, its status
-   is `in-review`), invoke the review loop —
+   is `in-review`), run the checkpoint check (step 3) — handing an item to
+   review is a phase transition on it — then invoke the review loop —
    `nahel/workflows/review-loop.md` — on its epic's PR-bound work. That
    workflow owns the reviewing: two independent cross-vendor reviewers,
    findings validated against HEAD, red-first fixes, the iteration cap, and
@@ -311,16 +371,31 @@ on it (step 3); never work around a claim.
    parks. A cap-reached park is the loop's decision: honor it, and keep the
    rest of the run moving.
 
-10. Verify by driving, before any PR opens — every lane, no exception, no
-    silent skip (hard constraint 6, ADR-0011). A `direct`-lane one-liner
-    verifies exactly like a `full`-lane epic.
+10. Verify by driving, before any PR opens — EVERY lane, no exception, no
+    silent skip (hard constraint 6, ADR-0011). This is where an AFK run earns
+    the right to open a PR at all.
+
+    **The invariant is per lane, not per happy path.**
+    A `direct`-lane one-liner verifies exactly like a `full`-lane epic.
+    The lane scales ceremony — decomposition, PRD authoring, review rounds —
+    and never scales this. Least ceremony still drives, or parks. There is no
+    lane, and no size of change, whose evidence is "the tests passed".
+
+    Run the checkpoint check (step 3) first: the run you are about to open is
+    a phase transition, and `run start` on a claimed item is refused anyway.
 
     a. Satisfy the run contract on this machine: `nahel doctor` exits 0.
+       Anything else is step 1b's refusal reaching you late — park (e) rather
+       than driving against a contract that does not hold.
     b. Launch the app with the contract's `launch` command (and `seed` where
-       the contract defines one).
+       the contract defines one). The app a human would open, actually
+       running — not a test harness standing in for it.
     c. Exercise the CHANGED flow end to end with whatever driving tooling the
        host has — browser automation, the app's own CLI, an HTTP client.
-       Tests passing is not driving.
+       THE CHANGED flow: what this item altered, walked from entry to
+       observable outcome, not a neighbouring flow and not a tour of the app.
+       Tests passing is not driving; a page that renders is not the flow;
+       re-reading the diff is not driving.
     d. Journal the evidence on a run of your own — the worker's dispatch run
        closed when it exited, and evidence tied to no run is evidence tied to
        nothing:
@@ -328,13 +403,41 @@ on it (step 3); never work around a claim.
            nahel run start <item-id>
            nahel run update <run-id> --phase verify
            nahel log note --item <item-id> --run <run-id> \
-             --data summary="verified by driving: <what you drove, step by step> — <what you observed>"
+             --data summary="verified by driving: <the steps you drove, in order> — <what you observed at each>" \
+             --data flow=<the changed flow, named> \
+             --data tooling=<what drove it: browser automation | app CLI | HTTP client | …> \
+             --data lane=<direct|epic-lite|full>
            nahel run end <run-id> success
 
-       Write it so a human can audit the claim without re-running it.
-    e. If the host cannot drive — no driving tooling, a headless transport, an
-       incomplete contract env — PARK the item (step 12) with that reason. A
-       PR never opens with neither driving evidence nor a parked state.
+       Fixed keys, so a human audits the trail by grepping it rather than
+       reading all of it — the same discipline as step 6's delegated-approval
+       record. The event carries the VERIFYING ACTOR (your `NAHEL_ACTOR`) and
+       the run ref, so the claim is attributable to someone; the summary
+       carries enough specificity to audit WITHOUT re-running anything —
+       which flow, which steps, in what order, and what you saw. "Verified the
+       feature" is not evidence. Keep the event id: step 11's PR body cites it.
+
+       Drove it and it FAILED? That is a finding, not a park: the item is not
+       done. End the verify run `failure`, journal what broke, then either
+       re-dispatch (step 8) with what you observed or park it (step 12) —
+       never open the PR on a flow you watched fail.
+
+    e. If the host CANNOT drive, PARK the item (step 12) with an actionable
+       reason naming which of the three it was:
+       - **no driving tooling** on this host — nothing here can exercise the
+         flow;
+       - a **headless transport** — this run has no way to reach the app;
+       - an **incomplete contract env** — `nahel doctor` exit 3 or 4; name the
+         unset vars or the failing healthcheck it listed.
+
+           nahel item update <item-id> --status blocked
+           nahel log note --item <item-id> \
+             --data summary="parked: cannot verify by driving — <which of the three, named> — <what you tried>" \
+             --data park=cannot-drive
+
+       A silent skip is the one forbidden outcome. Every item reaching step 11
+       carries EITHER journaled driving evidence OR a park — there is no third
+       option, and "the change is obviously fine" is not one.
 
 11. Open ONE draft PR per epic, on that epic's branch (`epic/<slug>`, per
     task-lifecycle's git discipline). Run the checkpoint check (step 3) first.
@@ -345,10 +448,16 @@ on it (step 3); never work around a claim.
 
     The body carries the run trail, so the PR is auditable without the
     journal: the kickoff line; the waves and their order; each item's lane and
-    why; review dispositions from step 9; the verify-by-driving evidence from
-    step 10, quoted and citing its journal event ids; every waiver in force
-    (repro waivers — `nahel brief` surfaces them) stated plainly; and every
-    park with its reason.
+    why; review dispositions from step 9;
+    the verify-by-driving evidence from step 10 — quoted, citing its
+    journal event ids and the verifying actor, for every item it carries;
+    every waiver in force (repro waivers —
+    `nahel brief` surfaces them) stated plainly; and every park with its
+    reason.
+
+    An item that parked at step 10 is not PR-bound, and an epic whose changed
+    flow was never driven does not get a PR at all — its park stands in the
+    PR's place until a host that can drive picks it up.
 
     Merging is not this workflow's act. Under `merge: human` the PR waits for
     the human; under a validly activated `merge: on-approve` the review loop

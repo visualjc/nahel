@@ -4,6 +4,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claimCommand, handbackCommand, pauseCommand } from "../../src/commands/intervene";
 import { itemCommand } from "../../src/commands/item";
+import { logCommand, type LogCommandContext } from "../../src/commands/log";
 import { runCommand } from "../../src/commands/run";
 import type { Env } from "../../src/schema/env";
 import type { JournalEvent } from "../../src/schema/records";
@@ -388,6 +389,65 @@ describe("claim enforcement through the store choke point (PRD success criterion
     expect(stderr()).toBe("");
     expect((await readItem(layout, child)).frontmatter.status).toBe("in-review");
     expect(await runCommand.run(["start", child], env, root)).toBe(0);
+  });
+
+  /**
+   * The exemption `afk-run` step 3's no-kill rule is built on (PRD F6.2).
+   * A claim freezes RECORDS against agent mutation, not the JOURNAL: an
+   * in-flight worker's natural exit and final output still have to reach the
+   * trail, and the runner — an agent — is the only one left who can put them
+   * there. `log` bypasses mutate() by design (a note mutates no record), so
+   * this test is what keeps that design from being "fixed" into a refusal
+   * that would make F6.2's acceptance criterion unsatisfiable.
+   */
+  test("notes stay loggable on a claimed item and its paused run, while the run record itself is frozen", async () => {
+    const { root, layout, env } = await setup();
+    const itemId = await newItem(env, root);
+    const runId = await startRun(env, root, itemId);
+    expect(await claimCommand.run([itemId], env, root, JIM)).toBe(0);
+    errs = [];
+
+    const out: string[] = [];
+    const err: string[] = [];
+    const logCtx: LogCommandContext = {
+      env,
+      cwd: root,
+      stdout: (text) => out.push(text),
+      stderr: (text) => err.push(text),
+      actorOverride: "agent:runner",
+    };
+
+    // The runner journals the worker's natural exit against the claimed item.
+    expect(
+      await logCommand.run(
+        ["note", "--item", itemId, "--data", "summary=worker exited naturally under claim"],
+        logCtx,
+      ),
+    ).toBe(0);
+    // …and its final output against the claimed run, which the claim paused.
+    expect((await readRun(layout, runId)).status).toBe("paused");
+    expect(
+      await logCommand.run(
+        ["note", "--item", itemId, "--run", runId, "--data", "exit=0", "--data", "output=partial"],
+        logCtx,
+      ),
+    ).toBe(0);
+    expect(err.join("\n")).toBe("");
+
+    // Both landed, attributed to the runner, ref'd to the claimed item/run.
+    const notes = (await journalEvents(layout)).filter((event) => event.type === "note");
+    expect(notes).toHaveLength(2);
+    expect(notes.every((event) => event.item === itemId)).toBe(true);
+    expect(notes.every((event) => event.actor.id === "runner")).toBe(true);
+    expect(notes[1]!.run).toBe(runId);
+    expect(notes[1]!.payload["exit"]).toBe(0);
+
+    // The record itself stays frozen: the agent cannot end the claimed run,
+    // so it is preserved as paused/claimed rather than force-ended.
+    expect(await runCommand.run(["end", runId, "success"], env, root)).toBe(1);
+    expect(stderr()).toContain("claim");
+    expect((await readRun(layout, runId)).status).toBe("paused");
+    expect((await readItem(layout, itemId)).frontmatter.claimed_by).toBe("jim");
   });
 });
 

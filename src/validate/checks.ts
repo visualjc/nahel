@@ -1,5 +1,6 @@
 import YAML from "yaml";
 import type { z } from "zod";
+import { mergeAuthorityStatus } from "../governance/authority";
 import {
   configSchema,
   distilledSchema,
@@ -653,6 +654,43 @@ function checkPrdApproval(state: ParsedState): Finding[] {
     });
   }
   return findings;
+}
+
+/**
+ * Merge-authority provenance (PRD F3.4): `merge: on-approve` is legitimate
+ * under hard constraint 6 / ADR-0011 (as amended 2026-07-25) only as the
+ * HUMAN's standing authorization — the committed config flip IS the
+ * authorization — so the flip's provenance must be human, provable from the
+ * journal. A flag an agent set (or one no journaled config mutation accounts
+ * for: a hand edit, a lost flip) authorizes nothing: the review loop treats
+ * the project as `merge: human` and this warns that the flag is inert.
+ *
+ * A WARNING, never an error: an unauthorized flag degrades to the safe
+ * default, it does not corrupt state — but it is never silent (hard
+ * constraint 6: quality invariants are never SILENTLY skipped).
+ */
+function checkMergeAuthority(state: ParsedState): Finding[] {
+  if (state.config === undefined) return [];
+  const status = mergeAuthorityStatus(state.config.merge, state.events);
+  if (status.defect === undefined) return [];
+
+  const cause =
+    status.defect === "agent-set"
+      ? `the config mutation that set it (event ${status.setBy!.event}) was made by ` +
+        `${status.setBy!.actor.kind}:${status.setBy!.actor.id} — an agent cannot grant ` +
+        `the human's standing merge authorization`
+      : "no journaled config mutation sets it, so the flip's human provenance cannot be proven";
+  return [
+    {
+      severity: "warning",
+      check: "merge.unauthorized",
+      path: state.input.configPath,
+      message:
+        `nahel/config sets merge: on-approve, but ${cause} — the flag is inert and ` +
+        `merge authority stays human (PRs wait for a person)`,
+      fix: "a HUMAN must re-run `nahel config set merge --data authority=on-approve` (as a human actor — NAHEL_ACTOR unset, or human:<id>); that journaled act IS the standing authorization. Otherwise drop the section and stay on merge: human",
+    },
+  ];
 }
 
 /** Circular parent / depends_on detection; each cycle reported once. */
@@ -1341,6 +1379,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),
+    ...checkMergeAuthority(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),

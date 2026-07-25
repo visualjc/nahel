@@ -28,6 +28,7 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 - **Role** — an agent-neutral charter (product-owner, architect) grounded in the knowledge layer; reviews at gates.
 - **Gate** — an artifact transition requiring a verdict (PRD `draft→approved`, epic plan sign-off, diff review). Roles review at gates, not continuously.
 - **Digest** — rendered summary of delegated decisions for human audit (`nahel digest`). Audit, not approval.
+- **Merge authority** — per-project config for who may merge a reviewed PR: `merge: human` (the default everywhere, including when the section is absent — the PR waits for a person) or `merge: on-approve` (reviewer sign-off merges). `on-approve` is the human's standing authorization, so it counts only when the journal shows a **human actor** made the config mutation that set it; an agent-set flag is inert, resolves back to `merge: human`, and `nahel validate` warns. Opt-in, used sparingly: small items, or changes QA testing covers well.
 - **Consensus** — agreement between independent agents of different vendors (e.g. Claude proposes, Codex verifies) required for delegated legislation and AFK escape valves.
 
 ## Execution

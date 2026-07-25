@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
+import { CONFIG_UPDATED_EVENT_TYPE } from "../schema/events";
 import { configSchema } from "../schema/records";
 import { appendEvent } from "../store/journal";
 import { readConfig, writeConfig } from "../store/layout";
@@ -18,10 +19,13 @@ import { parseDataEntries } from "./log";
  * workflows write config through; agents never hand-edit state (hard
  * constraint 3). Core sections (knowledge paths, actor) are set at init and
  * deliberately NOT settable here.
+ *
+ * The journaled ACTOR is load-bearing for one section: `merge` (PRD F3.4).
+ * `merge: on-approve` counts as the human's standing merge authorization only
+ * when THIS event's actor is a human; an agent-attributed flip is inert
+ * (src/governance/authority.ts). The actor a checkout runs as is therefore
+ * not bookkeeping there — it IS the authorization.
  */
-
-/** The open-extension event type recording a config section replacement. */
-export const CONFIG_UPDATED_EVENT_TYPE = "config.updated";
 
 /** The optional config sections `config set` may replace. */
 export const SETTABLE_CONFIG_SECTIONS = [
@@ -30,6 +34,7 @@ export const SETTABLE_CONFIG_SECTIONS = [
   "dispatch",
   "governance",
   "inception",
+  "merge",
   "routing",
   "validate",
 ] as const;

@@ -58,6 +58,18 @@ export const GOVERNANCE_MODES = ["human", "delegated"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
 
 /**
+ * Who may merge a reviewed PR (glossary: Merge authority; PRD F3.4):
+ * `human` — the PR waits for a person, the default everywhere; `on-approve` —
+ * reviewer sign-off merges. `on-approve` is an opt-in to be used SPARINGLY
+ * (small items, or changes QA testing covers well) and is legitimate under
+ * hard constraint 6 / ADR-0011 only as a human-granted standing
+ * authorization: the committed config flip IS the authorization, so it counts
+ * only when the journal proves a human actor made it (governance/authority.ts).
+ */
+export const MERGE_AUTHORITIES = ["human", "on-approve"] as const;
+export type MergeAuthority = (typeof MERGE_AUTHORITIES)[number];
+
+/**
  * Responsibility (glossary): the kind of judgment routing maps to an
  * executor. Exactly the keys of `config.routing` minus its `default`
  * fallback — `default` is what resolution falls back TO, never something

@@ -4,6 +4,7 @@ import {
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
   LANES,
+  MERGE_AUTHORITIES,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_TYPES,
@@ -352,6 +353,21 @@ export const governanceSchema = z.strictObject({
 export type Governance = z.infer<typeof governanceSchema>;
 
 /**
+ * Merge authority — `config.merge` (PRD F3.4): who may merge a reviewed PR.
+ * The PRD's shorthand `merge: on-approve` is spelled as a SECTION with one
+ * `authority` key, matching `inception: {tier}` — every config section is an
+ * object because `config set` replaces sections with a `--data` object, so a
+ * bare scalar would be unsettable through the CLI (hard constraint 3: agents
+ * never hand-edit state). Absent means `merge: human`, the default
+ * everywhere; resolution and the human-provenance rule live in
+ * src/governance/authority.ts.
+ */
+export const mergeSchema = z.strictObject({
+  authority: z.enum(MERGE_AUTHORITIES),
+});
+export type Merge = z.infer<typeof mergeSchema>;
+
+/**
  * Config — `nahel/config`: where the knowledge layer lives (paths relative to
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
  * The optional `validate` block tunes the maintenance-warning thresholds
@@ -359,7 +375,7 @@ export type Governance = z.infer<typeof governanceSchema>;
  * (ADR-0014), `routing` (ADR-0015) and `dispatch` (Phase 2 F1.3) sections are
  * additive too, so existing configs stay valid — as are `inception` and
  * `governance` (PRD F4), written by the inception workflow through
- * `nahel config set`.
+ * `nahel config set`, and `merge` (Phase 2 F3.4).
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -384,5 +400,6 @@ export const configSchema = z.strictObject({
   dispatch: dispatchSchema.optional(),
   inception: inceptionSchema.optional(),
   governance: governanceSchema.optional(),
+  merge: mergeSchema.optional(),
 });
 export type Config = z.infer<typeof configSchema>;

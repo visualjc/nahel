@@ -46,10 +46,18 @@ steps below with the drafts as your starting answers.
    PRODUCT.md by convention). The constitution is the human's: read it back
    and get explicit sign-off.
 3. Governance: ask who owns product and architecture legislation — `human`
-   (agents propose, the human approves) or `delegated` (agent consensus;
-   enforced by a later phase). New projects almost always start all-human:
+   (agents propose, the human approves) or `delegated` (agent consensus:
+   cross-vendor approval, journaled). The written default is
+   `{product: delegated, architecture: human}`, and it matches what a project
+   with NO governance config does: pushing forward is the default unless the
+   human says otherwise. `governance.product: human` is the explicit brake —
+   choose it when the human wants to approve every PRD personally, and expect
+   Full-lane items to park at that gate. Architecture stays `human` until the
+   architect slice ships. Record the answer explicitly, so the posture is
+   state rather than an inferred default:
 
-       nahel config set governance --data product=human --data architecture=human
+       nahel config set governance \
+         --data product=delegated --data architecture=human
 
 4. Glossary seed: put the domain terms the interview surfaced (aim for 3–10)
    into the glossary document (config `knowledge.context`, CONTEXT.md by

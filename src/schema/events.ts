@@ -21,6 +21,16 @@ export const CORE_EVENT_TYPES = {
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[keyof typeof CORE_EVENT_TYPES];
 
 /**
+ * The config-replacement event (`nahel config set`, PRD F4). Deliberately
+ * NOT a core mutation type — it replaces a `nahel/config` section, not a
+ * record mutate() replays — but named here because more than one layer keys
+ * on it: `config set` writes it, and the merge-authority provenance check
+ * (PRD F3.4) reads it to prove WHO flipped `merge: on-approve`. Payload:
+ * `{section, value}`.
+ */
+export const CONFIG_UPDATED_EVENT_TYPE = "config.updated";
+
+/**
  * The mutation subset of the core types: exactly the events the store's
  * mutate() choke point write-ahead journals (item and run record changes).
  * Replay and validation key mutation detection on membership HERE — payload

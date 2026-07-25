@@ -900,6 +900,68 @@ describe("schema/records — inception tier (F4.1)", () => {
   });
 });
 
+describe("schema/records — founding mode and paragraph (Phase 2 F9.4)", () => {
+  const withFounding = (founding: unknown) => ({ ...validConfig, founding });
+  const PARAGRAPH = "A speed-count game for kids: a timer, a grid of dots, a leaderboard.";
+
+  test("a config with no founding section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no founding");
+  });
+
+  test("accepts a hands-off founding carrying its paragraph, and a bare guided founding", () => {
+    expectAccepted(
+      configSchema,
+      withFounding({ mode: "hands-off", paragraph: PARAGRAPH }),
+      "founding hands-off",
+    );
+    expectAccepted(configSchema, withFounding({ mode: "guided" }), "founding guided");
+  });
+
+  test("rejects hands-off with no paragraph — the paragraph IS the signed content", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withFounding({ mode: "hands-off" }),
+      "founding hands-off no paragraph",
+    );
+    expect(issues.some((issue) => issue.includes("paragraph"))).toBe(true);
+  });
+
+  test("rejects an empty or whitespace-only paragraph (a blank paragraph founds nothing)", () => {
+    for (const blank of ["", "   ", "\n\t \n"]) {
+      const issues = rejectionIssues(
+        configSchema,
+        withFounding({ mode: "hands-off", paragraph: blank }),
+        `founding blank paragraph ${JSON.stringify(blank)}`,
+      );
+      expect(issues.some((issue) => issue.startsWith("founding.paragraph:"))).toBe(true);
+    }
+  });
+
+  test("preserves the paragraph EXACTLY — no trimming, collapsing, or normalization", () => {
+    const verbatim = "  Two lines,\n  with leading space and a trailing newline.\n";
+    const parsed = configSchema.parse(withFounding({ mode: "hands-off", paragraph: verbatim }));
+    expect(parsed.founding?.paragraph).toBe(verbatim);
+  });
+
+  test("rejects an unknown founding mode, pointing at the field", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withFounding({ mode: "yolo", paragraph: PARAGRAPH }),
+      "founding bad mode",
+    );
+    expect(issues.some((issue) => issue.startsWith("founding.mode:"))).toBe(true);
+  });
+
+  test("rejects unknown founding keys (a typo is an error, not silent state)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withFounding({ mode: "hands-off", paragraph: PARAGRAPH, signed_by: "jim" }),
+      "founding unknown key",
+    );
+    expect(issues.some((issue) => issue.includes("signed_by"))).toBe(true);
+  });
+});
+
 describe("schema/records — governance (F4, roadmap §7)", () => {
   const withGovernance = (governance: unknown) => ({ ...validConfig, governance });
 

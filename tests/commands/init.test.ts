@@ -41,13 +41,24 @@ interface CliResult {
   stderr: string;
 }
 
-/** Drive the CLI in-process with captured output and an injected Env. */
-async function runCli(args: string[], cwd: string, env: Env = seededEnv()): Promise<CliResult> {
+/**
+ * Drive the CLI in-process with captured output and an injected Env.
+ * `actorOverride` is the NAHEL_ACTOR spec value cli.ts injects from the
+ * process environment — load-bearing for the hands-off founding act, whose
+ * ACTOR is the paragraph's signature provenance (F9.4/F9.5).
+ */
+async function runCli(
+  args: string[],
+  cwd: string,
+  env: Env = seededEnv(),
+  actorOverride?: string,
+): Promise<CliResult> {
   const out: string[] = [];
   const err: string[] = [];
   const ctx: CommandContext = {
     env,
     cwd,
+    ...(actorOverride === undefined ? {} : { actorOverride }),
     stdout: (text) => out.push(text),
     stderr: (text) => err.push(text),
   };
@@ -532,5 +543,125 @@ describe("nahel init — never overwrites, re-run safe", () => {
     expect(result.stderr).toContain("nahel/config");
     expect(readFileSync(join(root, "nahel", "config"), "utf8")).toBe(garbage);
     expect(existsSync(join(root, "PRODUCT.md"))).toBe(false);
+  });
+});
+
+/**
+ * `nahel init --hands-off "<paragraph>"` (Phase 2 F9.4): the shortcut door of
+ * the founding mode-and-input capture. The CLI's whole job is deterministic
+ * recording — mode + the VERBATIM paragraph as ordinary config state, plus the
+ * journaled act whose ACTOR is the paragraph's signature provenance (F9.5).
+ * The inception workflow does every judgment part.
+ */
+describe("nahel init — hands-off founding (F9.4, F9.5)", () => {
+  /** Deliberately awkward: leading/trailing space, a newline, quotes, unicode. */
+  const PARAGRAPH =
+    '  A "speed count" game for kids — a timer, a grid of dots, a leaderboard.\n  Playable one-handed.  ';
+
+  /** Every journal event in the store, oldest first. */
+  async function events(root: string) {
+    return Array.fromAsync(readJournal(storeLayout(root)));
+  }
+
+  /** The founding acts: config.updated events replacing the `founding` section. */
+  async function foundingActs(root: string) {
+    return (await events(root)).filter(
+      (event) => event.type === "config.updated" && event.payload["section"] === "founding",
+    );
+  }
+
+  test("records the mode and the paragraph VERBATIM as ordinary config state", async () => {
+    const root = await makeRepo();
+    const result = await runCli(["init", "--hands-off", PARAGRAPH], root, seededEnv(), "human:jim");
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+
+    // Read back through the real store: the paragraph survives the YAML round
+    // trip byte for byte — no trim, no reflow, no quote mangling.
+    const config = await readConfig(storeLayout(root));
+    expect(config.founding).toEqual({ mode: "hands-off", paragraph: PARAGRAPH });
+    expect(config.founding?.paragraph).toBe(PARAGRAPH);
+    expect(result.stdout).toContain("hands-off");
+  });
+
+  test("the human-attributed init act is the signature provenance, deterministic to check", async () => {
+    const root = await makeRepo();
+    expect(
+      (await runCli(["init", "--hands-off", PARAGRAPH], root, seededEnv(), "human:jim")).code,
+    ).toBe(0);
+
+    // Same shape the merge-authority and constitution-signature checks read:
+    // a `config.updated` act naming the section, carrying the value, attributed
+    // to a HUMAN actor. One act, not two — the paragraph has one provenance.
+    const acts = await foundingActs(root);
+    expect(acts).toHaveLength(1);
+    expect(acts[0]!.actor).toEqual({ kind: "human", id: "jim" });
+    expect(acts[0]!.payload).toEqual({
+      section: "founding",
+      value: { mode: "hands-off", paragraph: PARAGRAPH },
+    });
+  });
+
+  test("provenance is the ACT's actor, never the flag: an agent-run init signs nothing", async () => {
+    const root = await makeRepo();
+    expect(
+      (await runCli(["init", "--hands-off", PARAGRAPH], root, seededEnv(), "agent:claude-code"))
+        .code,
+    ).toBe(0);
+
+    // The paragraph is still recorded — but the act is agent-attributed, which
+    // is exactly what the inception workflow and the autonomy gate refuse to
+    // treat as a signature.
+    const acts = await foundingActs(root);
+    expect(acts).toHaveLength(1);
+    expect(acts[0]!.actor).toEqual({ kind: "agent", id: "claude-code" });
+    expect((await readConfig(storeLayout(root))).founding?.paragraph).toBe(PARAGRAPH);
+  });
+
+  test("an empty or whitespace-only paragraph is refused, with nothing created", async () => {
+    for (const blank of ["", "   ", "\n\t\n"]) {
+      const root = await makeRepo();
+      const result = await runCli(["init", "--hands-off", blank], root, seededEnv(), "human:jim");
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("hands-off");
+      expect(existsSync(join(root, "nahel", "config"))).toBe(false);
+      expect(existsSync(join(root, "PRODUCT.md"))).toBe(false);
+    }
+  });
+
+  test("absent flag: no founding section, no journal event — the plain scaffold is untouched", async () => {
+    const rootA = await makeRepo();
+    const rootB = await makeRepo();
+    expect((await runCli(["init"], rootA, seededEnv({ seed: 7 }))).code).toBe(0);
+    expect(
+      (await runCli(["init", "--hands-off", PARAGRAPH], rootB, seededEnv({ seed: 7 }), "human:jim"))
+        .code,
+    ).toBe(0);
+
+    const plain = await readConfig(storeLayout(rootA));
+    expect(plain.founding).toBeUndefined();
+    expect(await events(rootA)).toEqual([]);
+    // Everything OUTSIDE the founding section stays byte-identical between the
+    // two: the flag adds state, it never changes the scaffold.
+    for (const file of ["PRODUCT.md", "CONTEXT.md", "AGENTS.md"]) {
+      expect(readFileSync(join(rootB, file), "utf8")).toBe(readFileSync(join(rootA, file), "utf8"));
+    }
+    const handsOff = await readConfig(storeLayout(rootB));
+    const { founding, ...rest } = handsOff;
+    expect(rest).toEqual(plain);
+    expect(founding).toEqual({ mode: "hands-off", paragraph: PARAGRAPH });
+  });
+
+  test("an existing config is never rewritten: the flag is reported ignored, with the other door named", async () => {
+    const root = await makeRepo();
+    expect((await runCli(["init"], root, seededEnv(), "human:jim")).code).toBe(0);
+    const before = readFileSync(join(root, "nahel", "config"), "utf8");
+
+    const rerun = await runCli(["init", "--hands-off", PARAGRAPH], root, seededEnv(), "human:jim");
+    expect(rerun.code).toBe(0);
+    expect(readFileSync(join(root, "nahel", "config"), "utf8")).toBe(before);
+    expect(await foundingActs(root)).toEqual([]);
+    // The conversational door (hard constraint 5) is named, not just refused.
+    expect(rerun.stderr).toContain("nahel config set founding");
   });
 });

@@ -324,6 +324,33 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
       expect(body).not.toContain(claudeism);
     }
   });
+
+  test("the gate reads a hands-off founding's signature from the human act that recorded it (F9.5)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    // A hands-off founding costs the human exactly one act (the init/kickoff
+    // that recorded the paragraph) — so the gate's human-provenance check has
+    // to look at THAT act, or "zero return visits" would mean "never runs AFK".
+    // The rule itself is unchanged: an agent-attributed act signs nothing.
+    expect(body).toContain("founding");
+    expect(body).toContain("mode: hands-off");
+    expect(body).toContain("the tier record itself may be agent-attributed");
+    expect(body).toContain("An agent-attributed signature is not a signature");
+  });
+
+  test("the signed constitution is checked before EVERY implementation dispatch, on every lane (F9.5)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const dispatchStep = body.slice(body.indexOf("8. Dispatch the worker"), body.indexOf("9. Review."));
+    expect(dispatchStep.length).toBeGreaterThan(0);
+    // Not only at the Full-lane approval gate: a one-line direct-lane chore
+    // gets the same check, and a contradiction parks instead of dispatching.
+    expect(dispatchStep).toContain("contradict");
+    expect(dispatchStep).toContain("every lane");
+    expect(dispatchStep).toContain("park");
+    // Under a hands-off founding the signed content is the paragraph, and the
+    // agent's own elaboration cannot authorize contradicting it.
+    expect(dispatchStep).toContain("paragraph");
+    expect(dispatchStep).toContain("nahel/workflows/inception.md");
+  });
 });
 
 /**
@@ -522,5 +549,165 @@ describe("governance qualifiers on the Phase 1 approval docs (F2.2)", () => {
     expect(body).toContain("governance.product: delegated");
     expect(body).toContain("plan-item approval only");
     expect(body).toContain("nahel/workflows/afk-run.md` step 6");
+  });
+});
+
+/**
+ * Knowledge-first inception (Phase 2 PRD F9). The Phase 1 doc mined the
+ * codebase on brownfield and asked blank questions everywhere else; F9 makes
+ * mining UNIVERSAL and the interview confirm-and-correct, adds the up-front
+ * mode capture (guided grill vs a single hands-off paragraph), and states the
+ * authority boundary that keeps an agent-drafted constitution constitutional:
+ * only the human's paragraph is signed content. These tests pin the promises
+ * the doc makes — a softened line here is a founding that quietly records a
+ * tier it did not earn, or an agent writing constitution.
+ */
+describe("knowledge-first inception (F9)", () => {
+  test("mode-and-input capture is the FIRST step: a meta-question, asked before mining (F9.4)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    // The question itself, in the founder's words.
+    expect(body).toContain("grill session (guided)");
+    expect(body).toContain("give me a paragraph and I figure it out (hands-off)");
+    expect(body).toContain("meta-question");
+    // Both doors (hard constraint 5): the CLI shortcut and the plain command.
+    expect(body).toContain('nahel init --hands-off "');
+    expect(body).toContain("nahel config set founding");
+    expect(body).toContain("--data mode=hands-off");
+    // Ordering is the requirement, not just presence: mode before mining,
+    // mining before any content question.
+    const modeAt = body.indexOf("Mode and input");
+    const mineAt = body.indexOf("Mine first");
+    expect(modeAt).toBeGreaterThan(-1);
+    expect(mineAt).toBeGreaterThan(modeAt);
+  });
+
+  test("one workflow, two interaction modes — no separate mining workflow (F9 review nit 4)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("interaction mode");
+    expect(body).toContain("no separate mining workflow");
+    expect(body).toContain("same mining");
+  });
+
+  test("mining is universal and provable: greenfield mines knowledge + web, sources journaled (F9.1)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("MINE FIRST");
+    expect(body.toLowerCase()).toContain("brownfield");
+    expect(body.toLowerCase()).toContain("greenfield");
+    // Greenfield sources: the agent's own domain knowledge and the web, with
+    // the citation trail journaled — or the web's absence journaled instead.
+    expect(body).toContain('nahel log note --data summary="research sources:');
+    expect(body).toContain("web unavailable");
+    // The complete standard-tier artifact set is DRAFTED before any content
+    // question, and the interview is confirm-and-correct in every mode.
+    expect(body).toContain("complete standard-tier artifact set");
+    expect(body).toContain("before any content question");
+    expect(body).toContain("confirm-and-correct");
+    for (const artifact of [
+      "constitution",
+      "governance",
+      "glossary",
+      "ADR",
+      "routing",
+      "decomposition",
+      "run contract",
+    ]) {
+      expect(body).toContain(artifact);
+    }
+    // Drafting is not founding: only recorded state founds a project.
+    expect(body).toContain("A draft is not a founding");
+  });
+
+  test("hands-off: the paragraph is the ONLY signed content, verbatim; elaboration is unconfirmed (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("no return visit");
+    expect(body).toContain("VERBATIM");
+    expect(body).toContain("only human-signed content");
+    expect(body).toContain("UNCONFIRMED");
+    expect(body).toContain("never constitutional text");
+    // Parkable assumptions, promotable later by the human's signature.
+    expect(body).toContain("parkable assumption");
+    expect(body).toContain("promote");
+    // The document structure states the boundary — including the amendment
+    // note the constitution itself carries (F9 review nit 1) and the ADR.
+    expect(body).toContain("Amendment note");
+    expect(body).toContain("docs/adr/0008");
+    // The two frozen headings brief extracts must survive the marking.
+    expect(body).toContain("## Goal");
+    expect(body).toContain("## Hard constraints");
+    expect(body).toContain("nahel brief");
+  });
+
+  test("hands-off elaboration is verified with afk-run step 6's cross-vendor provenance shape (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 6");
+    expect(body).toContain("git hash-object");
+    expect(body).toContain("nahel dispatch review");
+    expect(body).toContain("DIFFERENT vendor");
+    expect(body).toContain("--data revision=");
+    expect(body).toContain("--data verification=");
+    // Bound to the founded artifact-set revision, and failing closed.
+    expect(body).toContain("founded artifact set");
+    expect(body).toContain("A verification you write yourself proves nothing");
+  });
+
+  test("a constitutionally insufficient paragraph refuses standard and parks (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("no coherent goal");
+    expect(body).toContain("REFUSE to record `standard`");
+    expect(body).toContain("--status blocked");
+    expect(body).toContain("parked:");
+    // Never paper over the gap — an invented goal is agent-authored
+    // constitution, exactly what the boundary forbids.
+    expect(body).toContain("Never invent the goal");
+  });
+
+  test("hands-off records delegated product governance, and the paragraph gates every dispatch (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("--data product=delegated");
+    expect(body).toContain("before every implementation dispatch");
+    expect(body).toContain("on every lane");
+    // The lab proof rides on the hands-off founding: a Full-lane drafted PRD
+    // and a direct-lane one-liner get the identical check (review nit 2).
+    expect(body).toContain("Full-lane");
+    expect(body).toContain("direct-lane");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 8");
+    expect(body).toContain("the run can never override");
+  });
+
+  test("hands-off signature provenance is the human-attributed founding act, deterministic to check (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("config.updated");
+    expect(body).toContain("An agent-run founding act signs nothing");
+    expect(body).toContain("nahel progress");
+    // The tier record still carries the signature field the gate reads first.
+    expect(body).toContain("--data constitution_signed_by=");
+  });
+
+  test("tier honesty: standard means RECORDED, with the empty-repo doctor proof journaled as an obligation (F9.3)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    expect(body).toContain("Tier honesty");
+    expect(body).toContain("recorded, not drafted");
+    expect(body).toContain("first-scaffold obligation");
+    expect(body).toContain("nahel doctor");
+    expect(body).toContain("verify-by-driving");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 10");
+    // A cut-short NEW founding records seed; a re-founding never lowers a
+    // committed tier (the ratchet, kept from Phase 1).
+    expect(body).toContain("cut short");
+    expect(body).toContain("records `seed`");
+    expect(body).toContain("only ratchets up");
+  });
+
+  test("ADR-0008 carries the dated hands-off addendum on constitution composition", async () => {
+    const path = join(import.meta.dir, "../../docs/adr/0008-constitution-vs-legislation.md");
+    const text = await Bun.file(path).text();
+    expect(text).toContain("Addendum");
+    expect(text).toContain("2026-07-25");
+    expect(text).toContain("hands-off");
+    expect(text).toContain("verbatim");
+    expect(text).toContain("UNCONFIRMED");
+    expect(text).toContain("never constitutional text");
+    expect(text).toContain("by signing");
+    expect(text).toContain("nahel/workflows/inception.md");
   });
 });

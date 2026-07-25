@@ -124,6 +124,45 @@ describe("nahel config set — writing optional sections", () => {
     });
   });
 
+  test("founding is settable here too — the conversational door of the mode capture (F9.4, HC5)", async () => {
+    const { root, layout, env } = await setup();
+    const paragraph = '  A "speed count" game for kids.\n  Playable one-handed.  ';
+    const code = await configCommand.run(
+      ["set", "founding", "--data", "mode=hands-off", "--data", `paragraph=${paragraph}`],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+
+    // Same state, same provenance shape as the `nahel init --hands-off`
+    // shortcut: neither door is privileged (hard constraint 5).
+    expect((await readConfig(layout)).founding).toEqual({ mode: "hands-off", paragraph });
+    const act = (await journalEvents(layout)).find(
+      (event) => event.type === "config.updated" && event.payload["section"] === "founding",
+    )!;
+    expect(act.actor).toEqual({ kind: "human", id: "jim" });
+    expect(act.payload["value"]).toEqual({ mode: "hands-off", paragraph });
+    const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
+    expect(errors).toEqual([]);
+  });
+
+  test("a hands-off founding with no paragraph is refused — the paragraph IS the signed content", async () => {
+    const { root, layout, env } = await setup();
+    const before = await configBytes(layout);
+    const code = await configCommand.run(
+      ["set", "founding", "--data", "mode=hands-off"],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toContain("paragraph");
+    expect(await configBytes(layout)).toBe(before);
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
   test("sets governance from a JSON --data payload", async () => {
     const { root, layout, env } = await setup();
     const code = await configCommand.run(

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ACTOR_KINDS,
   DISPATCH_AGENT_KINDS,
+  FOUNDING_MODES,
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
   LANES,
@@ -54,6 +55,12 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
 
   test("governance modes are exactly human|delegated", () => {
     expect([...GOVERNANCE_MODES]).toEqual(["human", "delegated"]);
+  });
+
+  test("founding modes are exactly guided|hands-off — interaction modes of ONE workflow (F9.4)", () => {
+    // Not two workflows and not two mining procedures: inception mines first
+    // in both, and the mode only decides who answers the questions.
+    expect([...FOUNDING_MODES]).toEqual(["guided", "hands-off"]);
   });
 
   test("merge authorities are exactly human|on-approve (F3.4, HC6 as amended)", () => {

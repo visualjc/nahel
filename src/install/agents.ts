@@ -14,8 +14,15 @@ import type { WorkflowDoc } from "./workflow";
  * "load canonical workflow X". All procedure logic stays in the canonical doc.
  */
 
-/** What an agent's shim directory is relative to. */
-export type ShimRoot = "repo" | "home";
+/**
+ * What an agent's shim directory is relative to: the repo root, the user's
+ * home directory, or the CODEX HOME — `$CODEX_HOME` when the environment sets
+ * it, `~/.codex` otherwise. The last is its own root rather than a path under
+ * `home` because codex's discovery is the variable, not the directory: a
+ * deployment that moves CODEX_HOME and gets shims written to `~/.codex/prompts`
+ * gets shims codex will never read.
+ */
+export type ShimRoot = "repo" | "home" | "codex-home";
 
 export interface AgentTarget {
   /** Whether `shimDir` hangs off the repo root or the user's home directory. */
@@ -65,14 +72,15 @@ export const AGENT_TARGETS: Record<string, AgentTarget> = {
    * Codex loads custom prompts from `$CODEX_HOME/prompts` only (default
    * `~/.codex/prompts`), scanning top-level markdown files and no
    * subdirectories — repo-level `.codex/prompts` is an open request upstream,
-   * not a feature (openai/codex issues #4734, #9848). So the target is
-   * home-rooted, flat, and the prefix becomes a file-name namespace:
-   * `~/.codex/prompts/nd-brief.md` → `/prompts:nd-brief`. That directory
-   * belongs to the user, so only the `nd-` namespace is generator-owned.
+   * not a feature (openai/codex issues #4734, #9848). So the target is rooted
+   * at the codex home (the variable when set, `~/.codex` otherwise), flat, and
+   * the prefix becomes a file-name namespace: `<codex home>/prompts/nd-brief.md`
+   * → `/prompts:nd-brief`. That directory belongs to the user, so only the
+   * `nd-` namespace is generator-owned.
    */
   codex: {
-    root: "home",
-    shimDir: () => join(".codex", "prompts"),
+    root: "codex-home",
+    shimDir: () => "prompts",
     filePrefix: (prefix) => `${prefix}-`,
     renderShim: (workflow) => renderMarkdownShim("codex", workflow),
   },

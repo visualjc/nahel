@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { CORE_EVENT_TYPES, MUTATION_EVENT_TYPES } from "../schema/events";
+import { CORE_EVENT_TYPES, SELF_RECORDED_EVENT_TYPES } from "../schema/events";
 import { NAHEL_ACTOR_VAR, resolveActor } from "../store/actor";
 import {
   appendEvent,
@@ -15,8 +15,12 @@ import { UsageError } from "./item";
 
 /**
  * `nahel log` (PRD F4): append a typed journal event — an *observation about
- * work* (test failed, decision made, assumption logged, …), as opposed to
- * mutations, which self-record through the store's mutate() choke point.
+ * work* (test failed, decision made, assumption logged, …), as opposed to the
+ * acts commands self-record: record mutations through the store's mutate()
+ * choke point, `config.updated` through `config set`, the dispatch bracket
+ * through `dispatch`. Every self-recorded type is REFUSED here
+ * (SELF_RECORDED_EVENT_TYPES), because readers trust those types by type
+ * alone — a loggable `config.updated` is a forgeable merge authorization.
  * Thin over the store's appendEvent: run-ref'd events land in that run's
  * segment; non-run events land in a writer-scoped session segment minted for
  * this invocation (merge-safe random ID, the file created on first append —
@@ -75,10 +79,12 @@ function parseFlags(argv: string[]): LogFlags {
       `event type ${SESSION_CLOSED_EVENT_TYPE} is reserved — the store appends it when a session segment closes`,
     );
   }
-  if (MUTATION_EVENT_TYPES.has(type)) {
+  const recorder = SELF_RECORDED_EVENT_TYPES.get(type);
+  if (recorder !== undefined) {
     throw new UsageError(
-      `event type ${type} is a core mutation type — mutations self-record through ` +
-        "`nahel item`/`nahel run`; log is for observations about work",
+      `event type ${type} is reserved: ${recorder} self-records it as the mutation ACT — ` +
+        `log is for observations about work (a hand-logged ${type} would forge that act; ` +
+        "the merge-authority check reads config.updated to prove who authorized auto-merge)",
     );
   }
   return {

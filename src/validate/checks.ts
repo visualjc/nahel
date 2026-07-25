@@ -1,6 +1,6 @@
 import YAML from "yaml";
 import type { z } from "zod";
-import { mergeAuthorityStatus } from "../governance/authority";
+import { mergeAuthorityStatus, type MergeAuthorityStatus } from "../governance/authority";
 import {
   configSchema,
   distilledSchema,
@@ -665,30 +665,58 @@ function checkPrdApproval(state: ParsedState): Finding[] {
  * for: a hand edit, a lost flip) authorizes nothing: the review loop treats
  * the project as `merge: human` and this warns that the flag is inert.
  *
+ * A third way to fail: two or more config mutations setting the section in the
+ * SAME second that disagree. Same-second acts from different sessions carry no
+ * ordering (F3.4 / authority.ts), so provenance is undecidable and fails safe.
+ *
  * A WARNING, never an error: an unauthorized flag degrades to the safe
  * default, it does not corrupt state — but it is never silent (hard
  * constraint 6: quality invariants are never SILENTLY skipped).
  */
+function mergeAuthorityCause(status: MergeAuthorityStatus): string {
+  if (status.defect === "agent-set") {
+    return (
+      `the config mutation that set it (event ${status.setBy!.event}) was made by ` +
+      `${status.setBy!.actor.kind}:${status.setBy!.actor.id} — an agent cannot grant ` +
+      `the human's standing merge authorization`
+    );
+  }
+  if (status.defect === "ambiguous") {
+    const tied = (status.tied ?? [])
+      .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
+      .join(", ");
+    return (
+      `${(status.tied ?? []).length} config mutations set it in the same second (${tied}) ` +
+      `and they disagree — same-second acts from different sessions carry no ordering, ` +
+      `so which one governs is undecidable`
+    );
+  }
+  return "no journaled config mutation sets it, so the flip's human provenance cannot be proven";
+}
+
 function checkMergeAuthority(state: ParsedState): Finding[] {
   if (state.config === undefined) return [];
   const status = mergeAuthorityStatus(state.config.merge, state.events);
   if (status.defect === undefined) return [];
 
-  const cause =
-    status.defect === "agent-set"
-      ? `the config mutation that set it (event ${status.setBy!.event}) was made by ` +
-        `${status.setBy!.actor.kind}:${status.setBy!.actor.id} — an agent cannot grant ` +
-        `the human's standing merge authorization`
-      : "no journaled config mutation sets it, so the flip's human provenance cannot be proven";
+  // Ambiguity needs one extra word in the fix: the fresh act must be LATER,
+  // not merely newer in the file.
+  const timing =
+    status.defect === "ambiguous"
+      ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
+      : "";
   return [
     {
       severity: "warning",
       check: "merge.unauthorized",
       path: state.input.configPath,
       message:
-        `nahel/config sets merge: on-approve, but ${cause} — the flag is inert and ` +
-        `merge authority stays human (PRs wait for a person)`,
-      fix: "a HUMAN must re-run `nahel config set merge --data authority=on-approve` (as a human actor — NAHEL_ACTOR unset, or human:<id>); that journaled act IS the standing authorization. Otherwise drop the section and stay on merge: human",
+        `nahel/config sets merge: on-approve, but ${mergeAuthorityCause(status)} — ` +
+        `the flag is inert and merge authority stays human (PRs wait for a person)`,
+      fix:
+        "a HUMAN must re-run `nahel config set merge --data authority=on-approve` " +
+        `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
+        "IS the standing authorization. Otherwise drop the section and stay on merge: human",
     },
   ];
 }

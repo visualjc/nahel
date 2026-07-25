@@ -24,7 +24,9 @@ import { parseDataEntries } from "./log";
  * `merge: on-approve` counts as the human's standing merge authorization only
  * when THIS event's actor is a human; an agent-attributed flip is inert
  * (src/governance/authority.ts). The actor a checkout runs as is therefore
- * not bookkeeping there — it IS the authorization.
+ * not bookkeeping there — it IS the authorization. Which is why a set whose
+ * value is already committed still journals: re-running the command as a
+ * human is exactly how an agent-set section's provenance is repaired.
  */
 
 /** The optional config sections `config set` may replace. */
@@ -108,13 +110,12 @@ async function runConfigSet(
     throw new UsageError(`invalid config after setting ${section} — ${reasons}`);
   }
 
-  // A no-op replacement writes nothing and journals nothing — re-running a
-  // workflow's config step is harmless (the distill precedent).
-  if (JSON.stringify(candidate.data[section]) === JSON.stringify(config[section])) {
-    console.log(`config.${section} unchanged — nothing to do`);
-    return 0;
-  }
-
+  // A byte-equal replacement is journaled all the same: the journal records
+  // ACTS, not diffs, and repeating an act is honest. Swallowing the no-op
+  // would make the ONE repair `nahel validate` prescribes for an agent-set
+  // `merge: on-approve` — a human re-running the identical command — a silent
+  // no-op, leaving provenance permanently unrepairable (PRD F3.4).
+  //
   // Write-ahead like every state change: the act lands in the journal first,
   // then the config is atomically replaced (a crash between the two is healed
   // by re-running the set — the replacement is idempotent).

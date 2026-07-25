@@ -54,13 +54,25 @@ export interface ResolvedRoute {
   via: string;
 }
 
+/**
+ * POSIX single-quote one shell argument. Inside single quotes every byte is
+ * literal except `'` itself, which is escaped by closing the quotes, emitting
+ * an escaped quote, and reopening: `'` → `'\''`. Load-bearing because the
+ * values interpolated below come from COMMITTED CONFIG an agent may have
+ * written — a paste-ready command that a hostile model name can break out of
+ * is a shell injection with the user's own hands on the keyboard.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 /** Render the `nahel config set` command that fixes a missing route. */
 function routingFix(routing: Routing | undefined, responsibility: RoutingResponsibility): string {
   // `config set` REPLACES the whole section, so the offered fix carries every
   // entry already configured — pasting it must never silently drop routes.
   const proposed: Record<string, unknown> = { ...routing };
   proposed[responsibility] = { agent: `<${DISPATCH_AGENT_KINDS.join("|")}>`, model: "<model>" };
-  return `nahel config set routing --data '${JSON.stringify(proposed)}'`;
+  return `nahel config set routing --data ${shellQuote(JSON.stringify(proposed))}`;
 }
 
 /**

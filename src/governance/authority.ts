@@ -79,7 +79,9 @@ export type MergeAuthorityDefect =
   /** The config mutation that set it was made by an agent actor. */
   | "agent-set"
   /** No journaled config mutation sets it — the flip's provenance is unprovable. */
-  | "unrecorded";
+  | "unrecorded"
+  /** Two or more same-second setters disagree; ordering cannot decide between them. */
+  | "ambiguous";
 
 /** The merge authority in force, with the provenance that decided it. */
 export interface MergeAuthorityStatus {
@@ -95,6 +97,11 @@ export interface MergeAuthorityStatus {
   effective: MergeAuthority;
   /** The journal event that last set `config.merge`, when one is findable. */
   setBy?: { event: string; actor: Actor };
+  /**
+   * The same-second setters that could not be ordered — present exactly when
+   * `defect` is "ambiguous", so a human can see what needs breaking apart.
+   */
+  tied?: { event: string; actor: Actor }[];
   /** Present exactly when `configured` is on-approve but `effective` is not. */
   defect?: MergeAuthorityDefect;
 }
@@ -118,6 +125,16 @@ function settledAuthority(event: JournalEvent): unknown {
  * A config whose latest journaled merge mutation does NOT set on-approve
  * (a hand edit, a journal that lost the flip) is `unrecorded`: unprovable is
  * not authorized.
+ *
+ * "Latest" is decided by TIMESTAMP alone, and a same-second tie between
+ * DISAGREEING setters is not decided at all. Every CLI invocation mints its
+ * own session segment, so config sets from different sessions in the same
+ * second all carry seq 0 and the total order falls through to the random
+ * event id — a lottery that could rank an earlier human set above a later
+ * agent one and wrongly enable auto-merge. Ambiguity therefore fails safe
+ * (`ambiguous`, effective human) and is broken the only deterministic way
+ * there is: a fresh human set, a second later. Same-second setters that AGREE
+ * carry no ambiguity — there is nothing for the order to change.
  */
 export function mergeAuthorityStatus(
   merge: Config["merge"],
@@ -127,11 +144,32 @@ export function mergeAuthorityStatus(
   const defaulted = merge?.authority === undefined;
   if (configured !== "on-approve") return { configured, defaulted, effective: configured };
 
-  let latest: JournalEvent | undefined;
+  // Every merge-section config mutation carrying the maximal timestamp.
+  let finalists: JournalEvent[] = [];
   for (const event of events) {
     if (event.type !== CONFIG_UPDATED_EVENT_TYPE) continue;
     if (event.payload["section"] !== "merge") continue;
-    latest = event;
+    const maxTs = finalists[0]?.ts;
+    if (maxTs === undefined || event.ts > maxTs) finalists = [event];
+    else if (event.ts === maxTs) finalists.push(event);
+  }
+
+  const latest = finalists[finalists.length - 1];
+  if (
+    finalists.length > 1 &&
+    finalists.some(
+      (event) =>
+        event.actor.kind !== latest!.actor.kind ||
+        settledAuthority(event) !== settledAuthority(latest!),
+    )
+  ) {
+    return {
+      configured,
+      defaulted,
+      effective: "human",
+      tied: finalists.map((event) => ({ event: event.id, actor: event.actor })),
+      defect: "ambiguous",
+    };
   }
 
   if (latest === undefined || settledAuthority(latest) !== "on-approve") {

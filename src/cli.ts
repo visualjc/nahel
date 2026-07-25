@@ -14,7 +14,7 @@ import { distillCommand } from "./commands/distill";
 import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
 import { importCommand } from "./commands/import";
-import { installCommand } from "./commands/install";
+import { CODEX_HOME_VAR, installCommand } from "./commands/install";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
@@ -43,6 +43,14 @@ export interface CommandContext {
    * that need it say so when it is absent rather than guessing a path.
    */
   homeDir?: string;
+  /**
+   * `$CODEX_HOME`, if the environment sets it (PRD F8.2). Codex discovers its
+   * custom prompts under `$CODEX_HOME/prompts` and nowhere else, defaulting to
+   * `~/.codex` — a deployment that moved it would otherwise get shims written
+   * where its codex never looks. Read here with every other ambient value;
+   * absent means "use the default", which the install command owns.
+   */
+  codexHome?: string;
   /**
    * NAHEL_ACTOR spec value (`kind:id[:session]`), if set. The entry point
    * reads it from the process environment; commands only ever see this
@@ -154,10 +162,13 @@ if (import.meta.main) {
   // directory, exit, the real clock, and the NAHEL_ACTOR environment override
   // are all read here and injected down — no other src/ layer touches the
   // ambient process.
+  // An empty CODEX_HOME is not a location: treat it as unset, like envPresent.
+  const codexHome = process.env[CODEX_HOME_VAR];
   const code = await main(Bun.argv.slice(2), {
     env: systemEnv(),
     cwd: process.cwd(),
     homeDir: homedir(),
+    ...(codexHome === undefined || codexHome === "" ? {} : { codexHome }),
     actorOverride: process.env[NAHEL_ACTOR_VAR],
     // A var is "set" only when present AND non-empty: an empty value in a .env
     // is not a filled secret. Presence, never the value, crosses into commands.

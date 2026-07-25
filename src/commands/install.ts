@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { AGENT_TARGETS, KNOWN_AGENTS, type AgentTarget } from "../install/agents";
+import { AGENT_TARGETS, KNOWN_AGENTS, type AgentTarget, type ShimRoot } from "../install/agents";
 import {
   parseWorkflowDoc,
   WORKFLOW_NAME_PATTERN,
@@ -76,6 +76,35 @@ function parseFlags(argv: string[]): InstallFlags {
   return { agents, prefix };
 }
 
+/** The variable codex reads its home from; `~/.codex` when it is unset. */
+export const CODEX_HOME_VAR = "CODEX_HOME";
+const CODEX_HOME_DIR = ".codex";
+
+/**
+ * Where a target's shims live, and how that path is shown to the user.
+ * Repo-rooted targets stay repo-relative (path-standards.md); a home-rooted
+ * one is shown as `~/…`; a codex-home one follows codex's own discovery —
+ * `$CODEX_HOME` when the entry point saw it set, `~/.codex` otherwise — and
+ * an env-moved home is shown in full, because that is the path the user has
+ * to know. Undefined means the base cannot be resolved on this machine.
+ */
+function resolveShimRoot(
+  root: ShimRoot,
+  ctx: CommandContext,
+): { base: string; display: string } | undefined {
+  if (root === "repo") return { base: ctx.cwd, display: "" };
+  if (root === "home") {
+    return ctx.homeDir === undefined ? undefined : { base: ctx.homeDir, display: "~" };
+  }
+  if (ctx.codexHome !== undefined) return { base: ctx.codexHome, display: ctx.codexHome };
+  return ctx.homeDir === undefined
+    ? undefined
+    : {
+        base: join(ctx.homeDir, CODEX_HOME_DIR),
+        display: join("~", CODEX_HOME_DIR),
+      };
+}
+
 /**
  * Delete the shim files this target owns that are no longer wanted, and report
  * them. Ownership is the file-name namespace (`filePrefix`): with an empty
@@ -109,9 +138,9 @@ async function runInstall(argv: string[], ctx: CommandContext): Promise<number> 
     await readConfig(layout);
 
     // Resolve every requested target BEFORE any write: one unknown agent (or
-    // one unresolvable home directory) fails the whole invocation with nothing
+    // one unresolvable base directory) fails the whole invocation with nothing
     // generated, so a multi-agent run is never half-applied.
-    const targets: { agent: string; target: AgentTarget; base: string }[] = [];
+    const targets: { agent: string; target: AgentTarget; base: string; display: string }[] = [];
     for (const agent of flags.agents) {
       const target = AGENT_TARGETS[agent];
       if (target === undefined) {
@@ -120,13 +149,27 @@ async function runInstall(argv: string[], ctx: CommandContext): Promise<number> 
         );
         return 1;
       }
-      if (target.root === "home" && ctx.homeDir === undefined) {
+      const resolved = resolveShimRoot(target.root, ctx);
+      if (resolved === undefined) {
+        const missing =
+          target.root === "codex-home"
+            ? `codex home (set ${CODEX_HOME_VAR}, or a home directory)`
+            : "home directory";
         ctx.stderr(
-          `❌ cannot resolve the home directory — agent ${agent} installs its shims under ${join("~", target.shimDir(flags.prefix))}/`,
+          `❌ cannot resolve the ${missing} — agent ${agent} installs its shims outside ` +
+            `the repo, under ${join(
+              target.root === "codex-home" ? `$${CODEX_HOME_VAR}` : "~",
+              target.shimDir(flags.prefix),
+            )}/`,
         );
         return 1;
       }
-      targets.push({ agent, target, base: target.root === "home" ? ctx.homeDir! : ctx.cwd });
+      targets.push({
+        agent,
+        target,
+        base: resolved.base,
+        display: join(resolved.display, target.shimDir(flags.prefix)),
+      });
     }
 
     // Scan the canonical workflow docs; invalid ones are warned and skipped.
@@ -144,11 +187,9 @@ async function runInstall(argv: string[], ctx: CommandContext): Promise<number> 
     }
 
     let reported = false;
-    for (const { agent, target, base } of targets) {
+    for (const { agent, target, base, display: displayDir } of targets) {
       // Regenerate the generator's namespace to mirror the workflow set.
-      const shimDirRelative = target.shimDir(flags.prefix);
-      const displayDir = target.root === "home" ? join("~", shimDirRelative) : shimDirRelative;
-      const shimDirAbsolute = join(base, shimDirRelative);
+      const shimDirAbsolute = join(base, target.shimDir(flags.prefix));
       const filePrefix = target.filePrefix(flags.prefix);
       const lines: string[] = [];
       const shimNames = new Set<string>();

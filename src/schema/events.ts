@@ -50,3 +50,26 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.runPaused,
   CORE_EVENT_TYPES.observationCreated,
 ]);
+
+/** The dispatch bracket: intent (carrying the composed invocation) and outcome. */
+export const DISPATCH_STARTED_EVENT_TYPE = "dispatch.started";
+export const DISPATCH_ENDED_EVENT_TYPE = "dispatch.ended";
+
+/**
+ * Every event type a nahel COMMAND records for itself: the record mutations
+ * mutate() journals, the config replacement `config set` journals, and the
+ * dispatch bracket `dispatch` journals. `nahel log` refuses all of them, and
+ * the reservation is a security boundary, not tidiness: readers trust these
+ * types by TYPE alone — the merge-authority provenance check (PRD F3.4) reads
+ * `config.updated` to prove WHO authorized auto-merge — so a type an agent
+ * could hand-append through `log` is a type an agent could forge. Same
+ * discipline as the reserved mutation payload keys (store/mutate.ts).
+ */
+export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
+  ...[...MUTATION_EVENT_TYPES].map(
+    (type) => [type, "`nahel item`/`nahel run`"] as [string, string],
+  ),
+  [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
+  [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],
+  [DISPATCH_ENDED_EVENT_TYPE, "`nahel dispatch`"],
+]);

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   composeInvocation,
   DISPATCH_AGENT_DEFAULTS,
@@ -147,9 +149,12 @@ describe("routing resolution (F1.2 — responsibility first, then default)", () 
     // The refusal advertises a paste-ready command. Config is committed data an
     // agent may have written, so a model value containing a single quote must
     // not end the quoting and start a command.
-    const routing: Routing = {
-      review: { agent: "codex", model: "gpt-5'; touch /tmp/nahel-pwned; echo '" },
-    };
+    // A fresh marker path per run: the injected command's only observable
+    // effect is creating it, so "was never created" is the security assertion.
+    const marker = join(tmpdir(), `nahel-pwned-${Math.random().toString(36).slice(2)}`);
+    rmSync(marker, { force: true });
+    const hostile = `gpt-5'; touch ${marker}; echo '`;
+    const routing: Routing = { review: { agent: "codex", model: hostile } };
     let message = "";
     try {
       resolveRoute(routing, "implementation");
@@ -167,11 +172,11 @@ describe("routing resolution (F1.2 — responsibility first, then default)", () 
     const roundTripped = proc.stdout.toString();
     console.log("[round-tripped]", roundTripped);
     expect(JSON.parse(roundTripped)).toEqual({
-      review: { agent: "codex", model: "gpt-5'; touch /tmp/nahel-pwned; echo '" },
+      review: { agent: "codex", model: hostile },
       implementation: { agent: "<claude|codex|cursor-agent>", model: "<model>" },
     });
-    // The injected command never ran (it would have created this file).
-    expect(existsSync("/tmp/nahel-pwned")).toBe(false);
+    // The injected command never ran (it would have created the marker).
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("resolution is deterministic — the same config resolves identically every time", () => {

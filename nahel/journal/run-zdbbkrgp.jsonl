@@ -1,0 +1,1 @@
+{"id":"878cnvvf","ts":"2026-07-25T17:26:17Z","seq":0,"type":"run.started","actor":{"kind":"agent","id":"claude-code"},"run":"zdbbkrgp","item":"mb6gxyk4","payload":{"target":"run","record":{"id":"zdbbkrgp","item":"mb6gxyk4","actor":{"kind":"agent","id":"claude-code"},"lane":"direct","phase":"starting","status":"active","started":"2026-07-25T17:26:17Z"}}}

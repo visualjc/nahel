@@ -5,12 +5,13 @@ import {
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
   LANES,
+  MERGE_AUTHORITIES,
   ROUTING_RESPONSIBILITIES,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_TYPES,
 } from "../../src/schema/enums";
-import { dispatchSchema, routingSchema } from "../../src/schema/records";
+import { dispatchSchema, mergeSchema, routingSchema } from "../../src/schema/records";
 
 describe("schema/enums (CONTEXT.md glossary is normative)", () => {
   test("work item types are exactly feature|bug|chore|plan|prototype|qa", () => {
@@ -53,6 +54,17 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
 
   test("governance modes are exactly human|delegated", () => {
     expect([...GOVERNANCE_MODES]).toEqual(["human", "delegated"]);
+  });
+
+  test("merge authorities are exactly human|on-approve (F3.4, HC6 as amended)", () => {
+    expect([...MERGE_AUTHORITIES]).toEqual(["human", "on-approve"]);
+  });
+
+  test("the merge-authority enum IS the merge section's value set", () => {
+    // The section carries exactly one key; a third authority would have to be
+    // a deliberate enum change, never a stray config string.
+    expect(Object.keys(mergeSchema.shape)).toEqual(["authority"]);
+    expect([...mergeSchema.shape.authority.options]).toEqual([...MERGE_AUTHORITIES]);
   });
 
   test("responsibilities are exactly architecture|implementation|review (ADR-0015)", () => {

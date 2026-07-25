@@ -107,9 +107,19 @@ describe("command, template, view, and validate layers are pure over the store",
   // functions over collected store reads (task #9); install's agent table and
   // shim rendering are pure functions the install command drives (task #11);
   // dispatch's routing resolution and invocation composition are pure
-  // functions of committed config plus the task args (Phase 2 F1).
+  // functions of committed config plus the task args (Phase 2 F1); governance
+  // resolves the posture and the merge authority's journal provenance from
+  // committed state alone (Phase 2 F2.2/F3.4).
   // Only the cli.ts entry point may touch the ambient process (argv, cwd, exit).
-  for (const layer of ["commands", "dispatch", "install", "templates", "views", "validate"]) {
+  for (const layer of [
+    "commands",
+    "dispatch",
+    "governance",
+    "install",
+    "templates",
+    "views",
+    "validate",
+  ]) {
     test(`src/${layer} files use no ambient environment, time, or randomness`, () => {
       const files = tsFilesUnder(join(SRC_DIR, layer));
       expect(files.length).toBeGreaterThan(0);

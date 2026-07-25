@@ -937,6 +937,42 @@ describe("schema/records — governance (F4, roadmap §7)", () => {
   });
 });
 
+describe("schema/records — merge authority (F3.4)", () => {
+  const withMerge = (merge: unknown) => ({ ...validConfig, merge });
+
+  test("a config with no merge section stays valid — absent means `merge: human`", () => {
+    expectAccepted(configSchema, validConfig, "config no merge");
+  });
+
+  test("accepts both authorities: the human default and the on-approve opt-in", () => {
+    expectAccepted(configSchema, withMerge({ authority: "human" }), "merge human");
+    expectAccepted(configSchema, withMerge({ authority: "on-approve" }), "merge on-approve");
+  });
+
+  test("rejects a non-enum authority, pointing at the field", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withMerge({ authority: "auto" }),
+      "merge bad authority",
+    );
+    expect(issues.some((i) => i.startsWith("merge.authority:"))).toBe(true);
+  });
+
+  test("rejects a merge section without an authority — the authority IS the record", () => {
+    const issues = rejectionIssues(configSchema, withMerge({}), "merge empty");
+    expect(issues.some((i) => i.startsWith("merge.authority:"))).toBe(true);
+  });
+
+  test("rejects unknown merge keys (a typo is an error, not a silently ignored policy)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withMerge({ authority: "human", authorized_by: "jim" }),
+      "merge unknown key",
+    );
+    expect(issues.some((i) => i.includes("authorized_by"))).toBe(true);
+  });
+});
+
 describe("schema/records — distilled segment list (F6, ADR-0012)", () => {
   test("accepts a list of archived segment filenames (and the empty list)", () => {
     expectAccepted(

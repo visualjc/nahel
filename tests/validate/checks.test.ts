@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
@@ -15,7 +15,9 @@ import {
   addDistilled,
   itemPath,
   observationPath,
+  readConfig,
   runRecordPath,
+  writeConfig,
   writeItem,
   writeObservation,
   writeRun,
@@ -421,6 +423,81 @@ describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
     const ids = missing.map((finding) => finding.message).join("\n");
     expect(ids).toContain(a.id);
     expect(ids).toContain(b.id);
+  });
+});
+
+describe("validate — merge-authority provenance (merge.unauthorized, F3.4)", () => {
+  /** Drive the real `nahel config set merge` as the given actor. */
+  async function setMergeAuthority(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    authority: string,
+    actorSpec: string,
+  ): Promise<void> {
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await configCommand.run(
+        ["set", "merge", "--data", `authority=${authority}`],
+        fixture.env,
+        fixture.root,
+        actorSpec,
+      );
+      if (code !== 0) throw new Error(`config set merge failed (${actorSpec})`);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  }
+
+  test("merge: on-approve flipped by a HUMAN is silent — the flip is the standing authorization", async () => {
+    const fixture = await setupFixture(dirs);
+    await setMergeAuthority(fixture, "on-approve", "human:jim");
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "merge.unauthorized")).toEqual([]);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("merge: on-approve flipped by an AGENT warns that the flag is inert, naming the human re-set fix", async () => {
+    const fixture = await setupFixture(dirs);
+    await setMergeAuthority(fixture, "on-approve", "agent:opus-implementer");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "merge.unauthorized");
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("warning");
+    expect(finding.message).toContain("on-approve");
+    expect(finding.message).toContain("opus-implementer");
+    expect(finding.message).toContain("inert");
+    // The fix names the ONE action that repairs it: a human re-running the set.
+    expect(finding.fix).toContain("human");
+    expect(finding.fix).toContain("nahel config set merge");
+    // Never an error: an inert flag degrades to the safe default, it does not
+    // corrupt state.
+    expect(
+      (await validateStore(fixture.layout)).filter((f) => f.severity === "error"),
+    ).toEqual([]);
+  });
+
+  test("a hand-edited merge: on-approve with no journaled flip warns — unprovable is not authorized", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, { ...config, merge: { authority: "on-approve" } });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "merge.unauthorized");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("on-approve");
+    expect(findings[0]!.fix).toContain("nahel config set merge");
+  });
+
+  test("merge: human (explicit or absent) never warns — nothing was delegated", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
+
+    await setMergeAuthority(fixture, "human", "agent:opus-implementer");
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
   });
 });
 

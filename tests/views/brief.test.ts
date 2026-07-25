@@ -91,6 +91,7 @@ function makeInputs(overrides: Partial<BriefInputs> = {}): BriefInputs {
     productPath: "PRODUCT.md",
     contextPath: "CONTEXT.md",
     adrPath: "docs/adr",
+    merge: { configured: "human", defaulted: true, effective: "human" },
     warnings: [],
     ...overrides,
   };
@@ -111,6 +112,7 @@ function makeEvent(env: Env, i: number): JournalEvent {
 const SECTION_HEADERS = [
   "== constitution (PRODUCT.md) ==",
   "== knowledge & canonical truth ==",
+  "== governance & merge authority ==",
   "== item statuses ==",
   "== recent activity (newest last) ==",
   "== pending human decisions ==",
@@ -166,7 +168,7 @@ describe("withoutDoneDetail — done-item pruning for the truncation ladder", ()
 });
 
 describe("renderBrief — required sections in fixed order", () => {
-  test("all six section headers appear, in the PRD's fixed order", () => {
+  test("every required section header appears, in the fixed order (PRD F7's six, plus governance)", () => {
     const brief = renderBrief(makeInputs());
     let previous = -1;
     for (const header of SECTION_HEADERS) {
@@ -281,6 +283,114 @@ describe("renderBrief — pending human decisions", () => {
   test("with nothing pending the section says none explicitly", () => {
     const brief = renderBrief(makeInputs());
     expect(brief).toContain("== pending human decisions ==\nnone");
+  });
+});
+
+describe("renderBrief — governance & merge authority (F2.2 config semantics, F3.4)", () => {
+  /** The section body: everything under the header up to the next blank line. */
+  function governanceSection(brief: string): string {
+    return brief.split("== governance & merge authority ==")[1]!.split("\n\n")[0]!;
+  }
+
+  test("no governance config: the resolved posture is shown, each line marked (default)", () => {
+    const section = governanceSection(renderBrief(makeInputs()));
+    expect(section).toContain("product: delegated (default)");
+    expect(section).toContain("architecture: human (default)");
+    expect(section).toContain("merge: human (default)");
+  });
+
+  test("explicit values are shown WITHOUT the default marker — committed state reads as committed", () => {
+    const section = governanceSection(
+      renderBrief(
+        makeInputs({
+          governance: { product: "human", architecture: "delegated" },
+          merge: { configured: "human", defaulted: false, effective: "human" },
+        }),
+      ),
+    );
+    expect(section).toContain("product: human");
+    expect(section).toContain("architecture: delegated");
+    expect(section).toContain("merge: human");
+    expect(section).not.toContain("(default)");
+  });
+
+  test("an authorized merge: on-approve is shown plainly — it is genuinely in force", () => {
+    const section = governanceSection(
+      renderBrief(
+        makeInputs({
+          merge: {
+            configured: "on-approve",
+            defaulted: false,
+            effective: "on-approve",
+            setBy: { event: "aaaaaaa1", actor: { kind: "human", id: "jim" } },
+          },
+        }),
+      ),
+    );
+    expect(section).toContain("merge: on-approve");
+    expect(section).not.toContain("inert");
+  });
+
+  test("an agent-set merge: on-approve is surfaced as INERT, naming the actor and the fallback", () => {
+    const section = governanceSection(
+      renderBrief(
+        makeInputs({
+          merge: {
+            configured: "on-approve",
+            defaulted: false,
+            effective: "human",
+            defect: "agent-set",
+            setBy: { event: "aaaaaaa2", actor: { kind: "agent", id: "opus-implementer" } },
+          },
+        }),
+      ),
+    );
+    expect(section).toContain("merge: on-approve");
+    expect(section).toContain("inert — agent-set");
+    expect(section).toContain("opus-implementer");
+    expect(section).toContain("merge: human");
+  });
+
+  test("an unprovable merge: on-approve is surfaced as inert too", () => {
+    const section = governanceSection(
+      renderBrief(
+        makeInputs({
+          merge: { configured: "on-approve", defaulted: false, effective: "human", defect: "unrecorded" },
+        }),
+      ),
+    );
+    expect(section).toContain("inert");
+    expect(section).toContain("merge: human");
+  });
+
+  test("composeBrief resolves governance and merge authority from the real store", async () => {
+    const store = await populatedWithProduct();
+    const config = await readConfig(store.layout);
+
+    // A store with no governance and no merge section: the defaults, marked.
+    const bare = await composeBrief(store.layout, config);
+    expect(bare).toContain("product: delegated (default)");
+    expect(bare).toContain("architecture: human (default)");
+    expect(bare).toContain("merge: human (default)");
+
+    // The AGENT-attributed flip (the fixture's config actor is an agent):
+    // configured on-approve, surfaced as inert.
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(
+        await configCommand.run(
+          ["set", "merge", "--data", "authority=on-approve"],
+          store.env,
+          store.root,
+        ),
+      ).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    const flipped = await composeBrief(store.layout, await readConfig(store.layout));
+    expect(flipped).toContain("merge: on-approve");
+    expect(flipped).toContain("inert — agent-set");
   });
 });
 

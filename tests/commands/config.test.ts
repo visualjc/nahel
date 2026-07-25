@@ -138,6 +138,28 @@ describe("nahel config set — writing optional sections", () => {
     expect((await journalEvents(layout)).length).toBe(eventCount);
   });
 
+  test("sets the merge authority, journaling the actor whose flip authorizes it (F3.4)", async () => {
+    const { root, layout, env } = await setup();
+    const code = await configCommand.run(
+      ["set", "merge", "--data", "authority=on-approve"],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).merge).toEqual({ authority: "on-approve" });
+
+    // The standing authorization IS this event: its actor is the provenance
+    // the review loop checks before merging anything.
+    const act = (await journalEvents(layout)).find((event) => event.type === "config.updated")!;
+    expect(act.payload).toEqual({ section: "merge", value: { authority: "on-approve" } });
+    expect(act.actor).toEqual({ kind: "human", id: "jim" });
+
+    const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
+    expect(errors).toEqual([]);
+  });
+
   test("the set's own session closes and archives — no active segments linger", async () => {
     const { root, layout, env } = await setup();
     expect(await configCommand.run(["set", "inception", "--data", "tier=seed"], env, root)).toBe(0);
@@ -179,6 +201,21 @@ describe("nahel config set — refusals (config untouched, nothing journaled)", 
     );
     expect(code).toBe(1);
     expect(errs.join("\n")).toContain("upgraded");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("an unknown merge authority is refused — the enum is strict, config untouched", async () => {
+    const { root, layout, env } = await setup();
+    const before = await configBytes(layout);
+    const code = await configCommand.run(
+      ["set", "merge", "--data", "authority=auto"],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toContain("merge.authority");
+    expect(await configBytes(layout)).toBe(before);
     expect(await journalEvents(layout)).toEqual([]);
   });
 
@@ -245,6 +282,12 @@ describe("canonical workflow docs driving config set (F4, F3.2)", () => {
     expect(body).toContain("nahel config set governance");
     expect(body).toContain("nahel config set contract");
     expect(body).toContain("nahel item new");
+    // F2.2 config semantics: the written default is {product: delegated,
+    // architecture: human} — the doc's example must record exactly that, and
+    // must no longer claim new projects start all-human.
+    expect(body).toContain("--data product=delegated");
+    expect(body).toContain("--data architecture=human");
+    expect(body).not.toContain("almost always start all-human");
     // Tier vocabulary, brownfield mode, and the ratchet are stated in the doc.
     for (const term of ["seed", "standard", "full", "rownfield", "ratchet"]) {
       expect(body).toContain(term);

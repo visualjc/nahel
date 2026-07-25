@@ -706,6 +706,26 @@ describe("review-loop canonical workflow doc (F3)", () => {
     expect(body).toContain("Leaf-item `done` stays human-only");
   });
 
+  test("a sign-off HEAD that is no longer current is stale — no merge on unreviewed commits (F3.3, F3.4)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    const mergeStep = body.slice(
+      body.indexOf("9. The merge decision"),
+      body.indexOf("10. Write the trail"),
+    );
+    expect(mergeStep.length).toBeGreaterThan(0);
+    // Both verdicts at the same HEAD is necessary but not sufficient: nothing
+    // said that HEAD was still current when the merge is actually performed,
+    // so a push landing between sign-off and merge shipped unreviewed commits
+    // under two approvals of something else.
+    expect(mergeStep).toContain("git rev-parse HEAD");
+    expect(mergeStep).toContain("sign-off HEAD");
+    expect(mergeStep).toContain("stale");
+    // The remedy is the loop's own: another round, or the cap's park.
+    expect(mergeStep).toContain("another round");
+    expect(mergeStep).toContain("cap");
+    expect(mergeStep).toContain("do not merge");
+  });
+
   test("both reviewers reconcile into one journaled disposition list the PR body carries (F3.1, F3.3)", async () => {
     const { body } = await shippedWorkflow("review-loop.md");
     expect(body).toContain("ONE disposition list");
@@ -781,6 +801,26 @@ describe("governance qualifiers on the Phase 1 approval docs (F2.2)", () => {
     expect(body).toContain("PRD proposed for delegated approval");
     expect(body).toContain("delegated approval (governance.product=delegated)");
     expect(body).toContain("is not an approval");
+  });
+
+  test("prd-parse.md: the delegated audit checks the verdict, the CURRENT hash and the assumption trail", async () => {
+    const { body } = await shippedWorkflow("prd-parse.md");
+    // "The trail is present" is far too weak a gate: a `disagree` verdict, a
+    // verification bound to a revision the PRD has since moved past, or a
+    // proposal citing an assumption trail that is not in the journal all
+    // accompany an agent-set `done` perfectly well.
+    expect(body).toContain("verdict=agree");
+    expect(body).toContain("git hash-object docs/prds/<slug>.md");
+    // Re-hashed AT PARSE TIME, not read off the event: a moved hash means the
+    // approved bytes are not the bytes about to be decomposed.
+    expect(body).toContain("re-hash");
+    expect(body).toContain("moved");
+    expect(body).toContain("assumption");
+    // The consequence is a refusal AND a park, not a silent stop: the item
+    // has to be visible to the human whose gate was skipped.
+    expect(body).toContain("refuse to parse");
+    expect(body).toContain("nahel item update <plan-id> --status blocked");
+    expect(body).toContain('summary="parked:');
   });
 
   test("task-lifecycle.md: leaf-item `done` stays human-only, auto-merge and delegated governance notwithstanding", async () => {

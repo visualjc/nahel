@@ -27,13 +27,44 @@ Before any `nahel` command: if you are an agent, set
    plan-item approval only, and the gate is identical either way: `done`,
    or STOP.
 
-   Audit a delegated flip in `nahel progress --item <plan-id>`: the proposal
-   ("PRD proposed for delegated approval"), the verification under ANOTHER
-   vendor's actor, and the decision
-   ("delegated approval (governance.product=delegated)") whose `proposal`
-   and `verification` link the two. A `done` an agent flipped with neither
-   that trail nor a human's word is not an approval — treat it as
-   unapproved and say so.
+   Audit a delegated flip in `nahel progress --item <plan-id>`. The trail
+   being PRESENT is not the audit — a disagreeing verification, or one bound
+   to bytes the PRD has since moved past, accompanies an agent-set `done`
+   just as comfortably as a real approval does. All five hold, or the flip
+   is not an approval:
+
+   a. The proposal event ("PRD proposed for delegated approval") names this
+      PRD and carries a `revision` and an `assumptions` list.
+   b. A verification event under ANOTHER vendor's actor carries
+      `verdict=agree` and `verifies=<the proposal event id>`. A
+      `verdict=disagree` is a refusal that was overridden; treat it as such.
+   c. The PRD still IS what was verified — so re-hash it now, at parse
+      time; the event's own copy of the hash proves nothing about the file
+      on disk:
+
+          git hash-object docs/prds/<slug>.md
+
+      That output must equal the `revision` on the proposal AND on the
+      verification. A hash that moved means the approved bytes are not the
+      bytes you are about to decompose: not approved.
+   d. Every assumption event id the proposal cites is actually in the
+      journal. The trail is what the interview was traded for; an approval
+      resting on assumptions nobody can read rests on nothing.
+   e. The decision event
+      ("delegated approval (governance.product=delegated)") links the two by
+      id — its `proposal` and `verification` naming exactly the events you
+      just audited, at that same `revision`.
+
+   Any of those failing — and a `done` an agent flipped with neither this
+   trail nor a human's word — means NOT approved: refuse to parse, and park
+   the plan item so the human whose gate was skipped can see it:
+
+       nahel item update <plan-id> --status blocked
+       nahel log note --item <plan-id> \
+         --data summary="parked: delegated approval does not audit — <which of (a)-(e) failed, with the event ids and hashes you compared>; PRD not parsed"
+
+   Then stop. Never re-run the consensus yourself to repair someone else's
+   approval: proposing and verifying the same PRD is not cross-vendor review.
 
 2. Read the PRD end to end, then verify its scope against the actual code:
    what already exists, which surfaces the requirements touch, the real

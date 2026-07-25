@@ -226,6 +226,25 @@ merge around a claim.
 
        nahel brief
 
+   Before either branch below, re-read HEAD. Step 8 required both verdicts to
+   stand at the SAME HEAD; this requires that HEAD to still be the CURRENT
+   one at the moment of the decision — a push landing in between (a
+   co-driver, a rebase, your own late fix) means the commits about to merge
+   are not the commits anyone reviewed:
+
+       git rev-parse HEAD
+
+   Differs from the sign-off HEAD? The sign-off is STALE — do not merge, and
+   do not re-sign it from memory: journal the staleness and run another round
+   (step 2) on the new HEAD, both slots reviewing again —
+
+       nahel log note --item <item-id> --run <run-id> \
+         --data summary="sign-off stale at merge: signed off at HEAD <sign-off-sha>, HEAD is now <current-sha> — no merge; re-reviewing" \
+         --data head=<current-sha> --data signed_off_at=<sign-off-sha>
+
+   — or, if that would exceed the three-round cap, park it (step 11) naming
+   the moved HEAD. A stale sign-off buys no extra round; the cap is the cap.
+
    - **`merge: human`** — the default, and what an absent `merge` section
      means. The PR waits for a person: refuse to merge it
      regardless of how many approvals it carries. A signed-off PR under

@@ -20,6 +20,14 @@ verbatim. Never work around a claim — not by retrying as another actor,
 not by moving the item, not by hand-editing. The claim is the human's word
 that this work is theirs.
 
+0. Git discipline, before any code: CODE changes never land on the default
+   branch directly. Work on a branch — `epic/<slug>` for a feature epic's
+   children (one shared branch per epic), `fix/<slug>` for a lone bug,
+   `chore/<slug>` otherwise — and finish by opening a PR for review; merging
+   is the human's (or their standing protocol's) call. Nahel STATE mutations
+   (`nahel/` records and journal) are the exception: the CLI's merge-safe
+   store commits to the default branch directly.
+
 1. Start — flip the item, open a run:
 
        nahel item update <item-id> --status in-progress

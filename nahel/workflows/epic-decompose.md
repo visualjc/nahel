@@ -6,6 +6,10 @@ args: "<feature-item-id>"
 
 # Workflow: epic-decompose
 
+Branch note: the epic's children share one branch — `epic/<parent-slug>` cut
+from the default branch — and land together via one reviewed PR (see
+task-lifecycle's git discipline).
+
 Load and follow this workflow to break a parent feature item (an epic, in
 the glossary sense: a work item with children) into child work items. The
 judgment is the split; the mechanics are `nahel item new` with `--parent`

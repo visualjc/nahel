@@ -6,6 +6,9 @@ args: "<item-id>"
 
 # Workflow: bug-lane
 
+Branch note: the fix lives on `fix/<slug>` and lands via a reviewed PR —
+never directly on the default branch (task-lifecycle's git discipline).
+
 Load and follow this workflow to work a `bug` item. Diagnosis comes first:
 understand the failure before touching the fix. All lifecycle mechanics —
 status flips, the run, journaled findings, the claim rule — are the

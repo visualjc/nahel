@@ -1,0 +1,2 @@
+{"id":"8va1x965","ts":"2026-07-25T15:30:08Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"dmgc103h","payload":{"target":"item","record":{"id":"dmgc103h","name":"workflows-lack-git-branch-discipline","type":"chore","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T15:29:22Z","updated":"2026-07-25T15:30:08Z"},"body":""}}
+{"id":"qy0mh4dk","ts":"2026-07-25T15:30:08Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

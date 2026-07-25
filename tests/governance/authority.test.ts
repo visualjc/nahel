@@ -203,6 +203,64 @@ describe("merge authority provenance — on-approve counts only when a human set
     expect(status.defect).toBe("unrecorded");
   });
 
+  test("two same-second setters that disagree are AMBIGUOUS — ordering cannot decide, so nothing is authorized", () => {
+    // Same second, different sessions: every CLI invocation mints its own
+    // segment, so both events carry seq 0 and only the random event id
+    // separates them. An id lottery must never be able to enable auto-merge.
+    const human = { ...mergeConfigEvent("zzzzzzzz", HUMAN, "on-approve", 0) };
+    const agent = { ...mergeConfigEvent("aaaaaaaa", AGENT, "on-approve", 0) };
+    expect(human.ts).toBe(agent.ts);
+
+    for (const events of [
+      [human, agent],
+      [agent, human],
+    ]) {
+      const status = mergeAuthorityStatus({ authority: "on-approve" }, events);
+      console.log("[same-second]", events.map((e) => e.id).join(","), status.defect);
+      expect(status.configured).toBe("on-approve");
+      expect(status.effective).toBe("human");
+      expect(status.defect).toBe("ambiguous");
+      // Both tied setters are named so a human can see what to break the tie against.
+      expect(status.tied?.map((tie) => tie.event).sort()).toEqual(["aaaaaaaa", "zzzzzzzz"]);
+    }
+  });
+
+  test("same-second setters that AGREE are not ambiguous — there is nothing to disagree about", () => {
+    const first = mergeConfigEvent("bbbbbbb1", HUMAN, "on-approve", 0);
+    const second = mergeConfigEvent("bbbbbbb2", HUMAN, "on-approve", 0);
+    const status = mergeAuthorityStatus({ authority: "on-approve" }, [first, second]);
+    expect(status.effective).toBe("on-approve");
+    expect(status.defect).toBeUndefined();
+  });
+
+  test("same-second setters that agree on actor kind but disagree on VALUE are ambiguous", () => {
+    const on = mergeConfigEvent("ccccccc1", HUMAN, "on-approve", 0);
+    const off = mergeConfigEvent("ccccccc2", HUMAN, "human", 0);
+    const status = mergeAuthorityStatus({ authority: "on-approve" }, [on, off]);
+    expect(status.effective).toBe("human");
+    expect(status.defect).toBe("ambiguous");
+  });
+
+  test("two same-second AGENT setters stay agent-set — consistent, just unauthorized", () => {
+    const status = mergeAuthorityStatus({ authority: "on-approve" }, [
+      mergeConfigEvent("ddddddd1", AGENT, "on-approve", 0),
+      mergeConfigEvent("ddddddd2", AGENT, "on-approve", 0),
+    ]);
+    expect(status.effective).toBe("human");
+    expect(status.defect).toBe("agent-set");
+  });
+
+  test("a strictly LATER human set breaks the tie — the fix validate prescribes resolves ambiguity", () => {
+    const status = mergeAuthorityStatus({ authority: "on-approve" }, [
+      mergeConfigEvent("eeeeeee1", HUMAN, "on-approve", 0),
+      mergeConfigEvent("eeeeeee2", AGENT, "on-approve", 0),
+      mergeConfigEvent("eeeeeee3", HUMAN, "on-approve", 1),
+    ]);
+    expect(status.effective).toBe("on-approve");
+    expect(status.defect).toBeUndefined();
+    expect(status.setBy?.event).toBe("eeeeeee3");
+  });
+
   test("a forged non-config event carrying a merge payload proves nothing (type is the key)", () => {
     const forged: JournalEvent = {
       id: "aaaaaab1",

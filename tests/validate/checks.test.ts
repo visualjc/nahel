@@ -492,6 +492,50 @@ describe("validate — merge-authority provenance (merge.unauthorized, F3.4)", (
     expect(findings[0]!.fix).toContain("nahel config set merge");
   });
 
+  test("a human re-set after an agent's flip CLEARS the warning — the prescribed fix works end to end", async () => {
+    const fixture = await setupFixture(dirs);
+    await setMergeAuthority(fixture, "on-approve", "agent:opus-implementer");
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toHaveLength(1);
+
+    // The byte-equal human re-set: same section, same value, human actor.
+    await setMergeAuthority(fixture, "on-approve", "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
+  });
+
+  test("two same-second setters that disagree warn as AMBIGUOUS, naming the fresh human set as the fix", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, { ...config, merge: { authority: "on-approve" } });
+
+    // Two config sets from different sessions in the same second: both carry
+    // seq 0, so only the random event id separates them in the total order.
+    // A lottery must never decide whether auto-merge is authorized.
+    const frozen = { now: () => "2026-07-25T12:00:00Z", random: fixture.env.random };
+    for (const actor of [
+      { kind: "human", id: "jim" } as const,
+      { kind: "agent", id: "opus-implementer" } as const,
+    ]) {
+      await appendEvent(fixture.layout, frozen, {
+        type: "config.updated",
+        actor,
+        session: newSessionSegmentId(fixture.env),
+        payload: { section: "merge", value: { authority: "on-approve" } },
+      });
+    }
+
+    const findings = findingsFor(await validateStore(fixture.layout), "merge.unauthorized");
+    console.log("[ambiguous]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("same second");
+    expect(findings[0]!.message).toContain("inert");
+    // The fix names the ONE deterministic repair: a fresh human set, later.
+    expect(findings[0]!.fix).toContain("human");
+    expect(findings[0]!.fix).toContain("nahel config set merge");
+    expect(findings[0]!.fix).toContain("second");
+    expect((await validateStore(fixture.layout)).filter((f) => f.severity === "error")).toEqual([]);
+  });
+
   test("merge: human (explicit or absent) never warns — nothing was delegated", async () => {
     const fixture = await setupFixture(dirs);
     expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);

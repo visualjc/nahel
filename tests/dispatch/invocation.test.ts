@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
   composeInvocation,
   DISPATCH_AGENT_DEFAULTS,
@@ -140,6 +141,37 @@ describe("routing resolution (F1.2 — responsibility first, then default)", () 
     expect(message).toContain("routing.implementation");
     expect(message).toContain("agent");
     expect(message).toContain("nahel config set routing --data");
+  });
+
+  test("the offered fix is shell-safe: a hostile committed value cannot break out of its quotes", () => {
+    // The refusal advertises a paste-ready command. Config is committed data an
+    // agent may have written, so a model value containing a single quote must
+    // not end the quoting and start a command.
+    const routing: Routing = {
+      review: { agent: "codex", model: "gpt-5'; touch /tmp/nahel-pwned; echo '" },
+    };
+    let message = "";
+    try {
+      resolveRoute(routing, "implementation");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    console.log("[hostile route fix]", message);
+
+    // Extract exactly what the fix hands to the shell after `--data`.
+    const dataArg = message.slice(message.indexOf("--data ") + "--data ".length);
+    // A real shell must see ONE argument whose bytes are the JSON verbatim —
+    // that is what "not injectable" means, and only a shell can prove it.
+    const proc = Bun.spawnSync(["sh", "-c", `printf %s ${dataArg}`]);
+    expect(proc.exitCode).toBe(0);
+    const roundTripped = proc.stdout.toString();
+    console.log("[round-tripped]", roundTripped);
+    expect(JSON.parse(roundTripped)).toEqual({
+      review: { agent: "codex", model: "gpt-5'; touch /tmp/nahel-pwned; echo '" },
+      implementation: { agent: "<claude|codex|cursor-agent>", model: "<model>" },
+    });
+    // The injected command never ran (it would have created this file).
+    expect(existsSync("/tmp/nahel-pwned")).toBe(false);
   });
 
   test("resolution is deterministic — the same config resolves identically every time", () => {

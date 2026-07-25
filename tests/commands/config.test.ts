@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { configCommand, SETTABLE_CONFIG_SECTIONS } from "../../src/commands/config";
+import { readMergeAuthority } from "../../src/governance/authority";
 import type { JournalEvent } from "../../src/schema/records";
 import { listSegments, readJournal } from "../../src/store/journal";
 import { ensureLayout, readConfig, writeConfig, type StoreLayout } from "../../src/store/layout";
@@ -125,17 +126,66 @@ describe("nahel config set — writing optional sections", () => {
     expect(config.actor).toEqual(makeConfig().actor);
   });
 
-  test("re-running the same set changes nothing: identical bytes, no new journal event", async () => {
+  test("re-running the same set writes identical bytes but journals the ACT again (acts repeat honestly)", async () => {
     const { root, layout, env } = await setup();
     expect(await configCommand.run(["set", "inception", "--data", "tier=standard"], env, root)).toBe(0);
     const bytes = await configBytes(layout);
-    const eventCount = (await journalEvents(layout)).length;
+    const first = (await journalEvents(layout)).filter((e) => e.type === "config.updated");
+    expect(first).toHaveLength(1);
 
     logs = [];
     expect(await configCommand.run(["set", "inception", "--data", "tier=standard"], env, root)).toBe(0);
-    expect(logs.join("\n")).toContain("unchanged");
+    // The committed value is byte-identical — the write is idempotent…
     expect(await configBytes(layout)).toBe(bytes);
-    expect((await journalEvents(layout)).length).toBe(eventCount);
+    // …but the journal records ACTS, not diffs: a byte-equal re-set is a second
+    // act, with its own actor. Swallowing it would make provenance repair
+    // (an agent-set section re-attributed to a human) a silent no-op.
+    const second = (await journalEvents(layout)).filter((e) => e.type === "config.updated");
+    expect(second).toHaveLength(2);
+    expect(second[1]!.payload).toEqual({ section: "inception", value: { tier: "standard" } });
+    expect(logs.join("\n")).toContain("inception");
+  });
+
+  test("a HUMAN re-setting the value an AGENT set repairs provenance — the validate fix actually works (F3.4)", async () => {
+    const { root, layout, env } = await setup();
+
+    // The agent's flip: schema-valid, committed, and inert — an agent cannot
+    // grant the human's standing merge authorization.
+    expect(
+      await configCommand.run(
+        ["set", "merge", "--data", "authority=on-approve"],
+        env,
+        root,
+        "agent:claude-code",
+      ),
+    ).toBe(0);
+    const inert = await readMergeAuthority(layout, await readConfig(layout));
+    console.log("[agent-set]", inert);
+    expect(inert.effective).toBe("human");
+    expect(inert.defect).toBe("agent-set");
+    expect(
+      (await validateStore(layout)).filter((f) => f.check === "merge.unauthorized"),
+    ).toHaveLength(1);
+
+    // The exact repair `nahel validate` prescribes: a HUMAN re-runs the SAME
+    // command with the SAME value. The config bytes do not change; the
+    // authorizing act does.
+    expect(
+      await configCommand.run(
+        ["set", "merge", "--data", "authority=on-approve"],
+        env,
+        root,
+        "human:jim",
+      ),
+    ).toBe(0);
+    const repaired = await readMergeAuthority(layout, await readConfig(layout));
+    console.log("[human re-set]", repaired);
+    expect(repaired.effective).toBe("on-approve");
+    expect(repaired.defect).toBeUndefined();
+    expect(repaired.setBy?.actor).toEqual({ kind: "human", id: "jim" });
+    expect((await validateStore(layout)).filter((f) => f.check === "merge.unauthorized")).toEqual(
+      [],
+    );
   });
 
   test("sets the merge authority, journaling the actor whose flip authorizes it (F3.4)", async () => {

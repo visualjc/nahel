@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandContext } from "../../src/cli";
@@ -45,6 +46,7 @@ async function runInstall(
   args: string[],
   root: string,
   homeDir?: string,
+  codexHome?: string,
 ): Promise<CommandResult> {
   const out: string[] = [];
   const err: string[] = [];
@@ -52,6 +54,7 @@ async function runInstall(
     env: seededEnv(),
     cwd: root,
     homeDir,
+    codexHome,
     stdout: (text) => out.push(text),
     stderr: (text) => err.push(text),
   };
@@ -149,17 +152,17 @@ describe("agent target lookup table (ADR-0005: later agents additive)", () => {
     expect(AGENT_TARGETS["claude"]!.filePrefix("nd")).toBe("");
   });
 
-  test("codex is a known agent whose shims are home-scoped prompt files (F8.2)", () => {
+  test("codex is a known agent whose shims are codex-home-scoped prompt files (F8.2)", () => {
     // Codex loads custom prompts ONLY from $CODEX_HOME/prompts (default
     // ~/.codex/prompts), top-level markdown files, no subdirectories — so the
-    // target is home-rooted and the prefix is a FILE-NAME namespace, not a
-    // directory, and pruning is limited to that namespace (the directory is
-    // shared with the user's own prompts).
+    // target is rooted at the CODEX HOME (not the user's home) and the prefix
+    // is a FILE-NAME namespace, not a directory; pruning is limited to that
+    // namespace (the directory is shared with the user's own prompts).
     expect(AGENT_TARGETS["codex"]).toBeDefined();
     expect(KNOWN_AGENTS).toEqual(["claude", "codex"]);
-    expect(AGENT_TARGETS["codex"]!.root).toBe("home");
-    expect(AGENT_TARGETS["codex"]!.shimDir("nd")).toBe(join(".codex", "prompts"));
-    expect(AGENT_TARGETS["codex"]!.shimDir("go")).toBe(join(".codex", "prompts"));
+    expect(AGENT_TARGETS["codex"]!.root).toBe("codex-home");
+    expect(AGENT_TARGETS["codex"]!.shimDir("nd")).toBe("prompts");
+    expect(AGENT_TARGETS["codex"]!.shimDir("go")).toBe("prompts");
     expect(AGENT_TARGETS["codex"]!.filePrefix("nd")).toBe("nd-");
     expect(AGENT_TARGETS["codex"]!.filePrefix("go")).toBe("go-");
   });
@@ -429,10 +432,59 @@ describe("nahel install --agent codex (PRD F8.2)", () => {
   test("codex without a resolvable home directory fails fast, writing nothing", async () => {
     const root = await makeRepo();
     await writeWorkflow(root, "brief.md", workflowDoc("brief"));
-    const result = await runInstall(["--agent", "codex"], root); // no homeDir injected
+    const result = await runInstall(["--agent", "codex"], root); // no homeDir, no CODEX_HOME
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("home");
     expect(result.stderr).toContain("codex");
+    expect(result.stderr).toContain("CODEX_HOME");
+  });
+
+  test("CODEX_HOME wins over ~/.codex — shims land where codex actually looks (F8.2)", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    const codexHome = await makeTempDir("nahel-install-codex-home-");
+    tempDirs.push(codexHome);
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+
+    const result = await runInstall(["--agent", "codex"], root, home, codexHome);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    // Codex's documented discovery: $CODEX_HOME/prompts, flat markdown files.
+    expect((await readdir(join(codexHome, "prompts"))).sort()).toEqual(["nd-brief.md"]);
+    // …and NOT ~/.codex/prompts, which would be invisible to that codex.
+    expect(existsSync(join(home, ".codex"))).toBe(false);
+    // The output states the path the user has to know.
+    expect(result.stdout).toContain(join(codexHome, "prompts"));
+  });
+
+  test("with CODEX_HOME set, codex installs even when no home directory resolves", async () => {
+    const root = await makeRepo();
+    const codexHome = await makeTempDir("nahel-install-codex-home-");
+    tempDirs.push(codexHome);
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+
+    const result = await runInstall(["--agent", "codex"], root, undefined, codexHome);
+    expect(result.code).toBe(0);
+    expect((await readdir(join(codexHome, "prompts"))).sort()).toEqual(["nd-brief.md"]);
+  });
+
+  test("CODEX_HOME regeneration stays namespace-scoped: stale shims pruned, user prompts survive", async () => {
+    const root = await makeRepo();
+    const codexHome = await makeTempDir("nahel-install-codex-home-");
+    tempDirs.push(codexHome);
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    await writeWorkflow(root, "plan.md", workflowDoc("plan"));
+    await runInstall(["--agent", "codex"], root, undefined, codexHome);
+    const mine = join(codexHome, "prompts", "draftpr.md");
+    await writeFile(mine, "hand written\n", "utf8");
+
+    await rm(join(workflowsDir(storeLayout(root)), "plan.md"));
+    const result = await runInstall(["--agent", "codex"], root, undefined, codexHome);
+    expect(result.code).toBe(0);
+    expect((await readdir(join(codexHome, "prompts"))).sort()).toEqual([
+      "draftpr.md",
+      "nd-brief.md",
+    ]);
   });
 });
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main, type CommandContext } from "../../src/cli";
+import { GOVERNANCE_DEFAULTS } from "../../src/governance/authority";
 import type { Env } from "../../src/schema/env";
 import { readJournal } from "../../src/store/journal";
 import { readConfig, readItem, storeLayout } from "../../src/store/layout";
@@ -138,6 +139,19 @@ describe("nahel init — templates", () => {
     expect(product.toLowerCase()).toContain("sign-off");
     // Seed entry is stamped with the injected clock's date (seededEnv default).
     expect(product).toContain("2026-07-16");
+  });
+
+  test("the scaffolded governance block shows the REAL defaults, not a stricter fiction", async () => {
+    // The skeleton is a founder's first read of what nahel does by default. It
+    // showed `product: human` while resolution defaults product to delegated
+    // (F2.2) — an illustrative value that misleads about the shipped posture.
+    const root = await makeRepo();
+    await runCli(["init"], root);
+    const product = readFileSync(join(root, "PRODUCT.md"), "utf8");
+    const governance = product.slice(product.indexOf("## Governance"));
+    console.log("[scaffolded governance]\n" + governance.split("## Change log")[0]);
+    expect(governance).toContain(`product: ${GOVERNANCE_DEFAULTS.product}`);
+    expect(governance).toContain(`architecture: ${GOVERNANCE_DEFAULTS.architecture}`);
   });
 
   test("emits CONTEXT.md glossary skeleton and AGENTS.md conversational entry point", async () => {

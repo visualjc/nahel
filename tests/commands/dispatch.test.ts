@@ -221,13 +221,40 @@ describe("nahel dispatch — spawns the routed agent CLI and records the run (F1
     }
   });
 
-  test("without --item, dispatch records journal events only — there is no run to attach", async () => {
+  test("--item is REQUIRED: an itemless dispatch is a usage error, nothing spawned, nothing journaled", async () => {
+    // F1.1's acceptance criterion is a correctly attributed RUN record for
+    // every dispatch. Every dispatch belongs to a work item; there is no
+    // itemless dispatch in the AFK loop, so the itemless form is refused
+    // rather than silently producing an unattributed dispatch.
     const repo = await setup();
-    expect(await dispatch(repo, ["implementation", "--", "a standalone errand"])).toBe(0);
+    const code = await dispatch(repo, ["implementation", "--", "a standalone errand"]);
+    console.log("[itemless]", errs.join("\n"));
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toContain("--item");
     expect(await listRuns(repo.layout)).toEqual([]);
-    const types = (await events(repo.layout)).map((event) => event.type);
-    expect(types).toContain("dispatch.started");
-    expect(types).toContain("dispatch.ended");
+    expect(await events(repo.layout)).toEqual([]);
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
+  });
+
+  test("a compose-time refusal leaves NO ghost run: the probe fires before any state changes", async () => {
+    // Schema-valid config that cannot compose: routing names a model, the
+    // agent's invocation entry has no model_flag to put it on. Composing
+    // after the run opened would leave an active run and a run.started event
+    // with nothing ever spawned — a misrouted dispatch must be inert.
+    const repo = await setup({
+      rawConfig: (base) => ({
+        ...base,
+        dispatch: { claude: { binary: base.dispatch!.claude!.binary, args: ["-p"] } },
+      }),
+    });
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "go"]);
+    const message = errs.join("\n");
+    console.log("[no model_flag]", message);
+    expect(code).toBe(1);
+    expect(message).toContain("model_flag");
+    expect(await listRuns(repo.layout)).toEqual([]);
+    expect(await events(repo.layout)).toEqual([]);
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
   });
 
   test("a worker that exits non-zero ends the run as a failure and exits non-zero", async () => {
@@ -310,7 +337,7 @@ describe("nahel dispatch — the recorded invocation proves the orientation cont
 describe("nahel dispatch — routing enforcement (F1.2)", () => {
   test("with no responsibility-specific route but a configured default, dispatch resolves to the default", async () => {
     const repo = await setup({ routing: { default: { agent: "claude", model: "default-model" } } });
-    const code = await dispatch(repo, ["implementation", "--", "work"]);
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
     console.log("[stderr]", errs.join("\n"));
     expect(code).toBe(0);
     expect((await invocationRecord(repo)).argv.slice(0, 3)).toEqual([
@@ -325,7 +352,7 @@ describe("nahel dispatch — routing enforcement (F1.2)", () => {
 
   test("with neither route, dispatch exits non-zero naming the missing route and the config fix", async () => {
     const repo = await setup({ routing: { review: { agent: "codex" } } });
-    const code = await dispatch(repo, ["implementation", "--", "work"]);
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
     const message = errs.join("\n");
     console.log("[no route]", message);
     expect(code).not.toBe(0);
@@ -339,7 +366,9 @@ describe("nahel dispatch — routing enforcement (F1.2)", () => {
 
   test("an unconfigured repo (no routing section at all) gets the same actionable refusal", async () => {
     const repo = await setup({ routing: "none" });
-    expect(await dispatch(repo, ["implementation", "--", "work"])).not.toBe(0);
+    expect(
+      await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]),
+    ).not.toBe(0);
     expect(errs.join("\n")).toContain("nahel config set routing --data");
   });
 });
@@ -363,7 +392,7 @@ describe("nahel dispatch — unknown agent kinds fail as schema errors (F1.3)", 
 
   test("dispatch itself refuses the same config rather than acting on an unreadable routing map", async () => {
     const repo = await setup({ rawConfig: withGemini });
-    const code = await dispatch(repo, ["implementation", "--", "work"]);
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
     console.log("[bad dispatch config]", errs.join("\n"));
     expect(code).not.toBe(0);
     expect(errs.join("\n")).toContain("gemini");
@@ -371,7 +400,7 @@ describe("nahel dispatch — unknown agent kinds fail as schema errors (F1.3)", 
 
   test("a routing map naming an agent CLI dispatch does not know refuses, listing the known kinds", async () => {
     const repo = await setup({ routing: { implementation: { agent: "opencode", model: "x" } } });
-    const code = await dispatch(repo, ["implementation", "--", "work"]);
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
     const message = errs.join("\n");
     console.log("[unknown kind]", message);
     expect(code).not.toBe(0);
@@ -410,11 +439,20 @@ describe("nahel dispatch — usage surface", () => {
 
   test("flags after `--` belong to the worker's task, not to nahel", async () => {
     const repo = await setup();
-    expect(await dispatch(repo, ["implementation", "--", "--item", "not-a-flag"])).toBe(0);
+    expect(
+      await dispatch(repo, [
+        "implementation",
+        "--item",
+        repo.item.id,
+        "--",
+        "--item",
+        "not-a-flag",
+      ]),
+    ).toBe(0);
     const prompt = (await invocationRecord(repo)).argv.at(-1)!;
     expect(prompt).toContain("--item not-a-flag");
-    // The task's `--item` never became nahel's --item: no run was created.
-    expect(await listRuns(repo.layout)).toEqual([]);
+    // The task's `--item` never displaced nahel's: the run belongs to the real item.
+    expect((await onlyRun(repo.layout)).item).toBe(repo.item.id);
   });
 
   test("--help prints the usage without touching state", async () => {

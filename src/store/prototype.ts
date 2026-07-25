@@ -252,6 +252,19 @@ export interface PrototypeBranchScan {
    * the two signals complement rather than double-count.
    */
   copiedToDefault: string[];
+  /**
+   * `git merge-base <default> <tip>` — the divergence point between this
+   * branch and the default branch. For an honest variant this IS the recorded
+   * creation base forever; it moves only when history crosses the fence in
+   * either direction (a prototype commit merged into the default branch, or
+   * the default branch merged into the variant — both forbidden by the lane).
+   * This is the signal for the merge-then-advance shape the other two miss:
+   * merge T1 into the default branch, keep committing to T2 — the tip is not
+   * contained (ancestry silent) and T1 is genuinely reachable from the
+   * default branch (`git cherry` silent), but the merge-base has drifted.
+   * Undefined when there is no default branch or the call fails.
+   */
+  mergeBaseWithDefault?: string;
 }
 
 /**
@@ -361,11 +374,21 @@ export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan>
       ancestorOfDefault = contained.code === 0;
       copies = await copiedToDefault(root, ref.name, defaultBranch);
     }
+    let mergeBase: string | undefined;
+    if (defaultBranch !== undefined) {
+      const mb = await tryGit(root, [
+        "merge-base",
+        `refs/heads/${defaultBranch}`,
+        ref.sha,
+      ]);
+      mergeBase = mb.code === 0 ? mb.stdout.trim() : undefined;
+    }
     branches.push({
       branch: ref.name,
       tip: ref.sha,
       ancestorOfDefault,
       copiedToDefault: copies,
+      ...(mergeBase === undefined ? {} : { mergeBaseWithDefault: mergeBase }),
     });
   }
 

@@ -227,6 +227,7 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
         tip: base,
         ancestorOfDefault: true,
         copiedToDefault: [],
+        mergeBaseWithDefault: base,
       },
     ]);
     expect(scan.remoteRefs).toEqual([]);
@@ -251,6 +252,42 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     expect(branch.ancestorOfDefault).toBe(false);
     // Nothing of it exists in main, by patch-id or by ancestry.
     expect(branch.copiedToDefault).toEqual([]);
+  });
+
+  test("MERGE-THEN-ADVANCE is visible as merge-base drift — the shape both other signals miss", async () => {
+    // Merge the variant's T1 into main (real merge), then advance the variant
+    // to T2: the tip (T2) is not in main, and `git cherry` reports nothing
+    // because T1 is genuinely reachable from main — yet prototype code sits
+    // merged on the default branch. The divergence point (merge-base) has
+    // moved from the recorded base to T1, and that drift is the signal.
+    const root = await makeRepo();
+    const worktree = `${root}-variant-1`;
+    dirs.push(worktree);
+    const base = await seedVariant(root, {
+      branch: prototypeBranch("speed-count", 1),
+      worktree,
+      prd: prototypeMiniPrdPath("speed-count", 1),
+      content: "x",
+    });
+    await writeFile(join(worktree, "t1.ts"), "export const t1 = 1;\n");
+    git(worktree, "add", "-A");
+    git(worktree, "commit", "-m", "T1 throwaway");
+    const t1 = git(worktree, "rev-parse", "HEAD").trim();
+    // The seeded main-tree mini-PRD is untracked; commit it so the merge is
+    // about history, not a dirty-tree refusal (fixture hygiene, not the shape).
+    git(root, "add", "-A");
+    git(root, "commit", "-m", "record mini-PRD");
+    git(root, "merge", "--no-ff", "-m", "merge prototype T1", "prototype/speed-count/variant-1");
+    await writeFile(join(worktree, "t2.ts"), "export const t2 = 2;\n");
+    git(worktree, "add", "-A");
+    git(worktree, "commit", "-m", "T2 throwaway");
+
+    const scan = await scanPrototypeRefs(root);
+    const branch = scan.branches[0]!;
+    expect(branch.ancestorOfDefault).toBe(false);
+    expect(branch.copiedToDefault).toEqual([]);
+    expect(branch.mergeBaseWithDefault).toBe(t1);
+    expect(branch.mergeBaseWithDefault).not.toBe(base);
   });
 
   test("a CHERRY-PICKED prototype commit is reported by patch-id — the copy path ancestry cannot see", async () => {

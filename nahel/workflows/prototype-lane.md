@@ -102,10 +102,19 @@ this paragraph:
   is as far as an offline, deterministic check can see. A prototype branch nahel
   has no creation record for is reported as `prototype.unrecorded` (warning):
   unjudgeable, not innocent.
+- **Merge-base drift.** `validate` also compares each variant's merge-base
+  with the default branch against its recorded creation base. An honest
+  variant's divergence point never moves; it drifts only when history crosses
+  the fence in either direction — a prototype commit merged into the default
+  branch (even if the branch then advanced past it), or the default branch
+  merged into the variant. Both directions are forbidden: **never merge the
+  default branch into a variant — a stale variant is disposed and re-started,
+  never refreshed.**
 - **The blind spot, stated plainly.** A squash merge — or a copy someone edited
-  on the way in — rewrites the patch, so neither signal above sees it, and no
-  offline check at a sane cost would. The mechanical teeth are ancestry and
-  patch equivalence; there is no third check pretending to more.
+  on the way in — rewrites the patch, so none of the signals above sees it, and
+  no offline check at a sane cost would. The mechanical teeth are ancestry,
+  patch equivalence, and merge-base drift; there is no fourth check pretending
+  to more.
 - **You.** **Never open a PR from a prototype branch, and never push one.**
   That rule is not a formality riding on top of the checks — it is what covers
   the case the checks cannot see, which is exactly why it is absolute. The two

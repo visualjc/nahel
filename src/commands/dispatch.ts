@@ -278,10 +278,14 @@ async function runDispatch(
   const config = await readConfig(ctx.layout);
   // A slot dispatch is the SAME responsibility down a different chain, so the
   // enum stays one `review` (ADR-0015) while either reviewer can be spawned.
+  // Plain `review` IS slot 1: every review dispatch walks the slot chains, so
+  // dispatch, the review loop, and the same-vendor warning can never disagree
+  // about what a review route resolves to (a model-only routing.review falls
+  // through to default here exactly as it does in the warning's resolution).
   const route =
-    args.slot === undefined
-      ? resolveRoute(config.routing, args.responsibility)
-      : resolveReviewSlotRoute(config.routing, args.slot);
+    args.responsibility === "review"
+      ? resolveReviewSlotRoute(config.routing, args.slot ?? 1)
+      : resolveRoute(config.routing, args.responsibility);
   const spec = resolveAgent(route.agent, config.dispatch);
 
   // Composition can refuse too (a route naming a model the agent spec has no

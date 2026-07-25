@@ -153,6 +153,96 @@ describe("prototype.merged — a prototype ref that reached the default branch (
   });
 });
 
+describe("prototype.merged — merge-base drift: merged at T1, branch advanced to T2 (F5.2)", () => {
+  const T1 = "3333333333333333333333333333333333333333";
+
+  test("a moved merge-base with a clean tip and no copies is an ERROR — the shape the other signals miss", () => {
+    const findings = prototypeFindings(
+      validate(
+        input({
+          prototypeRefs: {
+            defaultBranch: "main",
+            branches: [
+              {
+                branch: "prototype/speed-count/variant-1",
+                tip: TIP,
+                ancestorOfDefault: false,
+                copiedToDefault: [],
+                mergeBaseWithDefault: T1,
+              },
+            ],
+            remoteRefs: [],
+          },
+          events: [
+            variantsCreatedEvent([
+              { branch: "prototype/speed-count/variant-1", base: BASE },
+            ]),
+          ],
+        }),
+      ),
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.check).toBe("prototype.merged");
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.message).toContain("merge-base");
+    expect(findings[0]!.message).toContain(T1);
+  });
+
+  test("a merge-base still AT the recorded base is clean, and an ancestry-merged branch reports ONCE", () => {
+    const clean = prototypeFindings(
+      validate(
+        input({
+          prototypeRefs: {
+            defaultBranch: "main",
+            branches: [
+              {
+                branch: "prototype/speed-count/variant-1",
+                tip: TIP,
+                ancestorOfDefault: false,
+                copiedToDefault: [],
+                mergeBaseWithDefault: BASE,
+              },
+            ],
+            remoteRefs: [],
+          },
+          events: [
+            variantsCreatedEvent([
+              { branch: "prototype/speed-count/variant-1", base: BASE },
+            ]),
+          ],
+        }),
+      ),
+    );
+    expect(clean).toHaveLength(0);
+
+    const merged = prototypeFindings(
+      validate(
+        input({
+          prototypeRefs: {
+            defaultBranch: "main",
+            branches: [
+              {
+                branch: "prototype/speed-count/variant-1",
+                tip: TIP,
+                ancestorOfDefault: true,
+                copiedToDefault: [],
+                mergeBaseWithDefault: TIP,
+              },
+            ],
+            remoteRefs: [],
+          },
+          events: [
+            variantsCreatedEvent([
+              { branch: "prototype/speed-count/variant-1", base: BASE },
+            ]),
+          ],
+        }),
+      ),
+    );
+    expect(merged.filter((f) => f.check === "prototype.merged")).toHaveLength(1);
+  });
+});
+
 describe("prototype.merged — code copied across by cherry-pick, not by ancestry (F5.2)", () => {
   test("a branch whose commits exist in main by PATCH-ID is an error naming the copy path", () => {
     // The lane's rule 2 forbids a cherry-pick by name, but the ancestry check

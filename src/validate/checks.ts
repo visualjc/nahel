@@ -1537,6 +1537,32 @@ function checkPrototypeRefs(state: ParsedState): Finding[] {
           `revert the prototype commits out of ${scan.defaultBranch}; promote the variant's mini-PRD ` +
           "with `nahel prototype promote <variant-item-id>` and rebuild the work in the feature lane",
       });
+    } else if (
+      branch.mergeBaseWithDefault !== undefined &&
+      branch.mergeBaseWithDefault !== base
+    ) {
+      // Merge-base drift: the third signal, for the merge-then-advance shape.
+      // Merge T1 into the default branch and keep committing — the tip is not
+      // contained (ancestry silent) and the merged commit is genuinely
+      // reachable from the default branch (`git cherry` silent), but the
+      // divergence point has moved off the recorded base. The drift cannot
+      // say WHICH direction history crossed (default merged into the variant
+      // moves it identically) — both directions are forbidden by the lane, so
+      // the verdict is the same either way. Guarded behind the ancestry
+      // signal (else-if) so a fully merged tip reports once, not twice.
+      findings.push({
+        severity: "error",
+        check: "prototype.merged",
+        message:
+          `prototype branch ${branch.branch} has a merge-base with ${scan.defaultBranch} at ` +
+          `${branch.mergeBaseWithDefault}, past its recorded base ${base} — history crossed the ` +
+          "never-merge fence (a prototype commit reached the default branch, or the default " +
+          "branch was merged into the variant; both are forbidden — nahel/workflows/prototype-lane.md)",
+        fix:
+          `if prototype commits reached ${scan.defaultBranch}, revert them out; if ${scan.defaultBranch} ` +
+          "was merged into the variant, dispose it (`nahel prototype dispose`) and re-start — a stale " +
+          "variant is re-started, never refreshed",
+      });
     }
   }
 

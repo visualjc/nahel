@@ -551,6 +551,23 @@ describe("nahel dispatch — review slot 2 (F3.1)", () => {
     expect(started?.payload["slot"]).toBeUndefined();
   });
 
+  test("without --slot, a MODEL-ONLY routing.review falls through to default like the slot-1 chain — not a refusal", async () => {
+    // The divergence the final verify round caught: validate's same-vendor
+    // warning resolves slot 1 by skipping agent-less entries, so a model-only
+    // routing.review lands on routing.default. Plain `dispatch review` must
+    // walk the SAME chain — resolveRoute would refuse the entry instead, and
+    // a warning that predicts a pairing dispatch cannot spawn is a lie.
+    const repo = await setup({
+      routing: {
+        review: { model: "reviewer-model" },
+        default: { agent: "claude", model: "fallback-model" },
+      },
+    });
+    expect(await dispatch(repo, ["review", "--item", repo.item.id, "--", "review it"])).toBe(0);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["via"]).toBe("routing.default");
+  });
+
   test("--slot is refused on any responsibility but review — slots are a review-loop concept", async () => {
     const repo = await setup({ routing: CROSS_VENDOR });
     const code = await dispatch(repo, [

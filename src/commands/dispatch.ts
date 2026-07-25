@@ -18,7 +18,7 @@ import type { Env } from "../schema/env";
 import type { Run } from "../schema/records";
 import { spawnDispatch } from "../store/dispatch";
 import { appendEvent } from "../store/journal";
-import { readConfig, readItem } from "../store/layout";
+import { readConfig, readItem, readRun } from "../store/layout";
 import { closeStoreContext, type StoreContext } from "../store/mutate";
 import { commandContext, execute, requireExistingItem, UsageError, type Command } from "./item";
 import { endRun, startRun } from "./run";
@@ -42,6 +42,13 @@ import { endRun, startRun } from "./run";
  * leaves no ghost run; the run then opens and the invocation is journaled
  * BEFORE the spawn (write-ahead), so a crash mid-run leaves the intent
  * provable; the run is closed with the worker's exit status.
+ *
+ * Closing is conditional, though (PRD F6): the run and item records are re-read
+ * AFTER the worker exits, because a human's `nahel pause` or `nahel claim`
+ * lands DURING the spawn — the very window an intervention is for. Closing from
+ * the pre-spawn run object would overwrite that state with `ended` and erase
+ * the intervention. Under one, the worker's outcome is still journaled and the
+ * run record is left exactly as the human set it.
  */
 
 /** Phase a dispatched run opens in; the worker owns the phases that follow. */
@@ -221,6 +228,42 @@ async function journalEnd(
   });
 }
 
+/** A human's mid-run intervention, as the records read AFTER the worker exits. */
+interface Intervention {
+  kind: "paused" | "claimed";
+  claimedBy?: string;
+}
+
+/**
+ * What a human reached in and did while the worker was running, if anything
+ * (PRD F6). Read AFTER the spawn, never from the pre-spawn objects: `nahel
+ * pause` and `nahel claim` land in the window dispatch is blocked in, and
+ * closing the run from the stale object would overwrite exactly the state the
+ * human set — erasing the intervention with the dispatch it was meant to stop.
+ *
+ * Tolerant, like every read on an exit path: a record that will not parse
+ * comes back as "no intervention" rather than turning a finished worker into a
+ * crash. The pre-spawn behaviour is then what it always was.
+ */
+async function readIntervention(
+  ctx: StoreContext,
+  itemId: string,
+  runId: string,
+): Promise<Intervention | undefined> {
+  const claimedBy = await readItem(ctx.layout, itemId).then(
+    (read) => read.frontmatter.claimed_by,
+    () => undefined,
+  );
+  // A claim covers the subtree and pauses the runs under it, so it is the more
+  // specific finding: report it as a claim, with the claimant named.
+  if (claimedBy !== undefined) return { kind: "claimed", claimedBy };
+  const current = await readRun(ctx.layout, runId).then(
+    (run) => run,
+    () => undefined,
+  );
+  return current?.status === "paused" ? { kind: "paused" } : undefined;
+}
+
 async function runDispatch(
   argv: string[],
   env: Env,
@@ -299,9 +342,35 @@ async function runDispatch(
   if (result.stderr !== "") console.error(result.stderr.trimEnd());
 
   const outcome = result.exitCode === 0 ? SUCCESS : FAILURE;
-  await journalEnd(ctx, args, route, run, { outcome, exit_code: result.exitCode });
-  await endRun(ctx, run, outcome);
+  const intervention = await readIntervention(ctx, args.item, run.id);
+  // The worker's outcome is journaled either way — the trail must show what it
+  // did — but under an intervention the RUN RECORD is left as the human set
+  // it: paused, claimed, and visible to `nahel status` as work someone took
+  // over. (`nahel run end` would be refused under a claim anyway; events are
+  // claim-exempt, which is why the dispatch.ended still lands.)
+  await journalEnd(ctx, args, route, run, {
+    outcome,
+    exit_code: result.exitCode,
+    ...(intervention === undefined
+      ? {}
+      : {
+          intervention: intervention.kind,
+          ...(intervention.claimedBy === undefined ? {} : { claimed_by: intervention.claimedBy }),
+        }),
+  });
+  if (intervention === undefined) await endRun(ctx, run, outcome);
   await closeStoreContext(ctx);
+
+  if (intervention !== undefined) {
+    const who = intervention.claimedBy === undefined ? "" : ` by ${intervention.claimedBy}`;
+    console.error(
+      `⏸ intervention during the run: ${args.item} was ${intervention.kind}${who} while ` +
+        `${route.agent} was working. The worker exited ${result.exitCode}; its outcome is ` +
+        `journaled, and run ${run.id} is left as the human set it rather than ended. ` +
+        `Stand down on this item and journal what the worker did ` +
+        `(nahel/workflows/afk-run.md step 3).`,
+    );
+  }
 
   const where = ` (run ${run.id})`;
   const model = route.model === undefined ? "" : ` on ${route.model}`;

@@ -80,6 +80,11 @@ interface SetupOptions {
   item?: Partial<WorkItemFrontmatter>;
   /** Replace the committed config with arbitrary (possibly invalid) YAML. */
   rawConfig?: (base: Config) => unknown;
+  /**
+   * Have a HUMAN intervene mid-run, through the real CLI, while the worker is
+   * still running — exactly what `nahel pause` / `nahel claim` are for.
+   */
+  workerIntervenes?: "pause" | "claim";
 }
 
 /**
@@ -110,6 +115,28 @@ async function setup(options: SetupOptions = {}): Promise<Repo> {
       "  actor: process.env.NAHEL_ACTOR ?? null,",
       "  cwd: process.cwd(),",
       "}, null, 2));",
+      // A human reaching into the running loop, through the real CLI, from
+      // inside the worker's own lifetime — the F6 intervention window.
+      `const intervenes = ${JSON.stringify(options.workerIntervenes ?? null)};`,
+      `const target = ${JSON.stringify(item.id)};`,
+      "if (intervenes !== null) {",
+      "  const prompt = Bun.argv[Bun.argv.length - 1];",
+      "  const runId = /nahel run update (\\S+) --phase/.exec(prompt)?.[1];",
+      '  const args = intervenes === "pause" ? ["pause", runId] : ["claim", target];',
+      "  const done = Bun.spawnSync(",
+      `    [process.execPath, "run", ${JSON.stringify(CLI_PATH)}, ...args],`,
+      "    {",
+      "      cwd: process.cwd(),",
+      '      stdout: "pipe",',
+      '      stderr: "pipe",',
+      '      env: { ...process.env, NAHEL_ACTOR: "human:jim" },',
+      "    },",
+      "  );",
+      "  if (done.exitCode !== 0) {",
+      "    console.error(done.stderr.toString());",
+      "    process.exit(91);",
+      "  }",
+      "}",
       `const item = ${JSON.stringify(options.workerMutates === true ? item.id : null)};`,
       "if (item !== null) {",
       "  const result = Bun.spawnSync(",
@@ -370,6 +397,90 @@ describe("nahel dispatch — routing enforcement (F1.2)", () => {
       await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]),
     ).not.toBe(0);
     expect(errs.join("\n")).toContain("nahel config set routing --data");
+  });
+});
+
+/**
+ * A human intervening WHILE the worker runs (PRD F6). `nahel pause` and
+ * `nahel claim` are how a person reaches into a running AFK loop, and their
+ * whole value is that the state they set survives. Dispatch used to close the
+ * run from the PRE-SPAWN run object, so a pause or a claim landing during the
+ * worker's lifetime was overwritten with `ended` on the way out — the
+ * intervention erased by the very dispatch it was meant to stop.
+ */
+describe("nahel dispatch — an intervention during the run is never clobbered (F6)", () => {
+  test("a pause mid-run leaves the run PAUSED: no run.ended, and dispatch.ended carries the exit", async () => {
+    const repo = await setup({ workerIntervenes: "pause" });
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
+    const journal = await events(repo.layout);
+    console.log("[journal]", journal.map((event) => `${event.type}:${event.actor.id}`).join(" "));
+    console.log("[stderr]", errs.join("\n"));
+    expect(code).toBe(0);
+
+    // The human's state stands: paused, not ended.
+    const run = await onlyRun(repo.layout);
+    expect(run.status).toBe("paused");
+    expect(run.ended).toBeUndefined();
+    expect(journal.some((event) => event.type === "run.paused")).toBe(true);
+    expect(journal.some((event) => event.type === "run.ended")).toBe(false);
+
+    // The worker's exit is still recorded — the trail must show what it did,
+    // it just does not close the run the human took over.
+    const ended = journal.find((event) => event.type === "dispatch.ended");
+    expect(ended).toBeDefined();
+    expect(ended!.payload["outcome"]).toBe("success");
+    expect(ended!.payload["exit_code"]).toBe(0);
+    expect(ended!.payload["intervention"]).toBe("paused");
+    expect(ended!.run).toBe(run.id);
+
+    // And the runner is TOLD, or it would carry on as if nothing happened.
+    expect(errs.join("\n")).toContain("intervention");
+  });
+
+  test("a claim mid-run leaves the claim and the run intact — no refusal storm on the way out", async () => {
+    // `nahel run end` is refused under a claim, so the old code path did not
+    // merely clobber here: it threw on a worker that had finished cleanly.
+    const repo = await setup({ workerIntervenes: "claim" });
+    // A claim captures the repo baseline (HEAD + porcelain), so the checkout
+    // has to be a real git repo with a commit — as any claimed repo is.
+    for (const args of [
+      ["init", "--initial-branch=main"],
+      ["config", "user.email", "test@nahel.test"],
+      ["config", "user.name", "Nahel Dispatch Test"],
+      ["add", "-A"],
+      ["commit", "-m", "seed"],
+    ]) {
+      const done = Bun.spawnSync(["git", "-C", repo.root, ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (done.exitCode !== 0) throw new Error(`git ${args[0]}: ${done.stderr.toString()}`);
+    }
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
+    console.log("[claim stderr]", errs.join("\n"));
+    expect(code).toBe(0);
+
+    expect((await readItem(repo.layout, repo.item.id)).frontmatter.claimed_by).toBe("jim");
+    const run = await onlyRun(repo.layout);
+    expect(run.status).toBe("paused");
+
+    const journal = await events(repo.layout);
+    expect(journal.some((event) => event.type === "run.ended")).toBe(false);
+    const ended = journal.find((event) => event.type === "dispatch.ended");
+    expect(ended!.payload["intervention"]).toBe("claimed");
+    expect(ended!.payload["claimed_by"]).toBe("jim");
+    expect(errs.join("\n")).toContain("intervention");
+  });
+
+  test("with no intervention the run still ends normally — the check costs the happy path nothing", async () => {
+    const repo = await setup();
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(0);
+    const run = await onlyRun(repo.layout);
+    expect(run.status).toBe("ended");
+    expect(run.phase).toBe("success");
+    const ended = (await events(repo.layout)).find((event) => event.type === "dispatch.ended");
+    expect(ended!.payload["intervention"]).toBeUndefined();
+    expect(errs.join("\n")).not.toContain("intervention");
   });
 });
 

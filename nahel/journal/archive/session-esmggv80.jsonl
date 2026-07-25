@@ -1,0 +1,2 @@
+{"id":"95zhq3n2","ts":"2026-07-25T19:45:16Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"vv29ascq","payload":{"target":"item","record":{"id":"vv29ascq","name":"workflow-docs-reserved-body-key","type":"bug","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T19:10:06Z","updated":"2026-07-25T19:45:16Z"},"body":""}}
+{"id":"yr105eg7","ts":"2026-07-25T19:45:16Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

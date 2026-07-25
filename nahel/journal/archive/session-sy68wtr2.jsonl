@@ -1,0 +1,2 @@
+{"id":"5gqsv4qy","ts":"2026-07-25T18:11:25Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"mwzxhxan","payload":{"target":"item","record":{"id":"mwzxhxan","name":"governance-merge-authority-config","type":"feature","status":"in-review","lane":"direct","parent":"f6kwws23","depends_on":[],"external_refs":[],"created":"2026-07-25T17:01:29Z","updated":"2026-07-25T18:11:25Z"},"body":""}}
+{"id":"xwwdzbew","ts":"2026-07-25T18:11:25Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

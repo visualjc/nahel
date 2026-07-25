@@ -77,6 +77,53 @@ describe("nahel config set — writing optional sections", () => {
     expect(act.payload).toEqual({ section: "inception", value: { tier: "seed" } });
   });
 
+  test("records the constitution signature beside the tier — what the F7 autonomy gate reads", async () => {
+    const { root, layout, env } = await setup();
+    // F7.2: "human-signed" must be mechanically verifiable, so the signature
+    // is a schema-validated FIELD on the inception record, not a vibe about
+    // what the constitution document says. The gate reads two things: this
+    // field, and the actor of the config.updated act that wrote it — an
+    // agent-set signature authorizes nothing (the F3.4 merge precedent).
+    const code = await configCommand.run(
+      ["set", "inception", "--data", "tier=standard", "--data", "constitution_signed_by=jim"],
+      env,
+      root,
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).inception).toEqual({
+      tier: "standard",
+      constitution_signed_by: "jim",
+    });
+    const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
+    expect(errors).toEqual([]);
+
+    // The act carries the signer's provenance: section, value, and the actor
+    // the gate checks for kind `human`.
+    const act = (await journalEvents(layout)).find((event) => event.type === "config.updated")!;
+    expect(act.payload).toEqual({
+      section: "inception",
+      value: { tier: "standard", constitution_signed_by: "jim" },
+    });
+    expect(act.actor.kind).toBeDefined();
+
+    // An empty signature is not a signature: the schema refuses it, and the
+    // refusal leaves the previously recorded section untouched.
+    errs = [];
+    expect(
+      await configCommand.run(
+        ["set", "inception", "--data", "tier=standard", "--data", "constitution_signed_by="],
+        env,
+        root,
+      ),
+    ).toBe(1);
+    expect(errs.join("\n")).toContain("constitution_signed_by");
+    expect((await readConfig(layout)).inception).toEqual({
+      tier: "standard",
+      constitution_signed_by: "jim",
+    });
+  });
+
   test("sets governance from a JSON --data payload", async () => {
     const { root, layout, env } = await setup();
     const code = await configCommand.run(

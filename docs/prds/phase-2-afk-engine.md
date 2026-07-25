@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T16:44:33Z
+updated: 2026-07-25T16:49:35Z
 ---
 
 # Phase 2 — AFK engine
@@ -169,15 +169,16 @@ The 2026-07-23 codex dogfood gap (journal `qnk166em`): a codex session could not
 
 The Phase 1 inception workflow's "mine first, interview second" posture (F4.2 there, brownfield) generalizes to every founding: the agent drafts from **all sources available** before the human is asked anything. Brownfield mines the codebase; greenfield mines the **agent's domain knowledge and the web**. One workflow, one posture — no separate mode.
 
-- **F9.1** `inception.md` gains the knowledge-first rule: for a greenfield founding, the agent researches the domain (its own knowledge, web when available) and drafts the full standard-tier artifact set — constitution (goal, domain facts, hard constraints, non-goals), governance config, glossary seed, run contract, initial plan items — before the interview begins.
+- **F9.1** `inception.md` gains the knowledge-first rule: for a greenfield founding, the agent researches the domain (its own knowledge, web when available — sources journaled, or the web's unavailability noted) and drafts the **complete standard-tier artifact set as `inception.md` defines it** — constitution (goal, domain facts, hard constraints, non-goals), governance config, glossary seed, seeded founding ADRs, the routing map (setup-routing), an actionable initial decomposition, and the run contract — before the interview begins.
 - **F9.2** The interview is confirm-and-correct, never blank-page: the human reads the drafts, corrects them, and signs off. The sign-off is the constitution signature (constitution stays human-owned; only its drafting is delegated). Time-to-found targets minutes of human attention, not hours.
-- **F9.3** The recorded tier is honest: knowledge-first founding that produces the full standard artifact set records `standard` — satisfying the tier ratchet on merit — while a founding the human cuts short records `seed`, with the ratchet's consequences (no delegated approval, no prototype promotion) applying as usual.
+- **F9.3** The recorded tier is honest, with one **explicit amendment to the standard-tier definition for empty repos**: every artifact must be complete, but the run contract's `nahel doctor` proof cannot precede the app it checks — so a greenfield founding records `standard` with the doctor-proof recorded as a journaled first-scaffold obligation, which the AFK run must discharge (doctor exit 0) before any verify-by-driving PR opens (F4 already blocks there). A **new** founding the human cuts short records `seed`, with the ratchet's consequences (no delegated approval, no prototype promotion) applying as usual; re-running inception on an already-founded project can only ratchet the tier **up** — a cut-short re-founding never lowers the committed tier (`inception.md`'s existing rule).
 
 **Acceptance criteria**
 
 - [ ] A one-line project idea on an empty repo yields, via knowledge-first inception, a human-confirmed standard-tier founding (constitution signed, governance + run contract + glossary + initial plan items recorded) with the human's involvement limited to the confirm-and-correct interview — and an `afk-run` kickoff on that repo passes the F7 autonomy gate immediately afterward.
-- [ ] The drafts presented at the interview are journaled as drafts (provably authored before the human's corrections), and the human's sign-off event is distinguishable from the drafting events.
-- [ ] A founding cut short before the artifact set is complete records `seed`, and the delegated-approval and promotion gates refuse accordingly.
+- [ ] The mining is provable, not just the timing: the journal carries the research-source citations (or the web-unavailable note) and shows the complete draft set recorded **before the first interview response**; the human's sign-off event is distinguishable from the drafting events.
+- [ ] On an empty repo the founding records `standard` with the journaled doctor-proof obligation; the AFK run discharges it (doctor exit 0, journaled) before its first verify-by-driving PR, and a run that never discharges it opens no PR (F9.3 + F4).
+- [ ] A new founding cut short before the artifact set is complete records `seed`, and the delegated-approval and promotion gates refuse accordingly; a cut-short re-founding of a `standard` project leaves the recorded tier at `standard`.
 
 ## Exit test
 

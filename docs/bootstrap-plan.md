@@ -24,7 +24,7 @@ Companion to [nahel-roadmap.md](nahel-roadmap.md). This is the *meta*-plan: how 
 | Lab | Inception tier | What it exercises |
 |---|---|---|
 | **speed-count-game** (existing Next.js blackjack speed-count trainer at `~/projects/speed-count-game` — real code + git history, empty PRDs) | full, **brownfield** | mine-first inception (draft constitution/architecture from code, human corrects), feature lane, QA lane (browser driving), later: delegated governance. Domain facts: speed-counting rules |
-| **poker-outs-trainer** (new: enter a Texas Hold'em hand, practice combinatorics — counting outs vs. opponents' ranges) | standard/full, **greenfield** | interview-first inception, plan lane (virtual PO drafts the PRDs), feature + QA lanes. Domain facts: outs/range combinatorics |
+| **poker-outs-trainer** (new: enter a Texas Hold'em hand, practice combinatorics — counting outs vs. opponents' ranges) | standard/full, **greenfield** | knowledge-first inception (agent mines its knowledge + web, drafts the founding, human confirms-and-corrects — Phase 2 F9), plan lane (virtual PO drafts the PRDs), feature + QA lanes. Domain facts: outs/range combinatorics |
 | **scratch projects** (disposable ideas, created as needed) | seed | 5-minute inception, prototype lane with N variants, never-merge invariant |
 | *(nahel itself)* | full | deterministic-CLI development, TDD, bug lane — no separate CLI-utility lab needed; nahel is that lab |
 

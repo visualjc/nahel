@@ -49,7 +49,7 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 - **Canonical workflow** — the single agent-neutral procedure doc for a task (`workflows/*.md`); the only place logic lives.
 - **Shim** — a generated per-agent entry point (slash command, prompt file) whose only job is "load canonical workflow X". Default prefix `/nd:`.
 - **Mirror** — a one-way projection of local state into an external tracker (GitHub, Linear, …); humans read there, truth lives here. `external_refs` in frontmatter.
-- **Inception** — the founding workflow: constitution, governance, glossary seed, run contract, first plan items. Tiers: `seed | standard | full`; brownfield mines first, interviews second. Gates autonomy only.
+- **Inception** — the founding workflow: constitution, governance, glossary seed, run contract, first plan items. Tiers: `seed | standard | full`; every founding mines first and interviews second — brownfield mines the codebase, greenfield mines agent knowledge + the web (knowledge-first, Phase 2 F9); the interview is always confirm-and-correct. Gates autonomy only.
 - **Skill dependency** — a pinned external skill (`skills.yaml` + lockfile), `kind: markdown` or `kind: tool`.
 - **Lab** — a real dogfood repo whose friction feeds Nahel's backlog.
 - **Scaffolding** — the temporary ccpm + yolo tooling building Nahel until cutover (`nahel import --from-ccpm`).

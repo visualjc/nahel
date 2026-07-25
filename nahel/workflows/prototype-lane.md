@@ -92,15 +92,24 @@ this paragraph:
   never merges. The refusal is journaled as `prototype.merge-refused`, so the
   attempt is auditable. A prototype item's terminal state is `dropped`.
 - **`nahel validate` flags a prototype ref that got out.** `prototype.merged`
-  (error) fires when a prototype branch has commits past its recorded base and
-  the default branch now contains them. `prototype.pushed` (error) fires on any
+  (error) fires on either of two signals: *ancestry* — the branch has commits
+  past its recorded base and the default branch now contains them — or *patch
+  equivalence* — `git cherry` reports commits of the branch whose patch is
+  already in the default branch. The second exists because a cherry-pick lands
+  the code as a NEW commit, which ancestry cannot see at all; it names the
+  copied commits in the finding. `prototype.pushed` (error) fires on any
   remote-tracking prototype ref — pushing is the precondition for a PR, and it
   is as far as an offline, deterministic check can see. A prototype branch nahel
   has no creation record for is reported as `prototype.unrecorded` (warning):
   unjudgeable, not innocent.
-- **You.** **Never open a PR from a prototype branch, and never push one.** The
-  two checks above catch the footprint; they are a net, not permission to test
-  the net.
+- **The blind spot, stated plainly.** A squash merge — or a copy someone edited
+  on the way in — rewrites the patch, so neither signal above sees it, and no
+  offline check at a sane cost would. The mechanical teeth are ancestry and
+  patch equivalence; there is no third check pretending to more.
+- **You.** **Never open a PR from a prototype branch, and never push one.**
+  That rule is not a formality riding on top of the checks — it is what covers
+  the case the checks cannot see, which is exactly why it is absolute. The two
+  checks catch a footprint; they are a net, not permission to test the net.
 
 If a prototype ref does reach the default branch, revert it out. Then promote
 the approach properly, below.

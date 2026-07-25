@@ -84,7 +84,12 @@ describe("prototype.merged — a prototype ref that reached the default branch (
         prototypeRefs: {
           defaultBranch: "main",
           branches: [
-            { branch: "prototype/speed-count/variant-1", tip: TIP, ancestorOfDefault: true },
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: TIP,
+              ancestorOfDefault: true,
+              copiedToDefault: [],
+            },
           ],
           remoteRefs: [],
         },
@@ -107,7 +112,12 @@ describe("prototype.merged — a prototype ref that reached the default branch (
         prototypeRefs: {
           defaultBranch: "main",
           branches: [
-            { branch: "prototype/speed-count/variant-1", tip: BASE, ancestorOfDefault: true },
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: BASE,
+              ancestorOfDefault: true,
+              copiedToDefault: [],
+            },
           ],
           remoteRefs: [],
         },
@@ -125,13 +135,121 @@ describe("prototype.merged — a prototype ref that reached the default branch (
         prototypeRefs: {
           defaultBranch: "main",
           branches: [
-            { branch: "prototype/speed-count/variant-1", tip: TIP, ancestorOfDefault: false },
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: TIP,
+              ancestorOfDefault: false,
+              copiedToDefault: [],
+            },
           ],
           remoteRefs: [],
         },
         events: [
           variantsCreatedEvent([{ branch: "prototype/speed-count/variant-1", base: BASE }]),
         ],
+      }),
+    );
+    expect(prototypeFindings(findings)).toEqual([]);
+  });
+});
+
+describe("prototype.merged — code copied across by cherry-pick, not by ancestry (F5.2)", () => {
+  test("a branch whose commits exist in main by PATCH-ID is an error naming the copy path", () => {
+    // The lane's rule 2 forbids a cherry-pick by name, but the ancestry check
+    // cannot see one: the copy is a NEW commit on main, and the prototype
+    // branch is not an ancestor of anything. Patch-id equivalence is what
+    // closes that door.
+    const findings = validate(
+      input({
+        prototypeRefs: {
+          defaultBranch: "main",
+          branches: [
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: TIP,
+              ancestorOfDefault: false,
+              copiedToDefault: [TIP],
+            },
+          ],
+          remoteRefs: [],
+        },
+        events: [variantsCreatedEvent([{ branch: "prototype/speed-count/variant-1", base: BASE }])],
+      }),
+    );
+    const merged = findingsFor(findings, "prototype.merged");
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.severity).toBe("error");
+    expect(merged[0]!.message).toContain("prototype/speed-count/variant-1");
+    expect(merged[0]!.message).toContain("main");
+    expect(merged[0]!.message).toContain(TIP);
+    // The copy path is NAMED, so the reader knows what to look for and why
+    // ancestry said nothing.
+    expect(merged[0]!.message).toContain("cherry-pick");
+    expect(merged[0]!.fix).toBeDefined();
+  });
+
+  test("a merged-by-ancestry branch reports ONCE, not twice", () => {
+    const findings = validate(
+      input({
+        prototypeRefs: {
+          defaultBranch: "main",
+          branches: [
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: TIP,
+              ancestorOfDefault: true,
+              copiedToDefault: [],
+            },
+          ],
+          remoteRefs: [],
+        },
+        events: [variantsCreatedEvent([{ branch: "prototype/speed-count/variant-1", base: BASE }])],
+      }),
+    );
+    expect(findingsFor(findings, "prototype.merged")).toHaveLength(1);
+  });
+
+  test("an unrecorded branch with copied commits still fires — the copy needs no base to be judged", () => {
+    // Unlike ancestry, patch-id equivalence does not need the creation base:
+    // commits of this branch ARE in main, whoever created it. The unrecorded
+    // warning still stands alongside, since the branch remains unjudgeable
+    // for the ancestry half.
+    const findings = validate(
+      input({
+        prototypeRefs: {
+          defaultBranch: "main",
+          branches: [
+            {
+              branch: "prototype/hand-made/variant-1",
+              tip: TIP,
+              ancestorOfDefault: false,
+              copiedToDefault: [TIP],
+            },
+          ],
+          remoteRefs: [],
+        },
+      }),
+    );
+    expect(findingsFor(findings, "prototype.merged")).toHaveLength(1);
+    expect(findingsFor(findings, "prototype.unrecorded")).toHaveLength(1);
+  });
+
+  test("an active variant with no copies stays clean — neither signal fires on honest exploration", () => {
+    const findings = validate(
+      input({
+        prototypeRefs: {
+          defaultBranch: "main",
+          branches: [
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: TIP,
+              ancestorOfDefault: false,
+              copiedToDefault: [],
+            },
+          ],
+          remoteRefs: [],
+        },
+        events: [variantsCreatedEvent([{ branch: "prototype/speed-count/variant-1", base: BASE }])],
       }),
     );
     expect(prototypeFindings(findings)).toEqual([]);
@@ -164,7 +282,12 @@ describe("prototype.unrecorded — honest about what it cannot judge (F5.2)", ()
         prototypeRefs: {
           defaultBranch: "main",
           branches: [
-            { branch: "prototype/hand-made/variant-1", tip: BASE, ancestorOfDefault: true },
+            {
+              branch: "prototype/hand-made/variant-1",
+              tip: BASE,
+              ancestorOfDefault: true,
+              copiedToDefault: [],
+            },
           ],
           remoteRefs: [],
         },
@@ -207,7 +330,12 @@ describe("the prototype checks stay silent when there is nothing to judge", () =
       input({
         prototypeRefs: {
           branches: [
-            { branch: "prototype/speed-count/variant-1", tip: TIP, ancestorOfDefault: false },
+            {
+              branch: "prototype/speed-count/variant-1",
+              tip: TIP,
+              ancestorOfDefault: false,
+              copiedToDefault: [],
+            },
           ],
           remoteRefs: [],
         },

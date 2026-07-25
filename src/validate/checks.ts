@@ -1458,11 +1458,27 @@ function prototypeBases(state: ParsedState): Map<string, string> {
  * and a prototype ref must never reach a PR or the default branch — so this
  * check reports three things and guesses at none of them:
  *
- * - `prototype.merged` (error): the branch's tip has moved past the base it was
- *   created at AND the default branch now contains that tip. Both halves are
- *   required: a branch still sitting at its base is reachable from the default
- *   branch by construction, and flagging that would fire on every `nahel
- *   prototype start` a second after it ran.
+ * - `prototype.merged` (error), from EITHER of two independent signals:
+ *   - *ancestry* — the branch's tip has moved past the base it was created at
+ *     AND the default branch now contains that tip. Both halves are required:
+ *     a branch still sitting at its base is reachable from the default branch
+ *     by construction, and flagging that would fire on every `nahel prototype
+ *     start` a second after it ran.
+ *   - *patch-id equivalence* — `git cherry` reports commits of this branch
+ *     whose patch already exists in the default branch. A cherry-pick or a
+ *     rebase-style copy lands prototype code as a NEW commit, so ancestry sees
+ *     an innocent branch while the code is merged in every sense that matters;
+ *     the lane's rule 2 forbids a cherry-pick by name, and this is its teeth.
+ *     Needs no creation base, so it judges unrecorded branches too.
+ *
+ *   Honest residual: a SQUASH merge (or a copy that was edited on the way in)
+ *   changes the patch, so neither signal sees it, and detecting it offline
+ *   would mean content-diffing every default-branch commit against every
+ *   prototype commit — a cost out of proportion to a check that runs on every
+ *   `nahel validate`. The mechanical teeth are ancestry + patch equivalence;
+ *   the rest is the never-push/never-PR rule in
+ *   `nahel/workflows/prototype-lane.md`, which is stated there rather than
+ *   pretended at here.
  * - `prototype.pushed` (error): a remote-tracking prototype ref exists. Pushing
  *   is the precondition for opening a PR, and it is the furthest an offline,
  *   deterministic check can see — nahel never asks a remote anything, so "a PR
@@ -1480,6 +1496,23 @@ function checkPrototypeRefs(state: ParsedState): Finding[] {
   const bases = prototypeBases(state);
 
   for (const branch of scan.branches) {
+    // Patch-id equivalence first: it needs no creation base, so it judges
+    // hand-made branches the ancestry half can only call unjudgeable.
+    const copies = branch.copiedToDefault;
+    if (scan.defaultBranch !== undefined && copies.length > 0) {
+      findings.push({
+        severity: "error",
+        check: "prototype.merged",
+        message:
+          `prototype branch ${branch.branch} has ${copies.length} commit(s) whose patch is already ` +
+          `in ${scan.defaultBranch} (${copies.join(", ")}) — copied across by cherry-pick or rebase, ` +
+          "and prototype code never merges (nahel/workflows/prototype-lane.md)",
+        fix:
+          `revert those commits out of ${scan.defaultBranch}; promote the variant's mini-PRD ` +
+          "with `nahel prototype promote <variant-item-id>` and rebuild the work in the feature lane",
+      });
+    }
+
     const base = bases.get(branch.branch);
     if (base === undefined) {
       findings.push({

@@ -1151,6 +1151,21 @@ describe("prototype-lane canonical workflow doc (F5)", () => {
     expect(body).toContain("dropped");
   });
 
+  test("the never-merge check states BOTH its signals and its one honest blind spot (F5.2)", async () => {
+    const { body } = await shippedWorkflow("prototype-lane.md");
+    // Ancestry alone cannot see a cherry-pick — the copy path rule 2 names
+    // explicitly — so patch-id equivalence is the second signal.
+    expect(body).toContain("cherry-pick");
+    expect(body).toContain("patch");
+    expect(body).toContain("git cherry");
+    // And the residual is stated rather than papered over: a squash merge
+    // rewrites the patch, so neither signal sees it. A doc that implied full
+    // coverage would make the never-push rule feel optional.
+    expect(body).toContain("squash");
+    expect(body).toContain("cannot see");
+    expect(body).toContain("never push");
+  });
+
   test("judge → promote: mini-PRD onto the plan lane, approval per governance (F5.3)", async () => {
     const { body } = await shippedWorkflow("prototype-lane.md");
     expect(body).toContain("nahel prototype promote <variant-item-id>");

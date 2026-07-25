@@ -243,6 +243,15 @@ export interface PrototypeBranchScan {
   tip: string;
   /** True when the default branch's history contains this tip. */
   ancestorOfDefault: boolean;
+  /**
+   * Commits of this branch whose PATCH already exists in the default branch —
+   * `git cherry`'s equivalence report, oldest first. This is how a cherry-pick
+   * or a rebase-style copy is caught: the code landed as a NEW commit, so the
+   * branch is an ancestor of nothing and ancestry alone sees an innocent
+   * branch. Empty after a real merge (nothing is "not in upstream" then), so
+   * the two signals complement rather than double-count.
+   */
+  copiedToDefault: string[];
 }
 
 /**
@@ -279,6 +288,36 @@ async function resolveDefaultBranch(root: string): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * Commits of `branch` whose patch already exists in `defaultBranch`, via
+ * `git cherry <upstream> <head>`: each of head's commits not in upstream is
+ * printed `+ <sha>` (no equivalent) or `- <sha>` (an equivalent patch IS
+ * upstream). The minus lines are the copies — a cherry-pick, a rebase, or a
+ * hand-applied diff that kept the patch identical.
+ *
+ * Read-only plumbing, no network, deterministic. Patch-id equivalence is
+ * git's own comparison; nahel neither computes nor guesses at it.
+ */
+async function copiedToDefault(
+  root: string,
+  branch: string,
+  defaultBranch: string,
+): Promise<string[]> {
+  const cherry = await tryGit(root, [
+    "cherry",
+    `refs/heads/${defaultBranch}`,
+    `refs/heads/${branch}`,
+  ]);
+  if (cherry.code !== 0) return [];
+  const copies: string[] = [];
+  for (const line of outputLines(cherry.stdout)) {
+    if (!line.startsWith("- ")) continue;
+    const sha = line.slice(2).trim();
+    if (sha !== "") copies.push(sha);
+  }
+  return copies;
+}
+
 /** Parse `<short-name>\t<sha>` lines from for-each-ref. */
 function parseRefLines(output: string): { name: string; sha: string }[] {
   const refs: { name: string; sha: string }[] = [];
@@ -311,6 +350,7 @@ export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan>
   for (const ref of parseRefLines(heads.stdout)) {
     if (!isPrototypeBranch(ref.name)) continue;
     let ancestorOfDefault = false;
+    let copies: string[] = [];
     if (defaultBranch !== undefined) {
       const contained = await tryGit(root, [
         "merge-base",
@@ -319,8 +359,14 @@ export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan>
         `refs/heads/${defaultBranch}`,
       ]);
       ancestorOfDefault = contained.code === 0;
+      copies = await copiedToDefault(root, ref.name, defaultBranch);
     }
-    branches.push({ branch: ref.name, tip: ref.sha, ancestorOfDefault });
+    branches.push({
+      branch: ref.name,
+      tip: ref.sha,
+      ancestorOfDefault,
+      copiedToDefault: copies,
+    });
   }
 
   const remotes = await tryGit(root, [

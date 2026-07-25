@@ -55,6 +55,15 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
 export const DISPATCH_STARTED_EVENT_TYPE = "dispatch.started";
 export const DISPATCH_ENDED_EVENT_TYPE = "dispatch.ended";
 
+/** One-per-invocation summary of what the import did (the config.updated precedent). */
+export const IMPORT_COMPLETED_EVENT_TYPE = "import.completed";
+/** A per-anomaly note: unmappable status, github-mapping mismatch, dropped dependency, unreferenced PRD. */
+export const IMPORT_NOTE_EVENT_TYPE = "import.note";
+/** A PRD relocated into docs/prds/, its stripped status preserved in this event (ADR-0013 as amended). */
+export const IMPORT_PRD_RELOCATED_EVENT_TYPE = "import.prd-relocated";
+/** The open-extension event type recording a distill act. */
+export const DISTILLED_EVENT_TYPE = "journal.distilled";
+
 /**
  * Every event type a nahel COMMAND records for itself: the record mutations
  * mutate() journals, the config replacement `config set` journals, and the
@@ -72,4 +81,8 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
   [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],
   [DISPATCH_ENDED_EVENT_TYPE, "`nahel dispatch`"],
+  [IMPORT_COMPLETED_EVENT_TYPE, "`nahel import`"],
+  [IMPORT_NOTE_EVENT_TYPE, "`nahel import`"],
+  [IMPORT_PRD_RELOCATED_EVENT_TYPE, "`nahel import`"],
+  [DISTILLED_EVENT_TYPE, "`nahel distill`"],
 ]);

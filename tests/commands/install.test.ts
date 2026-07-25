@@ -41,12 +41,17 @@ interface CommandResult {
   stderr: string;
 }
 
-async function runInstall(args: string[], root: string): Promise<CommandResult> {
+async function runInstall(
+  args: string[],
+  root: string,
+  homeDir?: string,
+): Promise<CommandResult> {
   const out: string[] = [];
   const err: string[] = [];
   const ctx: CommandContext = {
     env: seededEnv(),
     cwd: root,
+    homeDir,
     stdout: (text) => out.push(text),
     stderr: (text) => err.push(text),
   };
@@ -61,6 +66,13 @@ async function makeRepo(): Promise<string> {
   await writeConfig(await ensureLayout(root), makeConfig());
   await mkdir(workflowsDir(storeLayout(root)), { recursive: true });
   return root;
+}
+
+/** A throwaway home directory — codex shims land outside the repo (F8.2). */
+async function makeHome(): Promise<string> {
+  const home = await makeTempDir("nahel-install-home-");
+  tempDirs.push(home);
+  return home;
 }
 
 /** A canonical workflow doc body per the format spec (docs/workflow-format.md). */
@@ -84,6 +96,8 @@ async function writeWorkflow(root: string, file: string, content: string): Promi
 }
 
 const shimDir = (root: string, prefix = "nd") => join(root, ".claude", "commands", prefix);
+/** Codex reads custom prompts from $CODEX_HOME/prompts, top-level files only. */
+const promptsDir = (home: string) => join(home, ".codex", "prompts");
 
 describe("workflow frontmatter format (PRD F10)", () => {
   test("accepts the canonical shape: slug name, description, args (possibly empty)", () => {
@@ -127,9 +141,44 @@ describe("agent target lookup table (ADR-0005: later agents additive)", () => {
     expect(KNOWN_AGENTS).toEqual(Object.keys(AGENT_TARGETS).sort());
   });
 
-  test("claude shims live under .claude/commands/<prefix>", () => {
+  test("claude shims live under .claude/commands/<prefix>, and own that whole directory", () => {
+    expect(AGENT_TARGETS["claude"]!.root).toBe("repo");
     expect(AGENT_TARGETS["claude"]!.shimDir("nd")).toBe(join(".claude", "commands", "nd"));
     expect(AGENT_TARGETS["claude"]!.shimDir("go")).toBe(join(".claude", "commands", "go"));
+    // Empty file-name prefix = the directory itself is the generator's namespace.
+    expect(AGENT_TARGETS["claude"]!.filePrefix("nd")).toBe("");
+  });
+
+  test("codex is a known agent whose shims are home-scoped prompt files (F8.2)", () => {
+    // Codex loads custom prompts ONLY from $CODEX_HOME/prompts (default
+    // ~/.codex/prompts), top-level markdown files, no subdirectories — so the
+    // target is home-rooted and the prefix is a FILE-NAME namespace, not a
+    // directory, and pruning is limited to that namespace (the directory is
+    // shared with the user's own prompts).
+    expect(AGENT_TARGETS["codex"]).toBeDefined();
+    expect(KNOWN_AGENTS).toEqual(["claude", "codex"]);
+    expect(AGENT_TARGETS["codex"]!.root).toBe("home");
+    expect(AGENT_TARGETS["codex"]!.shimDir("nd")).toBe(join(".codex", "prompts"));
+    expect(AGENT_TARGETS["codex"]!.shimDir("go")).toBe(join(".codex", "prompts"));
+    expect(AGENT_TARGETS["codex"]!.filePrefix("nd")).toBe("nd-");
+    expect(AGENT_TARGETS["codex"]!.filePrefix("go")).toBe("go-");
+  });
+
+  test("the codex shim is the same generated 3-liner, pointing at the canonical doc", () => {
+    const doc: WorkflowDoc = {
+      frontmatter: { name: "plan", description: "Plan a feature", args: "<item-id>" },
+      path: "nahel/workflows/plan.md",
+    };
+    const shim = AGENT_TARGETS["codex"]!.renderShim(doc);
+    expect(AGENT_TARGETS["codex"]!.renderShim(doc)).toBe(shim); // deterministic
+    const { frontmatter, body } = parseFrontmatter(shim);
+    // Codex custom-prompt frontmatter uses the same two keys as claude.
+    expect(frontmatter["description"]).toBe("Plan a feature");
+    expect(frontmatter["argument-hint"]).toBe("<item-id>");
+    expect(body).toContain("nahel/workflows/plan.md");
+    expect(body).toContain("$ARGUMENTS");
+    expect(body).toContain("nahel install --agent codex"); // regenerate pointer names ITS agent
+    expect(body.trim().split("\n")).toHaveLength(3);
   });
 
   test("renderShim is deterministic, 3 lines of body, and points at the canonical doc", () => {
@@ -249,6 +298,7 @@ describe("nahel install --agent claude", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("emacs");
     expect(result.stderr).toContain("claude");
+    expect(result.stderr).toContain("codex");
   });
 
   test("missing --agent is a usage error", async () => {
@@ -311,6 +361,120 @@ describe("nahel install --agent claude", () => {
     const result = await runInstall(["--agent", "claude"], root);
     expect(result.code).toBe(0);
     expect(result.stdout.toLowerCase()).toContain("no workflow");
+  });
+});
+
+describe("nahel install --agent codex (PRD F8.2)", () => {
+  test("generates one prompt file per workflow under <home>/.codex/prompts, prefix-namespaced", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief", "Onboard onto the project"));
+    await writeWorkflow(root, "plan.md", workflowDoc("plan", "Plan a feature", "<item-id>"));
+
+    const result = await runInstall(["--agent", "codex"], root, home);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    // The path the user has to know is stated explicitly in the output.
+    expect(result.stdout).toContain(join("~", ".codex", "prompts"));
+
+    // Flat files, not a subdirectory: codex scans only the top level.
+    expect((await readdir(promptsDir(home))).sort()).toEqual(["nd-brief.md", "nd-plan.md"]);
+    const brief = await readFile(join(promptsDir(home), "nd-brief.md"), "utf8");
+    expect(brief).toContain("nahel/workflows/brief.md");
+    expect(brief).toContain("Onboard onto the project");
+    // Nothing lands in the repo for a home-scoped target.
+    expect(await listMarkdownDocs(join(root, ".codex", "prompts"))).toEqual([]);
+  });
+
+  test("--prefix renames the namespace, it does not create a subdirectory", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    const result = await runInstall(["--agent", "codex", "--prefix", "go"], root, home);
+    expect(result.code).toBe(0);
+    expect((await readdir(promptsDir(home))).sort()).toEqual(["go-brief.md"]);
+  });
+
+  test("regeneration is idempotent: byte-identical output, reported as unchanged", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    expect((await runInstall(["--agent", "codex"], root, home)).code).toBe(0);
+    const firstBytes = await readFile(join(promptsDir(home), "nd-brief.md"));
+
+    const second = await runInstall(["--agent", "codex"], root, home);
+    expect(second.code).toBe(0);
+    expect(second.stdout).toContain("unchanged");
+    expect(Buffer.compare(firstBytes, await readFile(join(promptsDir(home), "nd-brief.md")))).toBe(0);
+  });
+
+  test("stale shims are pruned, but the user's own prompts in the shared dir survive", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    await writeWorkflow(root, "plan.md", workflowDoc("plan"));
+    await runInstall(["--agent", "codex"], root, home);
+    // A hand-written codex prompt of the user's, living in the same directory.
+    const mine = join(promptsDir(home), "draftpr.md");
+    await writeFile(mine, "---\ndescription: mine\n---\n\nhand written\n", "utf8");
+
+    await rm(join(workflowsDir(storeLayout(root)), "plan.md"));
+    const result = await runInstall(["--agent", "codex"], root, home);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("nd-plan.md");
+    expect((await readdir(promptsDir(home))).sort()).toEqual(["draftpr.md", "nd-brief.md"]);
+    expect(await readFile(mine, "utf8")).toBe("---\ndescription: mine\n---\n\nhand written\n");
+  });
+
+  test("codex without a resolvable home directory fails fast, writing nothing", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    const result = await runInstall(["--agent", "codex"], root); // no homeDir injected
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("home");
+    expect(result.stderr).toContain("codex");
+  });
+});
+
+describe("nahel install --agent claude,codex (multi-target, PRD F8 acceptance)", () => {
+  test("installs both targets in one invocation and re-runs byte-identically", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    await writeWorkflow(root, "plan.md", workflowDoc("plan", "Plan a feature", "<item-id>"));
+
+    const first = await runInstall(["--agent", "claude,codex"], root, home);
+    expect(first.stderr).toBe("");
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain("claude");
+    expect(first.stdout).toContain("codex");
+    expect((await readdir(shimDir(root))).sort()).toEqual(["brief.md", "plan.md"]);
+    expect((await readdir(promptsDir(home))).sort()).toEqual(["nd-brief.md", "nd-plan.md"]);
+
+    const paths = [
+      join(shimDir(root), "brief.md"),
+      join(shimDir(root), "plan.md"),
+      join(promptsDir(home), "nd-brief.md"),
+      join(promptsDir(home), "nd-plan.md"),
+    ];
+    const before = await Promise.all(paths.map((path) => readFile(path)));
+    const second = await runInstall(["--agent", "claude,codex"], root, home);
+    expect(second.code).toBe(0);
+    const after = await Promise.all(paths.map((path) => readFile(path)));
+    for (const [index, bytes] of before.entries()) {
+      expect(Buffer.compare(bytes, after[index]!)).toBe(0);
+    }
+  });
+
+  test("one unknown agent in the list fails the whole invocation before any write", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    const result = await runInstall(["--agent", "claude,emacs"], root, home);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("emacs");
+    expect(await listMarkdownDocs(shimDir(root))).toEqual([]);
+    expect(await listMarkdownDocs(promptsDir(home))).toEqual([]);
   });
 });
 

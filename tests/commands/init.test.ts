@@ -6,6 +6,11 @@ import type { Env } from "../../src/schema/env";
 import { readJournal } from "../../src/store/journal";
 import { readConfig, readItem, storeLayout } from "../../src/store/layout";
 import { createStoreContext, mutate } from "../../src/store/mutate";
+import {
+  AGENTS_SECTION_BEGIN,
+  AGENTS_SECTION_END,
+  mergeAgentsSection,
+} from "../../src/templates/agents";
 import { makeFrontmatter, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
@@ -174,6 +179,102 @@ describe("nahel init — templates", () => {
         readFileSync(join(rootB, file), "utf8"),
       );
     }
+  });
+});
+
+describe("nahel init — AGENTS.md merge (PRD F8.3, item pjcgrgx1)", () => {
+  /** How many times the owned-section start marker appears in the file. */
+  function sectionCount(content: string): number {
+    return content.split(AGENTS_SECTION_BEGIN).length - 1;
+  }
+
+  test("merge is a pure function: append when unmarked, replace in place when marked", () => {
+    const existing = "# House rules\n\nBe kind.\n";
+    const appended = mergeAgentsSection(existing);
+    expect(appended.outcome).toBe("merged");
+    expect(appended.content.startsWith(existing)).toBe(true);
+    expect(sectionCount(appended.content)).toBe(1);
+    expect(appended.content).toContain(AGENTS_SECTION_END);
+
+    // Re-merging its own output changes nothing at all.
+    const again = mergeAgentsSection(appended.content);
+    expect(again.outcome).toBe("unchanged");
+    expect(again.content).toBe(appended.content);
+
+    // A file with only a start marker is ambiguous — refuse, never guess.
+    expect(() => mergeAgentsSection(`x\n${AGENTS_SECTION_BEGIN}\ny\n`)).toThrow(/marker/);
+  });
+
+  test("an existing AGENTS.md keeps every pre-existing byte and gains the section once", async () => {
+    const root = await makeRepo();
+    const existing = "# AGENTS.md\n\n## Our rules\n\n- Run `make test` before pushing.\n";
+    writeFileSync(join(root, "AGENTS.md"), existing);
+
+    const result = await runCli(["init"], root);
+    expect(result.code).toBe(0);
+    const merged = readFileSync(join(root, "AGENTS.md"), "utf8");
+
+    // Every pre-existing byte, verbatim, still at the front of the file.
+    expect(merged.startsWith(existing)).toBe(true);
+    expect(sectionCount(merged)).toBe(1);
+    expect(merged).toContain("nahel brief");
+    expect(merged).toContain("NAHEL_ACTOR=agent:");
+    // The merge is reported, not silently skipped (the closed backlog item).
+    expect(result.stdout).toContain("AGENTS.md");
+  });
+
+  test("re-running init on a merged file is byte-identical", async () => {
+    const root = await makeRepo();
+    writeFileSync(join(root, "AGENTS.md"), "# Mine\n\nkeep me\n");
+    await runCli(["init"], root);
+    const afterFirst = readFileSync(join(root, "AGENTS.md"), "utf8");
+
+    const rerun = await runCli(["init"], root);
+    expect(rerun.code).toBe(0);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe(afterFirst);
+    expect(sectionCount(afterFirst)).toBe(1);
+  });
+
+  test("human edits around the owned section survive; the section itself is regenerated", async () => {
+    const root = await makeRepo();
+    writeFileSync(join(root, "AGENTS.md"), "# Mine\n\nkeep me\n");
+    await runCli(["init"], root);
+    const merged = readFileSync(join(root, "AGENTS.md"), "utf8");
+
+    // The human appends a section BELOW the owned block and mangles the inside.
+    const trailer = "\n## Deploy notes\n\nSSH to prod, cry.\n";
+    const mangled = merged.replace("nahel brief", "nahel brief (I broke this line)") + trailer;
+    writeFileSync(join(root, "AGENTS.md"), mangled);
+
+    const rerun = await runCli(["init"], root);
+    expect(rerun.code).toBe(0);
+    const after = readFileSync(join(root, "AGENTS.md"), "utf8");
+    expect(after.startsWith("# Mine\n\nkeep me\n")).toBe(true); // above: preserved
+    expect(after.endsWith(trailer)).toBe(true); // below: preserved
+    expect(after).not.toContain("I broke this line"); // inside: generator-owned
+    expect(after).toBe(merged + trailer); // exactly the section restored
+    expect(sectionCount(after)).toBe(1);
+  });
+
+  test("a fresh init writes the section exactly once, with its markers", async () => {
+    const root = await makeRepo();
+    await runCli(["init"], root);
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
+    expect(sectionCount(agents)).toBe(1);
+    expect(agents).toContain(AGENTS_SECTION_END);
+  });
+
+  test("an unterminated marker leaves AGENTS.md untouched and warns; the rest still scaffolds", async () => {
+    const root = await makeRepo();
+    const broken = `# Mine\n\n${AGENTS_SECTION_BEGIN}\n\nsomeone deleted the end marker\n`;
+    writeFileSync(join(root, "AGENTS.md"), broken);
+
+    const result = await runCli(["init"], root);
+    expect(result.code).toBe(0);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe(broken);
+    expect(result.stderr).toContain("AGENTS.md");
+    expect(existsSync(join(root, "nahel", "config"))).toBe(true);
+    expect(existsSync(join(root, "PRODUCT.md"))).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T16:35:00Z
+updated: 2026-07-25T16:39:25Z
 ---
 
 # Phase 2 — AFK engine
@@ -43,6 +43,7 @@ Per ADR-0016: dispatch owns invocation mechanics and nothing else.
 **Acceptance criteria**
 
 - [ ] Given a committed routing map, `nahel dispatch implementation -- <task args>` spawns the mapped agent CLI with the mapped model and a correctly attributed run record; the journal shows the dispatch and the spawned agent's own mutations under its own actor id.
+- [ ] The composed invocation recorded with the dispatch contains the `nahel brief` orientation preamble — provable by inspecting the journaled dispatch record, and absent it the criterion fails (F1.1).
 - [ ] With no responsibility-specific route but a configured default, dispatch resolves to the default; with neither, dispatch exits non-zero naming the missing route and the `nahel config set` command that fixes it.
 - [ ] A dispatch invocation-config entry with an unknown agent kind is rejected as a schema error by `validate` and by dispatch itself (F1.3).
 - [ ] Dispatch makes zero LLM calls and needs zero API keys itself; determinism suite passes with dispatch in the allowlist.
@@ -55,7 +56,7 @@ The yolo-afk-dev engine rebuilt on nahel state, as prose executed by a host agen
 - **F2.2** Lane selection per item (Direct / Epic-lite / Full) with the reasoning journaled. Full lane authors the PRD in **AFK authoring mode** — prd-new's grilling interview needs a human, so the runner instead drafts from project evidence (brief, constitution, backlog, journal, code) and **journals every assumption the interview would have resolved**. What happens at the approval gate is governed by per-project config `governance.product` (the roadmap §7 delegated-legislation model, product slice pulled forward from Phase 4 at Jim's 2026-07-25 direction):
   - **`delegated` (default):** the runner obtains **cross-vendor consensus** on the drafted PRD — an independent second-vendor verification against the constitution, backlog, and the journaled assumptions — records the approval as an append-only, journaled decision naming both vendors, flips the plan item through the CLI under that delegated authority, and proceeds to parse→decompose→implementation in the same run. Vendor disagreement, any constitution conflict, or a `seed` inception tier (the Phase 1 tier ratchet: delegated governance demands `standard`+) **parks** instead.
   - **`human`:** the runner parks the item at the approval gate (ADR-0013) with the assumptions surfaced; parse→decompose→implementation run only after the human flips the plan item (prd-parse refuses an unapproved PRD, unchanged from Phase 1).
-  Constitution amendments are never delegable under either setting. Inception asks for and records the governance choice. This is the Phase 2 half of the roadmap's `plan` type.
+  Constitution amendments are never delegable under either setting. Inception asks for and records the governance choice. In scope with this requirement: the Phase 1 `prd-new` and `prd-parse` docs' "approval is the human's word" steps gain the governance qualifier (delegated **plan-item approval** is the roadmap-§7 exception; ADR-0013 is untouched — it fixes where the lifecycle lives, not who flips it). The exception covers plan-item approval ONLY: leaf-item `done` in task-lifecycle stays human-only, exactly as the wave-ordering criterion assumes. This is the Phase 2 half of the roadmap's `plan` type.
 - **F2.3** Wave ordering from `depends_on` edges; workers spawned via `nahel dispatch` per the routing map — the runner never hand-picks an agent in violation of routing (F1.2 enforces).
 - **F2.4** The runner decides when to invoke the review loop (F3), when to stop, and when to park; every park is a journaled decision with a reason, surfaced by `brief`.
 - **F2.5** Draft-PR-per-epic: each epic's branch **opens** a draft PR whose body carries the run trail (waves, reviews, verify-by-driving evidence, waivers). Under `merge: human` it stays a draft awaiting the human; under a validly activated `merge: on-approve` (F3.4) it may subsequently merge on reviewer sign-off — the invariant is one PR per epic carrying the trail, not that the run ends with it unmerged.
@@ -108,14 +109,14 @@ The `prototype` work-item type becomes real (roadmap decision 5).
 
 - **F5.1** `--variants N`: N parallel worktrees, each seeded with a mini-PRD (approach statement) and a running throwaway implementation; ceremony stripped — no TDD, no review loop, no consensus.
 - **F5.2** **Never-merge is enforced mechanically**, not by prose: prototype branches/worktrees are marked such that the CLI refuses to record a merge-bound state for them and `validate` flags any prototype ref that reaches a PR or the default branch.
-- **F5.3** Promotion path: a winning variant's mini-PRD graduates via the plan lane — mini-PRD → plan item authors the full PRD → **human approval on the plan item (journaled, never skipped)** → parse into the feature lane — with the prototype worktree as reference-only; the losing variants' disposal is journaled.
+- **F5.3** Promotion path: a winning variant's mini-PRD graduates via the plan lane — mini-PRD → plan item authors the full PRD → **approval on the plan item (journaled, never skipped), granted per the project's `governance.product` setting** (F2.2: delegated cross-vendor consensus by default, the human gate under `governance: human` — the same gate, same rules, same park triggers) → parse into the feature lane — with the prototype worktree as reference-only; the losing variants' disposal is journaled.
 - **F5.4** The Phase 1 tier ratchet (F4.3 there) gets its promotion half enforced here: promoting a prototype demands the recorded inception tier meets the ratchet bar (`standard` or above); promotion on a `seed`-tier project refuses with "upgrade inception first."
 
 **Acceptance criteria**
 
 - [ ] `--variants 2` on the lab yields two worktrees, two mini-PRDs, two runnable throwaways, and zero review/TDD ceremony in their journals.
 - [ ] Never-merge is enforced **mechanically**: the CLI refuses to record a merge-bound state for a prototype ref and `validate` flags any prototype ref reaching a PR or the default branch — workflow prose alone does not satisfy this criterion; the refusal is journaled.
-- [ ] A promoted variant walks the decided path end-to-end once in the lab: mini-PRD → plan item → full PRD (referencing the mini-PRD) → journaled human approval on the plan item → parsed feature item entering the feature lane — parse before the approval event is refused, and the prototype code is verifiably absent from the promoted feature's diff. The losing variant's disposal is journaled.
+- [ ] A promoted variant walks the decided path end-to-end once in the lab: mini-PRD → plan item → full PRD (referencing the mini-PRD) → journaled approval on the plan item per `governance.product` (delegated consensus decision record, or the human flip under `governance: human`) → parsed feature item entering the feature lane — parse before the approval event is refused, and the prototype code is verifiably absent from the promoted feature's diff. The losing variant's disposal is journaled.
 - [ ] Promotion on a `seed`-tier project refuses, naming the inception upgrade; the same promotion proceeds once the recorded tier is `standard` or above (F5.4).
 
 ### F6 — Intervention: checkpoint-respect

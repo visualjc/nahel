@@ -47,12 +47,12 @@ that this work is theirs.
 3. Journal load-bearing findings the moment you have them — decisions,
    surprises, constraints discovered the hard way; not routine progress:
 
-       nahel log note --item <item-id> --run <run-id> --data body="<the finding>"
+       nahel log note --item <item-id> --run <run-id> --data summary="<the finding>"
 
 4. Blocked? Record it durably, then stop or switch:
 
        nahel item update <item-id> --status blocked
-       nahel log note --item <item-id> --data body="blocked: <reason>"
+       nahel log note --item <item-id> --data summary="blocked: <reason>"
 
    Surface the reason to the human — a blocked item with no journaled
    reason is a dead end for the next session.

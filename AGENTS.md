@@ -27,3 +27,4 @@ You are working in the **Nahel** repo: a durable, tool-agnostic project state mo
 - Install: `bun install`
 - Test: `bun test`
 - Run CLI: `bun run src/cli.ts <args>`
+- Compiled binary: `bun run build` (current platform) / `bun run build:all` → `dist/`; `bun run install:local` puts `nahel` on PATH

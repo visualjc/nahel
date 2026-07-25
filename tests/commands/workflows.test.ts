@@ -829,6 +829,106 @@ describe("knowledge-first inception (F9)", () => {
     expect(mineAt).toBeGreaterThan(modeAt);
   });
 
+  test("scaffolding is the FIRST mechanical act on a bare repo, in BOTH modes (F9.4)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    const modeSection = body.slice(
+      body.indexOf("## Step 0 — Mode and input capture"),
+      body.indexOf("## Pick the tier"),
+    );
+    expect(modeSection.length).toBeGreaterThan(0);
+    // The bug this pins: guided mode recorded `config set founding` and
+    // research notes before any `nahel init`, so on a bare repo every command
+    // fails — there is no store to record into. The meta-question may be
+    // ASKED first; nothing is RECORDED until the store exists.
+    expect(modeSection).toContain("nahel init");
+    expect(modeSection).toContain("BOTH modes");
+    expect(modeSection).toContain("no store");
+    // Ordering, not just presence: the scaffold instruction precedes the
+    // first recording command in the section.
+    const initAt = modeSection.indexOf("nahel init");
+    const recordAt = modeSection.indexOf("nahel config set founding");
+    expect(initAt).toBeGreaterThan(-1);
+    expect(recordAt).toBeGreaterThan(initAt);
+    // Hands-off on a bare repo scaffolds AND records in the human's one act,
+    // so it is the init rather than a step before it.
+    expect(modeSection).toContain('nahel init --hands-off "');
+    expect(modeSection).toContain("scaffolds and records");
+  });
+
+  test("the draft manifest proves the complete draft set predated the first answer (F9.2)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    // F9's AC needs the ORDER to be provable from the journal, not asserted in
+    // prose: one event, before the interview, hashing every drafted artifact.
+    expect(body).toContain("draft manifest:");
+    expect(body).toContain("before the first interview response");
+    expect(body).toContain("git hash-object");
+    expect(body).toContain("git hash-object --stdin");
+    expect(body).toContain("--data manifest=");
+    // Drafting events are distinct from sign-off: the signature stays the
+    // human's own `config set inception` act, and no note substitutes for it.
+    expect(body).toContain("never sign-off");
+    expect(body).toContain("nahel config set inception");
+    // The manifest is journaled before the interview AND before the hands-off
+    // verification — same event, both modes.
+    const manifestAt = body.indexOf("draft manifest:");
+    const interviewAt = body.indexOf("The interview is then confirm-and-correct");
+    const verifyAt = body.indexOf("### Verify the elaboration");
+    expect(manifestAt).toBeGreaterThan(-1);
+    expect(interviewAt).toBeGreaterThan(manifestAt);
+    expect(verifyAt).toBeGreaterThan(manifestAt);
+  });
+
+  test("hands-off verification is bound to a plan item that exists BEFORE the dispatch (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    const section = body.slice(
+      body.indexOf("### Verify the elaboration"),
+      body.indexOf("### When the paragraph is not enough"),
+    );
+    expect(section.length).toBeGreaterThan(0);
+    // `nahel dispatch` has required --item since wave 1, so the itemless
+    // dispatch this section used to write was refused outright — the
+    // elaboration could never be verified as documented.
+    expect(section).toContain("nahel dispatch review --item <plan-id>");
+    expect(section).toContain("requires `--item`");
+    // The item is the founding's own first plan item, created as part of the
+    // artifact set (the initial decomposition) BEFORE this verification.
+    expect(section).toContain("nahel item new plan");
+    expect(section).toContain("initial decomposition");
+    const createAt = section.indexOf("nahel item new plan");
+    const dispatchAt = section.indexOf("nahel dispatch review --item");
+    expect(createAt).toBeGreaterThan(-1);
+    expect(dispatchAt).toBeGreaterThan(createAt);
+    // All three provenance events ride that item, or the trail is unattached.
+    expect(section).toContain("nahel log note --item <plan-id>");
+  });
+
+  test("the elaboration consensus binds ONE manifest hash over the COMPLETE founded set (F9.5)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    const section = body.slice(
+      body.indexOf("### Verify the elaboration"),
+      body.indexOf("### When the paragraph is not enough"),
+    );
+    // The gap this closes: hashing PRODUCT/CONTEXT/ADRs alone left governance,
+    // routing, the contract and the decomposition free to change without
+    // invalidating the consensus F9.5 binds to the COMPLETE artifact set.
+    expect(section).toContain("nahel/config");
+    expect(section).toContain("nahel/items/");
+    expect(section).toContain("governance");
+    expect(section).toContain("routing");
+    expect(section).toContain("contract");
+    expect(section).toContain("decomposition");
+    // ONE hash, over a canonical (sorted) manifest — not a pile of hashes.
+    expect(section).toContain("sort");
+    expect(section).toContain("manifest-hash");
+    expect(section).toContain("hashed once");
+    // And that one hash is the revision on all three events.
+    expect(section).toContain("--data revision=<manifest-hash>");
+    const revisions = section.split("--data revision=<manifest-hash>").length - 1;
+    expect(revisions).toBeGreaterThanOrEqual(3);
+    // A hash that moved since the proposal is unverified — re-run before deciding.
+    expect(section).toContain("Re-run the manifest");
+  });
+
   test("one workflow, two interaction modes — no separate mining workflow (F9 review nit 4)", async () => {
     const { body } = await shippedWorkflow("inception.md");
     expect(body).toContain("interaction mode");

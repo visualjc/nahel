@@ -27,6 +27,18 @@ project IS:
 > Grill session (guided), or
 > give me a paragraph and I figure it out (hands-off)?
 
+Asking is free; recording is not. On a repo with no `nahel/` yet there is
+no store to record anything INTO — no config section, no work item, no journal
+event, not even the research note the mining below wants — so scaffolding is
+unconditionally the first mechanical act, in BOTH modes:
+
+    nahel init
+
+The meta-question above may be asked before it; nothing is RECORDED until the
+store exists. (Hands-off on a bare repo has a shortcut that scaffolds and
+records the paragraph in one act — take that one instead, below.) On an
+already-initialized repo the store is there and this step is already done.
+
 Guided and hands-off are two interaction modes of THIS workflow: there is
 no separate mining workflow, and no separate hands-off procedure. Same mining,
 same complete draft set, same tier steps. The mode decides only who answers
@@ -36,7 +48,10 @@ worth (see "Hands-off founding" below).
 Record the answer; the mode is state, not a memory of a chat.
 
 - Hands-off on a repo with no `nahel/` yet — the HUMAN runs this one command,
-  and that single act is the whole of their attention:
+  and that single act is the whole of their attention. It
+  scaffolds and records together, so it IS the `nahel init` above rather than
+  a step after it — run bare-repo hands-off through this door, never a plain
+  `nahel init` followed by a paragraph with nowhere to land:
 
       nahel init --hands-off "<the paragraph, verbatim>"
 
@@ -51,8 +66,9 @@ Record the answer; the mode is state, not a memory of a chat.
   as JSON (`--data '{"mode": "hands-off", "paragraph": "…"}'`), or use the
   `init` flag, which never touches the text.
 
-- Guided — record the mode too, so the trail shows which door the founding
-  came through:
+- Guided — the store exists by now (the scaffold above, or an already
+  initialized repo), so the mode can be recorded; do it, so the trail shows
+  which door the founding came through:
 
       nahel config set founding --data mode=guided
 
@@ -99,6 +115,31 @@ the governance posture, the glossary seed, the founding ADRs, the routing map,
 an actionable initial decomposition, and the run contract. Wrong guesses are
 fine — they surface the truth faster than empty prompts.
 
+Then journal the DRAFT MANIFEST, in one event, before the first interview
+response (and, under hands-off, before the verification dispatches). The bar
+is that the COMPLETE draft set existed before the human said anything about
+the project — and "I drafted first" is not provable from prose. Write each
+draft to its real path, hash them, and record path + hash for every one:
+
+    for path in $(printf '%s\n' PRODUCT.md CONTEXT.md docs/adr/*.md | sort); do
+      printf '%s  %s\n' "$(git hash-object "$path")" "$path"
+    done
+
+    nahel log note \
+      --data summary="draft manifest: complete artifact set drafted before the first interview response" \
+      --data manifest='[{"path": "PRODUCT.md", "hash": "<hash>"}, ...]'
+
+A draft you have not written to a path yet — a routing map, a contract stub, a
+decomposition still in your session — is hashed the same way from its exact
+text (`printf '%s' "<the draft>" | git hash-object --stdin`), so the manifest
+is one mechanism and every entry is checkable.
+
+This event is DRAFTING and never sign-off. The signature stays the human's own
+`nahel config set inception` act (step 8, or step 13 at standard tier); no
+manifest note substitutes for it, and none ever records a tier. What the
+manifest proves is the ORDER — drafts first, answers second — which is the
+whole claim a confirm-and-correct interview makes.
+
 The interview is then confirm-and-correct, always: the human reads concrete
 drafts and corrects them, rather than answering blank questions. Aim for
 minutes of their attention, not hours.
@@ -108,8 +149,10 @@ only by the recorded state the tier steps below write.
 
 ## Seed tier (~5 minutes)
 
-1. If `nahel/` does not exist yet, run `nahel init` — scaffold only; this
-   workflow fills what init stubs.
+1. The store is already scaffolded — step 0 ran `nahel init` (or
+   `nahel init --hands-off`) before anything was recorded. Resuming into a
+   repo that still has no `nahel/`? Run `nahel init` now, before any command
+   below; it is scaffold only, and this workflow fills what it stubs.
 2. Constitution: put the drafted goal, hard constraints, and non-goals in
    front of the human and correct them together — grill until each is concrete
    enough to refuse work with. Write them into the constitution document
@@ -255,22 +298,58 @@ UNCONFIRMED marking sits INSIDE the section body, never in the heading.
 The elaboration is legislation-layer content, so it is verified the way
 delegated legislation is verified. Use the provenance shape of
 `nahel/workflows/afk-run.md` step 6 — never invent a second one — bound to the
-founded artifact set instead of to a PRD:
+founded artifact set instead of to a PRD.
 
-    git hash-object PRODUCT.md CONTEXT.md <each founded ADR>
+**Order first.** `nahel dispatch` requires `--item`, so a verification
+dispatched before an item exists is refused outright and the elaboration never
+gets verified at all. The item is the founding's own first plan item — part of
+the artifact set already (step 7's first work, and at standard tier the
+initial decomposition of step 12), so nothing new is invented here; it is
+only CREATED BEFORE this section runs rather than after:
 
-    nahel log note \
+    nahel item new plan <founding-slug> direct
+
+Keep that id: every event below rides it. The tier is still recorded last,
+after the verification lands.
+
+**One hash, over the complete set.** Bind the consensus to a single canonical
+manifest — the documents, the config the founding wrote (governance, routing,
+contract, the founding paragraph itself), and the decomposition it authorizes.
+Loose per-file hashes leave everything outside the pile free to change under
+the verification, which is exactly what "bound to the founded artifact set"
+must not allow:
+
+    for path in $(printf '%s\n' PRODUCT.md CONTEXT.md docs/adr/*.md \
+                    nahel/config nahel/items/*.md | sort); do
+      printf '%s  %s\n' "$(git hash-object "$path")" "$path"
+    done > "${TMPDIR:-/tmp}/founding-manifest"
+
+    git hash-object "${TMPDIR:-/tmp}/founding-manifest"
+
+Sorted paths make it deterministic; `nahel/config` carries the governance,
+routing and contract state; the item records carry the decomposition. Nothing
+in the founded set moves without moving the manifest, and the manifest is
+hashed once. That one `<manifest-hash>` is the revision on all three events —
+the manifest is built outside the repo so it never hashes itself:
+
+    nahel log note --item <plan-id> \
       --data summary="hands-off elaboration proposed for verification: <the artifacts>" \
-      --data revision=<hash> \
+      --data revision=<manifest-hash> \
+      --data artifacts='["PRODUCT.md", "CONTEXT.md", "docs/adr/…", "nahel/config", "nahel/items/…"]' \
       --data assumptions='["<assumption-event-id>", ...]'
 
-    nahel dispatch review -- "Verify the hands-off elaboration at revision <hash>, independently. Read the signed founding paragraph (nahel/config, founding.paragraph), the drafted artifacts, and the assumption events cited by proposal event <proposal-event-id>. Judge whether any elaborated domain fact, hard constraint, or non-goal contradicts the paragraph, and whether each assumption is safe to build on. Journal your verdict yourself, under your own actor: nahel log note --data summary='hands-off elaboration verification: <agree|disagree> — <what you checked and what you found>' --data revision=<hash> --data verifies=<proposal-event-id> --data verdict=<agree|disagree>"
+    nahel dispatch review --item <plan-id> -- "Verify the hands-off elaboration at manifest revision <manifest-hash>, independently. Read the signed founding paragraph (nahel/config, founding.paragraph), the drafted artifacts the proposal lists, and the assumption events cited by proposal event <proposal-event-id>. Rebuild the manifest yourself from those paths and check the hash before judging anything. Judge whether any elaborated domain fact, hard constraint, or non-goal contradicts the paragraph, whether the recorded governance, routing, contract and decomposition follow from it, and whether each assumption is safe to build on. Journal your verdict yourself, under your own actor: nahel log note --item <plan-id> --data summary='hands-off elaboration verification: <agree|disagree> — <what you checked and what you found>' --data revision=<manifest-hash> --data verifies=<proposal-event-id> --data verdict=<agree|disagree>"
 
-    nahel log note \
+    nahel log note --item <plan-id> \
       --data summary="hands-off elaboration verified: proposed by <your actor>, verified by <verifier actor>" \
-      --data revision=<hash> \
+      --data revision=<manifest-hash> \
       --data proposal=<proposal-event-id> \
       --data verification=<verification-event-id>
+
+Re-run the manifest recipe before recording that decision: a hash that moved
+since the proposal means part of the founded set changed under the
+verification, so the consensus does not cover what is on disk — treat it as
+unverified. Recording the tier moves the hash deliberately, and comes after.
 
 The verification goes to a DIFFERENT vendor — the routing map's `review` slot.
 If that route resolves to your own vendor, consensus is impossible: park.

@@ -44,7 +44,10 @@ steps below with the drafts as your starting answers.
    non-goals — grill until each is concrete enough to refuse work with.
    Write them into the constitution document (config `knowledge.product`,
    PRODUCT.md by convention). The constitution is the human's: read it back
-   and get explicit sign-off.
+   and get explicit sign-off. That sign-off is RECORDED, not remembered — it
+   is written with the tier (step 7, or step 12 at standard tier), and the
+   HUMAN runs that command themselves. An agent-attributed signature gates
+   nothing: the autonomy gate reads the actor of the act that wrote it.
 3. Governance: ask who owns product and architecture legislation — `human`
    (agents propose, the human approves) or `delegated` (agent consensus:
    cross-vendor approval, journaled). The written default is
@@ -74,7 +77,14 @@ steps below with the drafts as your starting answers.
 
        nahel item new plan <slug> direct
 
-7. Record the tier: `nahel config set inception --data tier=seed`.
+7. Record the tier — and the constitution signature with it. Both go
+   in the SAME command: `config set` replaces the whole section, so a later
+   tier write that omits the signature erases it. The human runs this
+   themselves; their actor on the journaled act is what the autonomy gate
+   reads:
+
+       nahel config set inception \
+         --data tier=seed --data constitution_signed_by=<the human's id>
 
 ## Standard tier
 
@@ -92,17 +102,22 @@ stubs), then:
 11. Initial decomposition: turn the goal into first real work items with
     `parent`/`depends_on` edges (`nahel item new`, `nahel item update`) so
     the backlog is actionable, not one vague item.
-12. Record the tier: `nahel config set inception --data tier=standard`.
+12. Record the tier and the signature together, as in step 7 — the human runs
+    it:
+
+        nahel config set inception \
+          --data tier=standard --data constitution_signed_by=<the human's id>
 
 ## Tier ratchet
 
 Stated now, enforced by later phases: graduating any governance area to
 `delegated`, or promoting a prototype to a product, REQUIRES an inception
 upgrade — re-run this workflow at `standard` (or `full` once it ships) and
-record the new tier via `nahel config set inception`. The tier only ratchets
-up; never record a lower tier than the committed one. Interactive work needs
-no inception artifacts at all — the recorded tier and the run contract gate
-autonomy, nothing else.
+record the new tier via `nahel config set inception` — carrying the
+constitution signature through in that same command, or the ratchet erases it.
+The tier only ratchets up; never record a lower tier than the committed one.
+Interactive work needs no inception artifacts at all — the recorded tier, the
+signature, and the run contract gate autonomy, nothing else.
 
 Fallback (degraded environment): if the `nahel` CLI is unavailable, hold the
 interview and draft the knowledge documents (constitution, glossary, ADRs),

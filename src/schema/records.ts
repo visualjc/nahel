@@ -333,9 +333,18 @@ export type Compaction = z.infer<typeof compactionSchema>;
  * founded at. Written by the inception workflow via `nahel config set`;
  * Phase 2+ autonomy gates and the tier ratchet read it. `full` is recordable
  * now even though the full-tier workflow is deferred.
+ *
+ * `constitution_signed_by` is the human-signature field the autonomy gate
+ * reads (Phase 2 F7.2): "human-signed" has to be verifiable mechanically, so
+ * it is recorded state — who signed — rather than a judgment about what the
+ * constitution document says. Presence alone is not authority: the gate also
+ * requires the `config.updated` act that wrote it to be human-attributed,
+ * exactly as merge authority requires of `on-approve` (F3.4). Optional
+ * because an unsigned project is a legal state — it simply cannot run AFK.
  */
 export const inceptionSchema = z.strictObject({
   tier: z.enum(INCEPTION_TIERS),
+  constitution_signed_by: nonEmptyString("inception.constitution_signed_by").optional(),
 });
 export type Inception = z.infer<typeof inceptionSchema>;
 

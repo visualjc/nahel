@@ -385,6 +385,12 @@ describe("canonical workflow docs driving config set (F4, F3.2)", () => {
     expect(body).toContain("--data product=delegated");
     expect(body).toContain("--data architecture=human");
     expect(body).not.toContain("almost always start all-human");
+    // F7.2: the constitution sign-off is RECORDED, in the same `config set
+    // inception` call as the tier — the section replaces wholesale, so a tier
+    // write that omits the signature erases it — and the human runs that
+    // command themselves, because the gate reads the act's actor.
+    expect(body).toContain("--data constitution_signed_by=");
+    expect(body).toContain("in the SAME command");
     // Tier vocabulary, brownfield mode, and the ratchet are stated in the doc.
     for (const term of ["seed", "standard", "full", "rownfield", "ratchet"]) {
       expect(body).toContain(term);

@@ -345,6 +345,9 @@ describe("never-merge, enforced by the CLI (F5.2)", () => {
     await writeFile(join(worktree, "throwaway.ts"), "export const spike = 1;\n");
     git(worktree, "add", "-A");
     git(worktree, "commit", "-m", "throwaway spike");
+    // The main tree commits its own state first, as a real repo does.
+    git(lab.root, "add", "-A");
+    git(lab.root, "commit", "-m", "record the variant");
     git(lab.root, "merge", "--no-edit", "prototype/speed-count/variant-1");
 
     const findings = await validateStore(lab.layout);

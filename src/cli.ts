@@ -20,6 +20,7 @@ import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
 import { observeCommand } from "./commands/observe";
 import { progressCommand } from "./commands/progress";
+import { prototypeCommand } from "./commands/prototype";
 import { recallCommand } from "./commands/recall";
 import { runCommand } from "./commands/run";
 import { skillsCommand } from "./commands/skills";
@@ -107,6 +108,7 @@ export const COMMANDS: Record<string, Command> = {
   observe: adapt(observeCommand),
   pause: adapt(pauseCommand),
   progress: progressCommand,
+  prototype: adapt(prototypeCommand),
   recall: recallCommand,
   run: adapt(runCommand),
   skills: skillsCommand,

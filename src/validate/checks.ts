@@ -18,8 +18,12 @@ import {
   type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { MUTATION_EVENT_TYPES } from "../schema/events";
+import {
+  MUTATION_EVENT_TYPES,
+  PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
+} from "../schema/events";
 import type { HotState } from "../store/hotstate";
+import type { PrototypeRefScan } from "../store/prototype";
 import {
   compareEvents,
   latestCandidates,
@@ -121,6 +125,14 @@ export interface ValidationInput {
    * the item.investigation-missing warning is skipped.
    */
   investigationPresence?: Record<string, boolean>;
+  /**
+   * The repo's prototype refs — local branches with their tips, the resolved
+   * default branch, and the remote-tracking prototype refs (Phase 2 F5.2),
+   * collected by index.ts so the never-merge checks stay pure. Optional, and an
+   * `error` inside it means the same thing as absence: nahel could not look, so
+   * it reports nothing rather than guessing.
+   */
+  prototypeRefs?: PrototypeRefScan;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
@@ -1419,6 +1431,96 @@ function checkSkillsDrift(state: ParsedState): Finding[] {
   return findings;
 }
 
+/**
+ * Read the journaled creation bases: branch → the commit it branched FROM
+ * (`prototype.variants-created`, Phase 2 F5.1). Later records win, which is
+ * the right answer for a branch name that was disposed of and re-created.
+ * Payloads are read defensively — events are data, and a malformed one must
+ * mute its own branch, never poison the check.
+ */
+function prototypeBases(state: ParsedState): Map<string, string> {
+  const bases = new Map<string, string>();
+  for (const event of state.events) {
+    if (event.type !== PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE) continue;
+    const variants = event.payload["variants"];
+    if (!Array.isArray(variants)) continue;
+    for (const entry of variants) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const { branch, base } = entry as Record<string, unknown>;
+      if (typeof branch === "string" && typeof base === "string") bases.set(branch, base);
+    }
+  }
+  return bases;
+}
+
+/**
+ * Never-merge, enforced mechanically (PRD F5.2). Prototype code never merges,
+ * and a prototype ref must never reach a PR or the default branch — so this
+ * check reports three things and guesses at none of them:
+ *
+ * - `prototype.merged` (error): the branch's tip has moved past the base it was
+ *   created at AND the default branch now contains that tip. Both halves are
+ *   required: a branch still sitting at its base is reachable from the default
+ *   branch by construction, and flagging that would fire on every `nahel
+ *   prototype start` a second after it ran.
+ * - `prototype.pushed` (error): a remote-tracking prototype ref exists. Pushing
+ *   is the precondition for opening a PR, and it is the furthest an offline,
+ *   deterministic check can see — nahel never asks a remote anything, so "a PR
+ *   exists" is judged by its local footprint, not by an API call.
+ * - `prototype.unrecorded` (warning): a prototype-named branch nahel has no
+ *   creation record for. Without the base, "sitting at its creation point" and
+ *   "merged into the default branch" are the same git observation, so the
+ *   honest report is that the branch cannot be judged — not a verdict.
+ */
+function checkPrototypeRefs(state: ParsedState): Finding[] {
+  const scan = state.input.prototypeRefs;
+  if (scan === undefined || scan.error !== undefined) return [];
+
+  const findings: Finding[] = [];
+  const bases = prototypeBases(state);
+
+  for (const branch of scan.branches) {
+    const base = bases.get(branch.branch);
+    if (base === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "prototype.unrecorded",
+        message:
+          `prototype branch ${branch.branch} has no journaled creation record, so nahel cannot ` +
+          "tell whether its code reached the default branch — an unrecorded prototype ref is unjudgeable, not innocent",
+        fix: "spawn prototype variants with `nahel prototype start <item-id> --variants <n>`, which records each branch's base",
+      });
+      continue;
+    }
+    if (scan.defaultBranch === undefined) continue;
+    if (branch.tip !== base && branch.ancestorOfDefault) {
+      findings.push({
+        severity: "error",
+        check: "prototype.merged",
+        message:
+          `prototype branch ${branch.branch} has commits past its base ${base} and ${scan.defaultBranch} ` +
+          "now contains them — prototype code never merges (nahel/workflows/prototype-lane.md)",
+        fix:
+          `revert the prototype commits out of ${scan.defaultBranch}; promote the variant's mini-PRD ` +
+          "with `nahel prototype promote <variant-item-id>` and rebuild the work in the feature lane",
+      });
+    }
+  }
+
+  for (const ref of scan.remoteRefs) {
+    findings.push({
+      severity: "error",
+      check: "prototype.pushed",
+      message:
+        `prototype ref ${ref} is pushed to a remote — that is the precondition for a PR, and prototype ` +
+        "code never merges (nahel/workflows/prototype-lane.md)",
+      fix: "delete the remote branch; prototype workspaces stay local and are disposed of with `nahel prototype dispose <variant-item-id>`",
+    });
+  }
+
+  return findings;
+}
+
 /** Deterministic report order: errors first, then check, path, message. */
 function compareFindings(a: Finding, b: Finding): number {
   if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1;
@@ -1451,6 +1553,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkHotState(state),
     ...checkMaintenance(state),
     ...checkSkillsDrift(state),
+    ...checkPrototypeRefs(state),
   );
   return findings.sort(compareFindings);
 }

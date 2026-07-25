@@ -2,13 +2,17 @@ import { parseArgs } from "node:util";
 import type { z } from "zod";
 import { LANES, WORK_ITEM_STATUSES, WORK_ITEM_TYPES, type WorkItemStatus } from "../schema/enums";
 import type { Env } from "../schema/env";
-import { CORE_EVENT_TYPES } from "../schema/events";
+import {
+  CORE_EVENT_TYPES,
+  PROTOTYPE_MERGE_REFUSED_EVENT_TYPE,
+} from "../schema/events";
 import { generateId } from "../schema/id";
 import {
   workItemFrontmatterSchema,
   type ExternalRef,
   type WorkItemFrontmatter,
 } from "../schema/records";
+import { appendEvent } from "../store/journal";
 import { itemExists, readItem, type StoreLayout } from "../store/layout";
 import {
   closeStoreContext,
@@ -128,6 +132,16 @@ function parseExternalRef(value: string): ExternalRef {
 
 /** Statuses that `--reopen` guards against accidentally resurrecting. */
 const CLOSED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
+
+/**
+ * The merge-bound statuses (PRD F5.2). `in-review` means the work is handed to
+ * a reviewer — a PR — and `done` means it landed; both assert that this code is
+ * headed for, or already in, the default branch. A `prototype` item can reach
+ * neither: its code never merges, and the ONE terminal state open to it is
+ * `dropped`. This is the CLI-side half of never-merge-enforced-mechanically —
+ * `nahel validate`'s prototype.* checks are the git-side half.
+ */
+const MERGE_BOUND_STATUSES: readonly WorkItemStatus[] = ["in-review", "done"];
 
 const USAGE = `usage:
   nahel item new <type> <name> <lane> [--parent <id>] [--depends-on <id>]...
@@ -302,6 +316,26 @@ async function itemUpdate(
 
   if (values.status !== undefined) {
     const status = requireEnum(values.status, WORK_ITEM_STATUSES, "status");
+    if (current.type === "prototype" && MERGE_BOUND_STATUSES.includes(status)) {
+      // The refusal is JOURNALED before it is raised: an enforcement nobody can
+      // read back from state is prose, which is exactly what F5.2 rules out.
+      // The session is closed first so a refused invocation leaves the store as
+      // tidy as a successful one — no abandoned active segment.
+      await appendEvent(ctx.layout, ctx.env, {
+        type: PROTOTYPE_MERGE_REFUSED_EVENT_TYPE,
+        actor: ctx.actor,
+        session: ctx.session,
+        item: id,
+        payload: { status, from: current.status },
+      });
+      await closeStoreContext(ctx);
+      throw new UsageError(
+        `item ${id} is a prototype — prototype code never merges, so it cannot reach ${status}. ` +
+          "A prototype variant ends at `dropped` (`nahel prototype dispose <variant-item-id>`); " +
+          "to carry its idea forward run `nahel prototype promote <variant-item-id>`, which opens a " +
+          "plan item for the full PRD (nahel/workflows/prototype-lane.md)",
+      );
+    }
     const reopening =
       CLOSED_STATUSES.includes(current.status) && !CLOSED_STATUSES.includes(status);
     if (reopening && values.reopen !== true) {

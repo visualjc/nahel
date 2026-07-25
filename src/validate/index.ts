@@ -4,6 +4,7 @@ import { workItemFrontmatterSchema } from "../schema/records";
 import { readFrontmatterFile } from "../store/frontmatter";
 import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
+import { scanPrototypeRefs } from "../store/prototype";
 import {
   itemPath,
   listDistilledMarkers,
@@ -173,6 +174,11 @@ export async function collectValidationInput(
   // finding, not a path to probe.
   input.prdPresence = await collectDocPresence(layout, input, "prd");
   input.investigationPresence = await collectDocPresence(layout, input, "investigation");
+
+  // Prototype refs (Phase 2 F5.2): read-only git plumbing, the same store-layer
+  // privilege the claim baseline holds. Never throws — a checkout that is not a
+  // repo comes back carrying `error`, which mutes the never-merge checks.
+  input.prototypeRefs = await scanPrototypeRefs(layout.root);
 
   for (const id of (await listRuns(layout)).sort()) {
     if (!ID_PATTERN.test(id)) {

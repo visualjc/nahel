@@ -65,6 +65,29 @@ export const IMPORT_PRD_RELOCATED_EVENT_TYPE = "import.prd-relocated";
 export const DISTILLED_EVENT_TYPE = "journal.distilled";
 
 /**
+ * The prototype lane's acts (Phase 2 F5). Two of them are read back by
+ * machinery, not just by humans, which is why they are reserved types rather
+ * than free-form notes:
+ *
+ * - `prototype.variants-created` carries each variant's BASE commit, and the
+ *   never-merge check joins on it to tell a freshly created branch (sitting at
+ *   its base, trivially reachable from the default branch) apart from one whose
+ *   code was actually merged. A forgeable base is a forgeable acquittal.
+ * - `prototype.merge-refused` and `prototype.promotion-refused` are the audit
+ *   trail of the refusals F5.2/F5.4 demand: a refusal nobody can read back is
+ *   prose, not mechanism.
+ */
+export const PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE = "prototype.variants-created";
+/** A merge-bound status flip refused because the item is a prototype (F5.2). */
+export const PROTOTYPE_MERGE_REFUSED_EVENT_TYPE = "prototype.merge-refused";
+/** A winning variant's mini-PRD handed to the plan lane (F5.3). */
+export const PROTOTYPE_PROMOTED_EVENT_TYPE = "prototype.promoted";
+/** A promotion refused by the tier ratchet (F5.4). */
+export const PROTOTYPE_PROMOTION_REFUSED_EVENT_TYPE = "prototype.promotion-refused";
+/** A variant's workspace disposed of, winner or loser (F5.3). */
+export const PROTOTYPE_DISPOSED_EVENT_TYPE = "prototype.disposed";
+
+/**
  * Every event type a nahel COMMAND records for itself: the record mutations
  * mutate() journals, the config replacement `config set` journals, and the
  * dispatch bracket `dispatch` journals. `nahel log` refuses all of them, and
@@ -85,4 +108,9 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   [IMPORT_NOTE_EVENT_TYPE, "`nahel import`"],
   [IMPORT_PRD_RELOCATED_EVENT_TYPE, "`nahel import`"],
   [DISTILLED_EVENT_TYPE, "`nahel distill`"],
+  [PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE, "`nahel prototype`"],
+  [PROTOTYPE_PROMOTED_EVENT_TYPE, "`nahel prototype`"],
+  [PROTOTYPE_PROMOTION_REFUSED_EVENT_TYPE, "`nahel prototype`"],
+  [PROTOTYPE_DISPOSED_EVENT_TYPE, "`nahel prototype`"],
+  [PROTOTYPE_MERGE_REFUSED_EVENT_TYPE, "`nahel item`"],
 ]);

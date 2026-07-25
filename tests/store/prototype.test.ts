@@ -132,6 +132,21 @@ describe("seedVariant — one throwaway workspace per variant (F5.1)", () => {
     expect(await exists(worktree)).toBe(false);
   });
 
+  test("refuses a worktree INSIDE the repo — that is one `git add -A` from the forbidden merge", async () => {
+    const root = await makeRepo();
+
+    await expect(
+      seedVariant(root, {
+        branch: prototypeBranch("speed-count", 1),
+        worktree: join(root, "prototypes/variant-1"),
+        prd: prototypeMiniPrdPath("speed-count", 1),
+        content: "x",
+      }),
+    ).rejects.toThrow(PrototypeError);
+    expect(git(root, "branch", "--list", "prototype/speed-count/variant-1").trim()).toBe("");
+    expect(await exists(join(root, "prototypes/variant-1"))).toBe(false);
+  });
+
   test("refuses an occupied worktree path", async () => {
     const root = await makeRepo();
     const worktree = `${root}-variant-1`;
@@ -243,6 +258,9 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     });
     git(worktree, "add", "-A");
     git(worktree, "commit", "-m", "throwaway implementation");
+    // The main tree commits its durable mini-PRD copy first, as a real repo does.
+    git(root, "add", "-A");
+    git(root, "commit", "-m", "record the variant mini-PRD");
     git(root, "merge", "--no-edit", "prototype/speed-count/variant-1");
 
     const scan = await scanPrototypeRefs(root);

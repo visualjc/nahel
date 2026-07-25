@@ -63,7 +63,10 @@ set -e
 # - Jest: lines like "  ● <test name>" or "FAIL <path>"
 # - Vitest: similar "❯" or "FAIL"
 # - generic: "✗" or "FAIL"
-FAILURES=$(grep -E '^\s*(●|FAIL |✗|❯ FAIL )' "$RAW" 2>/dev/null \
+# `|| true` guards grep's exit-1-on-no-match: under `set -euo pipefail` a
+# fully green test run (nothing to match) must not abort before the JSON
+# is written (bug 0k83q678).
+FAILURES=$({ grep -E '^\s*(●|FAIL |✗|❯ FAIL )' "$RAW" 2>/dev/null || true; } \
              | sed 's/"/\\"/g' \
              | awk '{printf "    \"%s\",\n", $0}' \
              | sed '$ s/,$//')

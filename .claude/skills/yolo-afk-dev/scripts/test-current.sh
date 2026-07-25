@@ -45,7 +45,10 @@ echo "===== TEST CMD: $TEST_CMD =====" >"$RAW"
 TEST_EXIT=$?
 set -e
 
-CURRENT_FAILURES=$(grep -E '^\s*(●|FAIL |✗|❯ FAIL )' "$RAW" 2>/dev/null | sort -u)
+# `|| true` guards grep's exit-1-on-no-match: under `set -euo pipefail` a
+# fully green test run (nothing to match) must not abort before the JSON
+# is written (bug 0k83q678).
+CURRENT_FAILURES=$({ grep -E '^\s*(●|FAIL |✗|❯ FAIL )' "$RAW" 2>/dev/null || true; } | sort -u)
 
 # Extract baseline failures (one per line) for set ops
 BASELINE_FAILURES=$(jq -r '.failures[]' "$BASELINE" 2>/dev/null | sort -u || true)

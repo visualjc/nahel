@@ -1,0 +1,2 @@
+{"id":"2taw1mny","ts":"2026-07-25T17:01:30Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"fzdzssc0","payload":{"target":"item","record":{"id":"fzdzssc0","name":"governance-qualifiers-delegated-approval","type":"feature","status":"backlog","lane":"direct","parent":"f6kwws23","depends_on":["mwzxhxan"],"external_refs":[],"created":"2026-07-25T17:01:30Z","updated":"2026-07-25T17:01:30Z"},"body":""}}
+{"id":"4zatvrsp","ts":"2026-07-25T17:01:30Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

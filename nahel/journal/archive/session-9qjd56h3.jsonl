@@ -1,0 +1,2 @@
+{"id":"7dh1axqy","ts":"2026-07-25T17:01:29Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"89qr925p","payload":{"target":"item","record":{"id":"89qr925p","name":"review-loop-workflow","type":"feature","status":"backlog","lane":"direct","parent":"f6kwws23","depends_on":["mwzxhxan"],"external_refs":[],"created":"2026-07-25T17:01:29Z","updated":"2026-07-25T17:01:29Z"},"body":""}}
+{"id":"cx152frf","ts":"2026-07-25T17:01:29Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

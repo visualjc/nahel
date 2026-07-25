@@ -698,6 +698,22 @@ describe("schema/records — responsibility routing (F3.1, ADR-0015)", () => {
     );
   });
 
+  test("accepts an optional review2 second-reviewer slot beside review (F3.1)", () => {
+    // The review loop needs TWO reviewer vendors, and one `review` key can
+    // only name one. `review2` is the committed second slot — optional, so
+    // every map written before it existed stays valid.
+    expectAccepted(
+      configSchema,
+      withRouting({ review: { agent: "codex" }, review2: { agent: "claude" } }),
+      "routing review2",
+    );
+    expectAccepted(
+      configSchema,
+      withRouting({ review2: { agent: "claude", model: "claude-opus-4" } }),
+      "routing review2 alone",
+    );
+  });
+
   test("rejects a routing entry that sets neither agent nor model", () => {
     const issues = rejectionIssues(
       configSchema,

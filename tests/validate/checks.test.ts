@@ -545,6 +545,98 @@ describe("validate — merge-authority provenance (merge.unauthorized, F3.4)", (
   });
 });
 
+describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {
+  /** Commit a routing map straight into config — routing carries no provenance. */
+  async function setRouting(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    routing: Record<string, { agent?: string; model?: string }>,
+  ): Promise<void> {
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, { ...config, routing });
+  }
+
+  test("review and review2 naming the SAME vendor warns, naming both slots and the routing fix", async () => {
+    const fixture = await setupFixture(dirs);
+    await setRouting(fixture, { review: { agent: "codex" }, review2: { agent: "codex" } });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor");
+    console.log("[same-vendor review slots]", findings);
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("warning");
+    expect(finding.message).toContain("codex");
+    expect(finding.message).toContain("routing.review");
+    expect(finding.message).toContain("routing.review2");
+    // The bar it protects, stated so the reader knows why it matters.
+    expect(finding.message).toContain("two same-vendor reviews are not two reviewers");
+    expect(finding.fix).toContain("nahel config set routing");
+    expect(finding.fix).toContain("review2");
+    // Never an error: a single-vendor map is a setup fact, not corrupt state.
+    expect((await validateStore(fixture.layout)).filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  test("review and review2 naming DIFFERENT vendors is silent — that is the configuration the loop wants", async () => {
+    const fixture = await setupFixture(dirs);
+    await setRouting(fixture, {
+      implementation: { agent: "claude" },
+      review: { agent: "codex" },
+      review2: { agent: "claude" },
+      default: { agent: "claude" },
+    });
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+  });
+
+  test("the fall-through case warns: with neither review nor review2 set, both slots land on routing.default", async () => {
+    const fixture = await setupFixture(dirs);
+    await setRouting(fixture, { default: { agent: "claude" } });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("routing.default");
+    expect(findings[0]!.message).toContain("claude");
+  });
+
+  test("with review2 unset, slot 2 falls back to the driving vendor the map names — a different implementation agent is silent", async () => {
+    const fixture = await setupFixture(dirs);
+    // review-loop's pre-review2 rule, resolved from committed state: slot 2 is
+    // the vendor driving the loop, whom the map names under implementation.
+    await setRouting(fixture, {
+      implementation: { agent: "claude" },
+      review: { agent: "codex" },
+      default: { agent: "codex" },
+    });
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+  });
+
+  test("an unroutable or absent map produces no finding — dispatch's own refusal covers a missing route", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+
+    // A map that names no agent for either slot resolves to nothing; there is
+    // no vendor pair to compare, so inventing a warning here would be noise.
+    await setRouting(fixture, { architecture: { agent: "codex" } });
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+  });
+
+  test("a model-only review entry falls through to the agent the next key names", async () => {
+    const fixture = await setupFixture(dirs);
+    // `review` names a model but no agent — unspawnable (dispatch refuses it),
+    // so the vendor answering slot 1 is routing.default's, and it ties slot 2.
+    await setRouting(fixture, { review: { model: "gpt-5" }, default: { agent: "claude" } });
+    const findings = findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("routing.default");
+  });
+});
+
 describe("validate — PRD-approval consistency (item.prd-unapproved, ADR-0013)", () => {
   test("an active feature referencing a PRD whose authoring plan item is not done WARNS, naming both ids", async () => {
     const fixture = await setupFixture(dirs);

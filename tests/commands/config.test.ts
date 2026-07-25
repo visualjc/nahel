@@ -397,6 +397,27 @@ describe("canonical workflow docs driving config set (F4, F3.2)", () => {
     }
   });
 
+  test("inception.md asks about merge authority and writes it, with the sparingly guidance and the human-runs-it rule (F3.4)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    // F3.4 setup surface: founding is where merge authority gets decided, or
+    // it never gets decided at all and the project inherits a default nobody
+    // chose. The command is the doc's, verbatim.
+    expect(body).toContain("nahel config set merge --data authority=");
+    expect(body).toContain("human");
+    expect(body).toContain("on-approve");
+    // The guidance the PRD requires every surface writing this flag to carry.
+    expect(body).toContain("SPARINGLY");
+    expect(body).toContain("small items, or changes QA testing covers well");
+    // The default when the founder has no opinion — never inferred upward.
+    expect(body.toLowerCase()).toContain("default");
+    // Provenance: on-approve is the HUMAN's standing authorization, so an
+    // agent-run set is inert — the doc must say so where it is written, or a
+    // founding agent will helpfully set it and silently authorize nothing.
+    expect(body).toContain("the HUMAN runs");
+    expect(body).toContain("inert");
+    expect(body).toContain("merge.unauthorized");
+  });
+
   test("nahel/workflows/setup-routing.md is a valid canonical doc writing routing via the CLI", async () => {
     const { parsed, body } = await shippedWorkflow("setup-routing.md");
     expect(parsed.name).toBe("setup-routing");

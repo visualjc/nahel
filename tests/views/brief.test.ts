@@ -418,6 +418,31 @@ describe("renderBrief — responsibility routing (PRD F3, ADR-0015)", () => {
     expect(section).toContain("default: agent=claude-code model=claude-sonnet-4");
   });
 
+  test("the second review slot is surfaced when set, between review and default (F3.1)", () => {
+    // A reviewer slot nobody can see is a slot nobody honors: the loop reads
+    // both slots off this section, so review2 must render like any other key.
+    const brief = renderBrief(
+      makeInputs({
+        routing: {
+          review: { agent: "codex", model: "gpt-5" },
+          review2: { agent: "claude", model: "claude-opus-4" },
+          default: { agent: "claude" },
+        },
+      }),
+    );
+    const section = brief.split("== responsibility routing ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("review2: agent=claude model=claude-opus-4");
+    expect(section.indexOf("review2:")).toBeGreaterThan(section.indexOf("review:"));
+    expect(section.indexOf("default:")).toBeGreaterThan(section.indexOf("review2:"));
+  });
+
+  test("an unset review2 renders nothing — pre-review2 maps carry zero new noise", () => {
+    const brief = renderBrief(makeInputs({ routing: { review: { agent: "codex" } } }));
+    const section = brief.split("== responsibility routing ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain("review: agent=codex");
+    expect(section).not.toContain("review2");
+  });
+
   test("the routing block sits after knowledge and before item statuses", () => {
     const brief = renderBrief(makeInputs({ routing: { implementation: { agent: "codex" } } }));
     const knowledge = brief.indexOf("== knowledge & canonical truth ==");

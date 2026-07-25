@@ -241,6 +241,19 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     expect(body).toContain("nahel/workflows/epic-decompose.md");
   });
 
+  test("the delegated-approval decision record uses fixed --data keys and summary prefixes an auditor can grep (F2.2)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    // The three events a human auditing a delegated approval reads back are
+    // only findable if their shapes are FIXED. The Phase 1 docs (prd-new,
+    // prd-parse) name these same strings as what to look for, so a summary
+    // reworded here silently breaks an audit trail two other docs promise.
+    expect(body).toContain('summary="PRD proposed for delegated approval:');
+    expect(body).toContain("--data prd=docs/prds/<slug>.md");
+    expect(body).toContain("summary='PRD verification:");
+    expect(body).toContain("--data verdict=<agree|disagree>");
+    expect(body).toContain('summary="delegated approval (governance.product=delegated):');
+  });
+
   test("wave ordering is completion-then-dispatch, and every worker is spawned by nahel dispatch (F2.3)", async () => {
     const { body } = await shippedWorkflow("afk-run.md");
     // The bar: agent-reachable completion of EVERY declared dependency,
@@ -350,6 +363,21 @@ describe("review-loop canonical workflow doc (F3)", () => {
     expect(body).toContain("nahel/workflows/setup-routing.md");
   });
 
+  test("slot 2 resolves from routing.review2 when the map sets it, and falls back when it does not (F3.1)", async () => {
+    const { body } = await shippedWorkflow("review-loop.md");
+    // The committed second slot: a config key (not a fourth responsibility —
+    // ADR-0015's enum still carries one `review`), which is what makes the
+    // pairing checkable before the loop runs rather than only at runtime.
+    expect(body).toContain("routing.review2");
+    expect(body).toContain("routing.review-same-vendor");
+    expect(body).toContain("nahel validate");
+    expect(body).toContain("not a fourth responsibility");
+    // The fallback keeps every map written before review2 existed working.
+    expect(body).toContain("With `routing.review2` unset");
+    expect(body).toContain("routing.implementation");
+    expect(body).toContain("routing.default");
+  });
+
   test("every finding is validated against HEAD; stale ones are dismissed with a note, never fixed blind (F3.2)", async () => {
     const { body } = await shippedWorkflow("review-loop.md");
     // The round is bound to an exact revision, so "stale" is decidable.
@@ -427,5 +455,72 @@ describe("review-loop canonical workflow doc (F3)", () => {
     for (const claudeism of ["Claude", "Codex", "Task tool", "subagent", "slash command"]) {
       expect(body).not.toContain(claudeism);
     }
+  });
+});
+
+/**
+ * The governance qualifier the Phase 2 PRD scopes into F2.2: the Phase 1 docs
+ * state approval as "the human's decision" unconditionally, which is now only
+ * true under `governance.product: human`. These tests pin the qualifier, its
+ * hard boundary (plan-item approval ONLY), and the decision-event trail an
+ * auditor greps for — a doc that keeps the old absolute sentence would have a
+ * delegated runner either park work it is authorized to approve, or worse,
+ * read the exception as covering a leaf item's `done`.
+ */
+describe("governance qualifiers on the Phase 1 approval docs (F2.2)", () => {
+  test("prd-new.md: approval is human-owned under `human`, delegable under `delegated` per afk-run step 6", async () => {
+    const { body } = await shippedWorkflow("prd-new.md");
+    // The qualifier: the setting decides, and the brief is where it is read.
+    expect(body).toContain("governance.product");
+    expect(body).toContain("nahel brief");
+    // Under `human` the Phase 1 rule is untouched.
+    expect(body).toContain("Nothing about this step changes");
+    // Under `delegated` the consensus procedure is REFERENCED, never restated:
+    // one definition, in afk-run, so the two can never drift apart.
+    expect(body).toContain("cross-vendor consensus");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 6");
+    expect(body).toContain("never improvise a shorter one here");
+    // The boundary: plan-item approval only.
+    expect(body).toContain("PLAN-ITEM approval and nothing else");
+    expect(body).toContain("leaf-item `done` stays human-only");
+    expect(body.toLowerCase()).toContain("constitution amendments are never delegable");
+    // The audit trail, named by the exact strings afk-run journals.
+    expect(body).toContain("nahel progress --item");
+    expect(body).toContain("PRD proposed for delegated approval");
+    expect(body).toContain("delegated approval (governance.product=delegated)");
+    expect(body).toContain("verifies");
+    expect(body).toContain("is not an approval");
+  });
+
+  test("prd-parse.md: the gate is unchanged, but whose flip it is depends on governance.product", async () => {
+    const { body } = await shippedWorkflow("prd-parse.md");
+    expect(body).toContain("governance.product");
+    expect(body).toContain("unchanged");
+    expect(body).toContain("cross-vendor consensus");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 6");
+    expect(body).toContain("plan-item approval only");
+    // The gate itself never softens: `done`, or STOP.
+    expect(body).toContain("STOP");
+    // The audit trail, so a delegated `done` can be checked rather than trusted.
+    expect(body).toContain("nahel progress --item <plan-id>");
+    expect(body).toContain("PRD proposed for delegated approval");
+    expect(body).toContain("delegated approval (governance.product=delegated)");
+    expect(body).toContain("is not an approval");
+  });
+
+  test("task-lifecycle.md: leaf-item `done` stays human-only, auto-merge and delegated governance notwithstanding", async () => {
+    const { body } = await shippedWorkflow("task-lifecycle.md");
+    expect(body).toContain("even when the PR auto-merged under `merge: on-approve`");
+    expect(body).toContain("governance.product: delegated");
+    expect(body).toContain("plan-item approval only");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 6");
+  });
+
+  test("bug-lane.md: leaf-item `done` stays human-only, auto-merge and delegated governance notwithstanding", async () => {
+    const { body } = await shippedWorkflow("bug-lane.md");
+    expect(body).toContain("even when the PR auto-merged under `merge: on-approve`");
+    expect(body).toContain("governance.product: delegated");
+    expect(body).toContain("plan-item approval only");
+    expect(body).toContain("nahel/workflows/afk-run.md` step 6");
   });
 });

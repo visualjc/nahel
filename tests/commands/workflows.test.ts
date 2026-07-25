@@ -351,6 +351,185 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     expect(dispatchStep).toContain("paragraph");
     expect(dispatchStep).toContain("nahel/workflows/inception.md");
   });
+
+  /**
+   * F4 — verify-by-driving. The invariant that most wants to rot: it is the
+   * slowest step, the one a runner can convince itself the tests already
+   * cover, and the only one whose absence a green PR does not reveal. These
+   * tests pin the lane universality, the grep-able evidence shape, and the
+   * park-instead-of-skip outcome to exact prose.
+   */
+  const verifyStep = (body: string) =>
+    body.slice(body.indexOf("10. Verify by driving"), body.indexOf("11. Open ONE draft PR"));
+
+  test("verify-by-driving binds EVERY lane — direct included, least ceremony still drives or parks (F4.1)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = verifyStep(body);
+    expect(step.length).toBeGreaterThan(0);
+    // The per-lane statement, not a happy-path aside: the lane scales
+    // ceremony, never this. A `direct` one-liner is named explicitly because
+    // it is the lane a runner would talk itself out of driving.
+    expect(step).toContain("EVERY lane");
+    expect(step).toContain("`direct`-lane one-liner verifies exactly like a `full`-lane epic");
+    expect(step).toContain("Least ceremony still drives, or parks");
+    // Tests are not driving — the substitution the invariant exists to refuse.
+    expect(step).toContain("Tests passing is not driving");
+    // F4.1's three mechanics, in order: contract satisfied, app launched per
+    // the contract, THE CHANGED FLOW exercised with the host's tooling.
+    expect(step).toContain("nahel doctor");
+    expect(step).toContain("exits 0");
+    expect(step).toContain("launch");
+    expect(step).toContain("seed");
+    expect(step).toContain("CHANGED flow");
+  });
+
+  test("driving evidence has a fixed --data shape tying flow, tooling, run and verifying actor (F4.2)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = verifyStep(body);
+    // Evidence rides a run of the runner's own — the worker's dispatch run
+    // closed when it exited, and evidence tied to no run is unattributable.
+    expect(step).toContain("nahel run start <item-id>");
+    expect(step).toContain("nahel run update <run-id> --phase verify");
+    expect(step).toContain("nahel run end <run-id> success");
+    // Fixed keys, same discipline as step 6's delegated-approval record, so a
+    // human audits the claim by grepping rather than by re-running it.
+    expect(step).toContain('summary="verified by driving:');
+    expect(step).toContain("--data flow=");
+    expect(step).toContain("--data tooling=");
+    expect(step).toContain("--data lane=<direct|epic-lite|full>");
+    expect(step).toContain("--item <item-id> --run <run-id>");
+    // Attribution and audit-without-re-running are stated, not implied.
+    expect(step).toContain("VERIFYING ACTOR");
+    expect(step).toContain("NAHEL_ACTOR");
+    expect(step).toContain("WITHOUT re-running");
+    // A flow driven and observed to fail is a finding, never a PR.
+    expect(step).toContain("failure");
+    expect(step).toContain("never open the PR on a flow you watched fail");
+  });
+
+  test("a host that cannot drive parks with an actionable reason — never a silent skip (F4.3)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = verifyStep(body);
+    // The three triggers the PRD names, each recognizable to a runner.
+    expect(step).toContain("no driving tooling");
+    expect(step).toContain("headless transport");
+    expect(step).toContain("incomplete contract env");
+    // The park is a real park: blocked status + reason, per step 12.
+    expect(step).toContain("nahel item update <item-id> --status blocked");
+    expect(step).toContain('summary="parked: cannot verify by driving');
+    expect(step).toContain("--data park=cannot-drive");
+    // Evidence-or-park is exhaustive: there is no third outcome.
+    expect(step).toContain("silent skip");
+    expect(step).toContain("EITHER journaled driving evidence OR a park");
+  });
+
+  test("the PR body links each item's driving evidence, and an undriven epic gets no PR (F4.2, F4.3)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const prStep = body.slice(body.indexOf("11. Open ONE draft PR"), body.indexOf("12. Park anything"));
+    expect(prStep.length).toBeGreaterThan(0);
+    // Step 11's trail list must name the driving evidence and cite it by
+    // event id — a PR body that only asserts verification is unauditable.
+    expect(prStep).toContain("verify-by-driving evidence from step 10");
+    expect(prStep).toContain("journal event ids");
+    expect(prStep).toContain("verifying actor");
+    // The AC's teeth: no evidence and no park means no PR.
+    expect(prStep).toContain("does not get a PR");
+  });
+
+  /**
+   * F6 — intervention. A human reaching into a running AFK loop is the one
+   * moment where "the agent kept going" is a safety failure, not a virtue.
+   * These tests pin the checkpoint boundaries, the stand-down mechanics, the
+   * no-kill rule with the exact commands claim enforcement actually permits,
+   * and resumption from state alone.
+   */
+  const checkpointStep = (body: string) =>
+    body.slice(body.indexOf("3. The checkpoint check"), body.indexOf("4. Discover scope"));
+
+  test("the checkpoint check runs before EVERY dispatch, phase transition and PR open (F6.1)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = checkpointStep(body);
+    expect(step.length).toBeGreaterThan(0);
+    // All three boundaries named in the definition itself.
+    expect(step).toContain("before every dispatch");
+    expect(step).toContain("phase transition");
+    expect(step).toContain("before every PR open");
+    // Checking once at the top of a run is the failure mode; say so.
+    expect(step).toContain("Checking once at the top of the run is not checking");
+    // And the steps that own those boundaries each point back at it, so the
+    // rule cannot be honored in the abstract and skipped in the concrete.
+    for (const marker of [
+      "7. Order the work into waves",
+      "8. Dispatch the worker",
+      "9. Review.",
+      "10. Verify by driving",
+      "11. Open ONE draft PR",
+    ]) {
+      const start = body.indexOf(marker);
+      expect(start).toBeGreaterThan(0);
+      const end = body.indexOf("\n\n1", start + marker.length);
+      expect(body.slice(start, end === -1 ? undefined : end)).toContain("checkpoint check (step 3)");
+    }
+  });
+
+  test("a claim triggers clean stand-down while the run continues elsewhere (F6.1)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = checkpointStep(body);
+    // Subtree coverage: an ancestor's claim binds the child.
+    expect(step).toContain("any ancestor's");
+    expect(step).toContain("whole subtree");
+    // "Clean" is spelled out: nothing further started AND nothing already
+    // started finished, no PR, no provoked refusals.
+    expect(step).toContain("start nothing further on it, finish nothing already started on it");
+    expect(step).toContain("open no PR for it");
+    // Journaled with a grep-able shape naming the checkpoint and the claim.
+    expect(step).toContain('summary="stood down at checkpoint: claimed by <claimant>"');
+    expect(step).toContain("--data checkpoint=<dispatch|phase|pr-open>");
+    expect(step).toContain("--data claim=");
+    // The run does not end: other items carry on.
+    expect(step).toContain("a claim on one item never ends the run");
+    // A paused run stops dispatching from the pause onward — zero, not one more.
+    expect(step).toContain("zero further dispatches");
+    expect(step).toContain("run.paused");
+  });
+
+  test("no process killing: the worker exits naturally and the RUNNER journals it, claim-exempt (F6.2)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = checkpointStep(body);
+    expect(step).toContain("Never kill a worker");
+    expect(step).toContain("no kill, no terminate, no interrupt mid-write");
+    expect(step).toContain("NATURAL exit");
+    // The mechanics, matching what the store actually enforces: `nahel run
+    // end` is refused under a claim (mutate()'s claim check), while notes are
+    // claim-exempt — so the runner journals, and never forces the run closed.
+    expect(step).toContain("`nahel run end` on it is refused");
+    expect(step).toContain("notes are claim-exempt");
+    expect(step).toContain("nahel log note --item <item-id> --run <run-id>");
+    expect(step).toContain('summary="worker exited naturally under claim:');
+    expect(step).toContain("--data exit=");
+    expect(step).toContain("--data output=");
+    // The claimed run stays paused/claimed — the preserved state IS the proof.
+    expect(step).toContain("stays `paused` and claimed rather than force-ended");
+    // The recorded output is for the human, not for building on.
+    expect(step).toContain("never merged, never built on");
+  });
+
+  test("handback resumes from state alone, including the human's changes (F6.3)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = checkpointStep(body);
+    // The human's verb, and the event that carries the delta.
+    expect(step).toContain("nahel handback");
+    expect(step).toContain("item.handback");
+    // Deterministic evidence the store actually records on that event.
+    expect(step).toContain("commits since the claim baseline");
+    expect(step).toContain("diff summary");
+    // No prior-session memory required — the whole point of F6.3.
+    expect(step).toContain("nahel progress --item <item-id>");
+    expect(step).toContain("NO memory of the claim");
+    // Re-reading changes what gets dispatched next, or the resume is theatre.
+    expect(step).toContain("Re-read before you re-dispatch");
+    expect(step).toContain("not what you remember");
+  });
 });
 
 /**

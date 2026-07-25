@@ -45,7 +45,7 @@ steps below with the drafts as your starting answers.
    Write them into the constitution document (config `knowledge.product`,
    PRODUCT.md by convention). The constitution is the human's: read it back
    and get explicit sign-off. That sign-off is RECORDED, not remembered — it
-   is written with the tier (step 7, or step 12 at standard tier), and the
+   is written with the tier (step 8, or step 13 at standard tier), and the
    HUMAN runs that command themselves. An agent-attributed signature gates
    nothing: the autonomy gate reads the actor of the act that wrote it.
 3. Governance: ask who owns product and architecture legislation — `human`
@@ -62,22 +62,36 @@ steps below with the drafts as your starting answers.
        nahel config set governance \
          --data product=delegated --data architecture=human
 
-4. Glossary seed: put the domain terms the interview surfaced (aim for 3–10)
+4. Merge authority: ask who merges a reviewed PR — `human` (the default
+   everywhere: the PR waits for a person) or `on-approve` (reviewer sign-off
+   merges). `on-approve` is an opt-in to use SPARINGLY —
+   small items, or changes QA testing covers well; when the founder shrugs,
+   the answer is `human`. Record it explicitly, so the authority is state
+   rather than an inferred default:
+
+       nahel config set merge --data authority=<human|on-approve>
+
+   For `on-approve` the HUMAN runs that command themselves: the committed
+   flip IS their standing authorization, so an agent-run set authorizes
+   nothing — `nahel brief` renders it inert, the review loop behaves as
+   `merge: human`, and `nahel validate` warns (`merge.unauthorized`).
+
+5. Glossary seed: put the domain terms the interview surfaced (aim for 3–10)
    into the glossary document (config `knowledge.context`, CONTEXT.md by
    convention) — exact meanings, not prose.
-5. Run contract stub: how does the app launch, seed, and test? Best-known
+6. Run contract stub: how does the app launch, seed, and test? Best-known
    commands are fine at seed tier — `nahel doctor` proves them later, and a
    wrong stub found by doctor beats no stub at all:
 
        nahel config set contract \
          --data launch="<command>" --data seed="<command>" --data test="<command>"
 
-6. First work: capture what founding surfaced as at least one `plan` item —
+7. First work: capture what founding surfaced as at least one `plan` item —
    backlog truth beats memory:
 
        nahel item new plan <slug> direct
 
-7. Record the tier — and the constitution signature with it. Both go
+8. Record the tier — and the constitution signature with it. Both go
    in the SAME command: `config set` replaces the whole section, so a later
    tier write that omits the signature erases it. The human runs this
    themselves; their actor on the journaled act is what the autonomy gate
@@ -88,21 +102,21 @@ steps below with the drafts as your starting answers.
 
 ## Standard tier
 
-Steps 1–6 at full depth (constitution grilled hard, contract complete, no
+Steps 1–7 at full depth (constitution grilled hard, contract complete, no
 stubs), then:
 
-8. ADR seeding: record each founding architecture decision — context,
+9. ADR seeding: record each founding architecture decision — context,
    decision, consequences, one document per decision — under the config
    `knowledge.adr` directory, numbered sequentially.
-9. Routing: run the setup-routing workflow (`nahel/workflows/setup-routing.md`)
-   to detect the available agent CLIs and write the responsibility map.
-10. Run contract, proven: complete launch/seed/test plus healthcheck, ports,
+10. Routing: run the setup-routing workflow (`nahel/workflows/setup-routing.md`)
+    to detect the available agent CLIs and write the responsibility map.
+11. Run contract, proven: complete launch/seed/test plus healthcheck, ports,
     and required env var NAMES (values stay in gitignored env files, never in
     state), then prove it — `nahel doctor` must exit 0 on this machine.
-11. Initial decomposition: turn the goal into first real work items with
+12. Initial decomposition: turn the goal into first real work items with
     `parent`/`depends_on` edges (`nahel item new`, `nahel item update`) so
     the backlog is actionable, not one vague item.
-12. Record the tier and the signature together, as in step 7 — the human runs
+13. Record the tier and the signature together, as in step 8 — the human runs
     it:
 
         nahel config set inception \

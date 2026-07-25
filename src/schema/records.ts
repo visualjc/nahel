@@ -263,7 +263,19 @@ export type RoutingEntry = z.infer<typeof routingEntrySchema>;
 
 /**
  * Responsibility routing — `config.routing` (PRD F3, ADR-0015): a fixed enum
- * of responsibilities mapped to `{agent, model}` preferences, plus a default.
+ * of responsibilities mapped to `{agent, model}` preferences, plus two keys
+ * that are NOT responsibilities — `default` (what an unrouted responsibility
+ * falls back to) and `review2`.
+ *
+ * `review2` is F3.1's "second review slot" design call: the review loop needs
+ * two reviewer VENDORS and one `review` key can only name one, so the second
+ * slot is a config key rather than a fourth enum member — ADR-0015's
+ * vocabulary discipline holds, `nahel dispatch review2` stays refused, and the
+ * loop's driver fills the slot under its own actor. Naming it in committed
+ * state is what lets `nahel validate` catch a same-vendor pairing before a run
+ * discovers it; optional, so every map written before it existed stays valid
+ * (the loop then falls back to its runtime rule).
+ *
  * Strict: unknown responsibilities are rejected so the vocabulary stays a
  * deliberate schema change, never an accidental typo. Advisory in Phase 1
  * (surfaced by `nahel brief`); enforced by Phase 2 dispatch.
@@ -272,6 +284,7 @@ export const routingSchema = z.strictObject({
   architecture: routingEntrySchema.optional(),
   implementation: routingEntrySchema.optional(),
   review: routingEntrySchema.optional(),
+  review2: routingEntrySchema.optional(),
   default: routingEntrySchema.optional(),
 });
 export type Routing = z.infer<typeof routingSchema>;

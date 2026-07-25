@@ -39,11 +39,24 @@ merge around a claim.
      dispatch resolves it: the responsibility route first, then
      `routing.default`. This reviewer is SPAWNED (step 3a), so its findings
      and its verdict land under its own actor.
-   - **Slot 2 — the second reviewer.** The responsibility enum (ADR-0015)
-     carries one `review` key, so the second slot is not a second enum key: it
-     is the OTHER vendor the same map already names for this work — the vendor
-     driving this loop, whose id the map names under `routing.implementation`
-     or `routing.default`. You review under your own actor (step 3b).
+   - **Slot 2 — the second reviewer.** `routing.review2` when the map sets it:
+     an optional `{agent, model}` entry naming this slot's vendor outright, so
+     the pairing is checkable from committed state — `nahel validate` warns
+     (`routing.review-same-vendor`) when both slots land on one vendor, before
+     a run discovers it the expensive way. It is a routing KEY,
+     not a fourth responsibility: the ADR-0015 enum still carries one
+     `review`, and
+     `nahel dispatch review2` is refused. You review this slot under your own
+     actor (step 3b), so the vendor driving this loop must BE
+     `routing.review2`'s agent; a different driver is the wrong driver for
+     this loop — park (step 11) rather than reviewing as a vendor the slot
+     does not name.
+
+     With `routing.review2` unset — every map written before it existed — slot
+     2 falls back to the OTHER vendor the same map already names for this
+     work: the vendor driving this loop, whose id the map names under
+     `routing.implementation` or `routing.default`. Same bar, resolved at
+     runtime instead of from config.
 
    Then compare the two VENDORS — the agent ids, not the models:
 
@@ -282,8 +295,9 @@ merge around a claim.
     the brief's pending human decisions, and the reason is what makes it
     actionable.
 
-    Park, never ask, on: both reviewer slots resolving to one vendor; a slot
-    that will not review; the three-round cap with anything unresolved; a
+    Park, never ask, on: both reviewer slots resolving to one vendor; a
+    `routing.review2` naming a vendor other than the one driving this loop; a
+    slot that will not review; the three-round cap with anything unresolved; a
     merge under `merge: human`; a `merge: on-approve` the brief marks inert;
     and a claim standing over the item.
 

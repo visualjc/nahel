@@ -74,10 +74,18 @@ function requireResponsibility(value: string): RoutingResponsibility {
     return value as RoutingResponsibility;
   }
   const known = ROUTING_RESPONSIBILITIES.join(", ");
-  if (value === "default") {
+  // The two routing keys that are not responsibilities: `default` is what an
+  // unrouted responsibility falls back TO, and `review2` names the review
+  // loop's second reviewer slot — a slot the loop's driver fills under its own
+  // actor, so nothing ever spawns it (PRD F3.1, ADR-0015's enum discipline).
+  if (value === "default" || value === "review2") {
+    const role =
+      value === "default"
+        ? "an unrouted responsibility falls back to routing.default"
+        : "routing.review2 names the review loop's second reviewer slot, which its driver fills itself";
     throw new UsageError(
-      `"default" is the routing map's fallback KEY, not a dispatchable responsibility — ` +
-        `dispatch one of: ${known} (an unrouted responsibility falls back to routing.default)`,
+      `"${value}" is a routing map KEY, not a dispatchable responsibility — ` +
+        `dispatch one of: ${known} (${role})`,
     );
   }
   throw new UsageError(

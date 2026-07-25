@@ -423,10 +423,18 @@ describe("nahel dispatch — usage surface", () => {
     }
   });
 
-  test("`default` is a fallback key, not a dispatchable responsibility", async () => {
+  test("`default` and `review2` are routing keys, not dispatchable responsibilities", async () => {
     const repo = await setup();
     expect(await dispatch(repo, ["default", "--", "work"])).toBe(1);
     expect(errs.join("\n")).toContain("default");
+    errs = [];
+    // review2 names the review loop's second slot, which its driver fills
+    // under its own actor — dispatch spawning it would make one vendor two.
+    expect(await dispatch(repo, ["review2", "--", "work"])).toBe(1);
+    const message = errs.join("\n");
+    console.log("[review2 not dispatchable]", message);
+    expect(message).toContain("review2");
+    expect(message).toContain("second reviewer slot");
   });
 
   test("a dispatch with no task args is refused, naming the `--` form", async () => {

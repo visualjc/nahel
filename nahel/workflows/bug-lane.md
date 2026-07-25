@@ -72,7 +72,10 @@ Before any `nahel` command: if you are an agent, set
        nahel item update <item-id> --status in-review
 
    `done` is not yours to grant — a bug reaches it only at the human's word,
-   and only carrying its repro test or its surfaced waiver.
+   and only carrying its repro test or its surfaced waiver. Human-only with
+   no exception — even when the PR auto-merged under `merge: on-approve`,
+   and regardless of `governance.product: delegated`, which delegates
+   plan-item approval only (`nahel/workflows/afk-run.md` step 6).
 
 Fallback (degraded environment): if the `nahel` CLI is unavailable, the
 diagnosis, the investigation doc, and the repro test may all proceed — they

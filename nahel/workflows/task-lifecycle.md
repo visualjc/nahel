@@ -66,7 +66,11 @@ that this work is theirs.
    A failed attempt still closes: `nahel run end <run-id> failure` — an
    abandoned `active` run is a lie in the state. `done` is not yours to
    grant: the item flips to `done` only after the human merges or accepts
-   the work.
+   the work. Human-only with no exception:
+   even when the PR auto-merged under `merge: on-approve`, merging is a
+   repository act and accepting the work is the human's; and
+   `governance.product: delegated` delegates plan-item approval only
+   (`nahel/workflows/afk-run.md` step 6), never a leaf item's `done`.
 
 6. Confirm the shape: `nahel status` — the run closed, the item
    `in-review` (or `blocked` with its journaled reason).

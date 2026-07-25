@@ -195,13 +195,22 @@ function mergeLine(status: MergeAuthorityStatus): string {
 /**
  * Optional routing section body (PRD F3, ADR-0015): each CONFIGURED
  * responsibility on its own line with its agent/model, in the schema's enum
- * order. Null when nothing is configured — the section is then omitted
- * entirely, so an unconfigured project's brief carries zero routing noise.
+ * order, followed by the two non-responsibility keys — `review2` (the review
+ * loop's second reviewer slot, F3.1) and `default`. A slot nobody can see is a
+ * slot nobody honors: the loop resolves both reviewers off this section. Null
+ * when nothing is configured — the section is then omitted entirely, so an
+ * unconfigured project's brief carries zero routing noise.
  */
 function routingBody(routing: Config["routing"]): string | null {
   if (routing === undefined) return null;
   const lines: string[] = [];
-  for (const responsibility of ["architecture", "implementation", "review", "default"] as const) {
+  for (const responsibility of [
+    "architecture",
+    "implementation",
+    "review",
+    "review2",
+    "default",
+  ] as const) {
     const entry = routing[responsibility];
     if (entry === undefined) continue;
     const parts: string[] = [];

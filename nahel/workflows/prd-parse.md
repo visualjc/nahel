@@ -16,8 +16,24 @@ Before any `nahel` command: if you are an agent, set
 
 1. Check the gate. Find the plan item whose `prd` field names
    `docs/prds/<slug>.md` (`nahel status` shows `prd=` on item lines). Its
-   status must be `done` — the human's approval flip (ADR-0013). If it is
-   not, STOP and say so: parsing an unapproved PRD skips the human gate.
+   status must be `done` — the approval flip (ADR-0013). If it is not,
+   STOP and say so: parsing an unapproved PRD skips the gate.
+
+   Whose flip that is depends on the project's `governance.product`
+   (`nahel brief`): under `human` it is the human's, unchanged; under
+   `delegated` — also how a project that declared no governance behaves —
+   a runner may have granted it by the cross-vendor consensus
+   `nahel/workflows/afk-run.md` step 6 defines. The exception covers
+   plan-item approval only, and the gate is identical either way: `done`,
+   or STOP.
+
+   Audit a delegated flip in `nahel progress --item <plan-id>`: the proposal
+   ("PRD proposed for delegated approval"), the verification under ANOTHER
+   vendor's actor, and the decision
+   ("delegated approval (governance.product=delegated)") whose `proposal`
+   and `verification` link the two. A `done` an agent flipped with neither
+   that trail nor a human's word is not an approval — treat it as
+   unapproved and say so.
 
 2. Read the PRD end to end, then verify its scope against the actual code:
    what already exists, which surfaces the requirements touch, the real

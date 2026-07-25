@@ -106,6 +106,52 @@ export function resolveRoute(
   return { responsibility, agent: entry.agent, model: entry.model, via };
 }
 
+/** One review slot's answer: the vendor agent, and the config key that named it. */
+export interface ResolvedReviewSlot {
+  agent: string;
+  /** The config key that answered — `routing.review2`, `routing.default`, … */
+  via: string;
+}
+
+/** Both reviewer slots the review loop compares, resolved from committed config. */
+export interface ResolvedReviewSlots {
+  slot1: ResolvedReviewSlot;
+  slot2: ResolvedReviewSlot;
+}
+
+/**
+ * Resolve the review loop's TWO reviewer slots from the committed map
+ * (PRD F3.1) — the same chains `nahel/workflows/review-loop.md` step 1 walks,
+ * so a warning here and the loop's own refusal can never disagree:
+ *
+ *   slot 1 — `routing.review`, then `routing.default` (dispatch's chain: this
+ *            reviewer is spawned).
+ *   slot 2 — `routing.review2` when the map sets it; otherwise the vendor
+ *            DRIVING the loop, whom the map names under
+ *            `routing.implementation` or `routing.default`. Slot 2 is never
+ *            dispatched — its driver reviews under its own actor — which is
+ *            why `review2` is a routing key rather than a responsibility.
+ *
+ * Entries naming a model but no agent answer nothing: a vendor is an agent id,
+ * and an agentless entry is unspawnable anyway (resolveRoute refuses it). A
+ * slot that resolves to no agent at all makes the pair unanswerable, so this
+ * returns undefined rather than guessing — a missing route is dispatch's
+ * refusal to report, not a cross-vendor finding.
+ */
+export function resolveReviewSlots(routing: Routing | undefined): ResolvedReviewSlots | undefined {
+  const first = (keys: readonly (keyof Routing)[]): ResolvedReviewSlot | undefined => {
+    for (const key of keys) {
+      const agent = routing?.[key]?.agent;
+      if (agent !== undefined) return { agent, via: `routing.${key}` };
+    }
+    return undefined;
+  };
+  const slot1 = first(["review", "default"]);
+  const slot2 = first(["review2", "implementation", "default"]);
+  if (slot1 === undefined || slot2 === undefined) return undefined;
+  return { slot1, slot2 };
+}
+
 /**
  * Resolve an agent kind to its invocation spec (F1.3): the shipped default,
  * replaced wholesale by `config.dispatch.<kind>` when present. A kind nahel

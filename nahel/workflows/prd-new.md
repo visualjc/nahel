@@ -54,8 +54,34 @@ Before any `nahel` command: if you are an agent, set
        nahel item update <id> --prd docs/prds/<slug>.md
        nahel item update <id> --status in-review
 
-5. STOP at the gate. Approval is the human's decision, recorded as the plan
-   item's status flip to `done` — through the CLI, at their explicit word.
+5. STOP at the gate. Approval is recorded as the plan item's status flip to
+   `done`, through the CLI — and WHOSE word grants it is the project's
+   `governance.product` setting, which `nahel brief` renders under
+   "governance & merge authority":
+
+   - **`human`** — the flip is the human's decision, at their explicit word.
+     Nothing about this step changes.
+   - **`delegated`** (also how a project that declared no governance behaves)
+     — a plan item's approval may instead be granted by the
+     cross-vendor consensus `nahel/workflows/afk-run.md` step 6 defines:
+     a proposal, an independent verification by another vendor, and a
+     decision event linking the two. That procedure lives there and only
+     there — never improvise a shorter one here. This workflow still stops
+     regardless: an interview-authored PRD has a human in the room.
+
+   The exception covers PLAN-ITEM approval and nothing else:
+   leaf-item `done` stays human-only (task-lifecycle, bug-lane), and
+   constitution amendments are never delegable under either setting.
+
+   Auditing a delegated approval means reading three events back
+   (`nahel progress --item <id>`): the proposal, summarized
+   "PRD proposed for delegated approval" and carrying `revision` and
+   `assumptions`; the verification under ANOTHER vendor's actor, carrying
+   `verifies` and `verdict`; and the decision, summarized
+   "delegated approval (governance.product=delegated)", whose
+   `proposal` and `verification` name both. A `done` an agent flipped
+   without that trail is not an approval.
+
    Do not parse the PRD into feature items; that is the prd-parse workflow,
    and it waits for the flip.
 

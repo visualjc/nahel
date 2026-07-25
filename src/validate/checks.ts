@@ -1,5 +1,6 @@
 import YAML from "yaml";
 import type { z } from "zod";
+import { resolveReviewSlots } from "../dispatch/invocation";
 import { mergeAuthorityStatus, type MergeAuthorityStatus } from "../governance/authority";
 import {
   configSchema,
@@ -721,6 +722,39 @@ function checkMergeAuthority(state: ParsedState): Finding[] {
   ];
 }
 
+/**
+ * Cross-vendor review slots (PRD F3.1): the review loop demands two reviewer
+ * VENDORS, and `nahel/workflows/review-loop.md` step 1 refuses to count two
+ * same-vendor reviews as two — a refusal that lands mid-loop, after the work
+ * is done. Resolving both slots from committed config (routing.review2 made
+ * slot 2 nameable) moves that discovery to setup time, where the fix is one
+ * `config set` instead of a parked item.
+ *
+ * A WARNING, never an error: a single-vendor map is an honest state for a
+ * project that never runs the loop, and the loop itself still refuses. Silent
+ * it is not (hard constraint 6).
+ */
+function checkReviewSlots(state: ParsedState): Finding[] {
+  const routing = state.config?.routing;
+  if (routing === undefined) return [];
+  const slots = resolveReviewSlots(routing);
+  if (slots === undefined || slots.slot1.agent !== slots.slot2.agent) return [];
+  return [
+    {
+      severity: "warning",
+      check: "routing.review-same-vendor",
+      path: state.input.configPath,
+      message:
+        `both review slots resolve to the same vendor agent ${JSON.stringify(slots.slot1.agent)} ` +
+        `(slot 1 via ${slots.slot1.via}, slot 2 via ${slots.slot2.via}) — ` +
+        `two same-vendor reviews are not two reviewers, so the review loop refuses to sign off`,
+      fix:
+        "name a second vendor: `nahel config set routing` with a `review2` entry (or a `review` " +
+        "entry) whose agent differs from the other slot's — see nahel/workflows/setup-routing.md",
+    },
+  ];
+}
+
 /** Circular parent / depends_on detection; each cycle reported once. */
 function checkCycles(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -1408,6 +1442,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),
     ...checkMergeAuthority(state),
+    ...checkReviewSlots(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),

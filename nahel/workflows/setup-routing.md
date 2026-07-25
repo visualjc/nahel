@@ -29,6 +29,14 @@ Before any `nahel` command: if you are an agent, set
    cross-vendor review (one vendor implements, the other reviews) is worth
    proposing. Each entry names an `agent` (the CLI), a `model`, or both;
    omit a responsibility rather than inventing an empty entry.
+
+   With two vendors, name BOTH review slots: `review` is the reviewer the
+   loop spawns, and the optional `review2` names the second slot's vendor —
+   the one driving the loop, reviewing under its own actor
+   (`nahel/workflows/review-loop.md` step 1). Naming it makes the pairing
+   checkable: `nahel validate` warns (`routing.review-same-vendor`) when both
+   slots land on one vendor, which is a review loop that cannot sign
+   anything off.
 4. Confirm the proposal with the human, then write it as one replacement —
    `config set` swaps the whole section, so state every entry you intend
    to keep:
@@ -37,10 +45,14 @@ Before any `nahel` command: if you are an agent, set
          "architecture":   {"agent": "claude", "model": "<model>"},
          "implementation": {"agent": "claude"},
          "review":         {"agent": "codex"},
+         "review2":        {"agent": "claude"},
          "default":        {"agent": "claude"}
        }'
 
-   Only the responsibilities above exist — the CLI rejects any other key.
+   Only the keys above exist — the CLI rejects any other. `review2` and
+   `default` are slots rather than responsibilities: neither is dispatchable
+   (`nahel dispatch review2` is refused), so route work through
+   `architecture`, `implementation`, and `review`.
    An `agent` must be one `nahel dispatch` knows how to invoke — `claude`,
    `codex`, or `cursor-agent`; anything else (opencode today) is fine to
    detect and report, but routing to it makes dispatch refuse. A route with

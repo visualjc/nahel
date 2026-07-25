@@ -71,11 +71,19 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
     expect([...ROUTING_RESPONSIBILITIES]).toEqual(["architecture", "implementation", "review"]);
   });
 
-  test("the responsibility enum IS the routing schema's key set, plus default", () => {
+  test("the responsibility enum IS the routing schema's key set, plus the two slot keys", () => {
     // The enum is what `nahel dispatch <responsibility>` accepts; the schema is
     // what config may carry. Drift between them would let dispatch accept a
-    // responsibility config can't express (or vice versa).
-    expect(Object.keys(routingSchema.shape)).toEqual([...ROUTING_RESPONSIBILITIES, "default"]);
+    // responsibility config can't express (or vice versa). The two extra keys
+    // are deliberately NOT responsibilities: `default` is what an unrouted
+    // responsibility falls back to, and `review2` (F3.1) names the review
+    // loop's second reviewer slot — a slot its driver fills under its own
+    // actor, so nothing ever spawns it.
+    expect(Object.keys(routingSchema.shape)).toEqual([
+      ...ROUTING_RESPONSIBILITIES,
+      "review2",
+      "default",
+    ]);
   });
 
   test("dispatch agent kinds are exactly claude|codex|cursor-agent (F1.3)", () => {

@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T16:49:35Z
+updated: 2026-07-25T16:51:43Z
 ---
 
 # Phase 2 — AFK engine
@@ -175,7 +175,7 @@ The Phase 1 inception workflow's "mine first, interview second" posture (F4.2 th
 
 **Acceptance criteria**
 
-- [ ] A one-line project idea on an empty repo yields, via knowledge-first inception, a human-confirmed standard-tier founding (constitution signed, governance + run contract + glossary + initial plan items recorded) with the human's involvement limited to the confirm-and-correct interview — and an `afk-run` kickoff on that repo passes the F7 autonomy gate immediately afterward.
+- [ ] A one-line project idea on an empty repo yields, via knowledge-first inception, a human-confirmed standard-tier founding with the **complete F9.1 artifact set recorded in founded state** (constitution signed, governance config, glossary seed, seeded founding ADRs, routing map, actionable initial decomposition, run contract) — drafts alone do not satisfy this — with the human's involvement limited to the confirm-and-correct interview, and an `afk-run` kickoff on that repo passes the F7 autonomy gate immediately afterward.
 - [ ] The mining is provable, not just the timing: the journal carries the research-source citations (or the web-unavailable note) and shows the complete draft set recorded **before the first interview response**; the human's sign-off event is distinguishable from the drafting events.
 - [ ] On an empty repo the founding records `standard` with the journaled doctor-proof obligation; the AFK run discharges it (doctor exit 0, journaled) before its first verify-by-driving PR, and a run that never discharges it opens no PR (F9.3 + F4).
 - [ ] A new founding cut short before the artifact set is complete records `seed`, and the delegated-approval and promotion gates refuse accordingly; a cut-short re-founding of a `standard` project leaves the recorded tier at `standard`.

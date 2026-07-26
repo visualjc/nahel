@@ -50,7 +50,7 @@ Before any `nahel` command: if you are an agent, set
 5. Journal the decomposition on the parent:
 
        nahel log note --item <feature-id> \
-         --data body="Decomposed into <n> children: <slugs, in build order>"
+         --data summary="Decomposed into <n> children: <slugs, in build order>"
 
 Fallback (degraded environment): if the `nahel` CLI is unavailable, draft
 the decomposition — children, lanes, dependency edges — as notes for the

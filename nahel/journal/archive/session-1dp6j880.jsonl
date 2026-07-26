@@ -1,0 +1,2 @@
+{"id":"5w0b5ypw","ts":"2026-07-25T17:01:56Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"ybz73bp6","payload":{"target":"item","record":{"id":"ybz73bp6","name":"binary-distribution","type":"feature","status":"in-progress","lane":"direct","parent":"f6kwws23","depends_on":[],"external_refs":[],"created":"2026-07-25T17:01:29Z","updated":"2026-07-25T17:01:56Z"},"body":""}}
+{"id":"3phb0yvw","ts":"2026-07-25T17:01:56Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

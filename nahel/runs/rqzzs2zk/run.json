@@ -1,0 +1,13 @@
+{
+  "id": "rqzzs2zk",
+  "item": "89qr925p",
+  "actor": {
+    "kind": "agent",
+    "id": "claude-code"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-07-25T19:10:07Z",
+  "ended": "2026-07-25T19:22:54Z"
+}

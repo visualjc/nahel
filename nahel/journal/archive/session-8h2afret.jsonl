@@ -1,0 +1,2 @@
+{"id":"367h1j7h","ts":"2026-07-25T18:49:36Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"yc7cahha","payload":{"target":"item","record":{"id":"yc7cahha","name":"afk-run-workflow","type":"feature","status":"in-progress","lane":"direct","parent":"f6kwws23","depends_on":["mb6gxyk4","mwzxhxan","mzqsfat9"],"external_refs":[],"created":"2026-07-25T17:01:29Z","updated":"2026-07-25T18:49:36Z"},"body":""}}
+{"id":"zzmj60zt","ts":"2026-07-25T18:49:36Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

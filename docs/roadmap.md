@@ -137,6 +137,7 @@ Ordering principle: **AFK-first** — the autonomous team is the priority; human
 
 ## Deferred / open questions
 
+- **The roadmap layer (post-Phase-2 pivot)** — Jim's framing, 2026-07-25, deliberately loose (plan item `roadmap-layer`, `sp2yf32m`): software development has five critical parts — (1) product roadmaps → feature roadmaps, (2) development, (3) QA, (4) deployment, (5) marketing/communications — and nahel today covers only development deeply (QA is Phase 3). The layer above plan items — roadmap creation and management, the thing that *feeds* the PRD→Epic→Issue engine — is the next pivot once the core loop works end-to-end. Hands-off founding (Phase 2 F9) is its degenerate case; this document is itself a hand-written instance of what it would systematize. Deployment and marketing/comms are unexplored. Grill session required before any PRD.
 - **Two-way provider sync** — only if a human teammate materializes who lives in Linear/Jira.
 - **Consensus vendor set** — Codex is today's verifier; the consensus protocol should treat "which second vendor" as config, not architecture.
 - **Skills registry ambitions** — v1 is a manifest + lockfile; a real registry only if the ecosystem asks.

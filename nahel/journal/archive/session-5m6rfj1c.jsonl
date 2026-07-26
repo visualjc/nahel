@@ -1,0 +1,2 @@
+{"id":"bp4zaed0","ts":"2026-07-25T19:25:24Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"rgm43hvc","payload":{"target":"item","record":{"id":"rgm43hvc","name":"docs-log-note-body-key","type":"bug","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T19:25:17Z","updated":"2026-07-25T19:25:24Z"},"body":""}}
+{"id":"tf8bn9mn","ts":"2026-07-25T19:25:24Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

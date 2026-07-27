@@ -114,6 +114,60 @@ describe("store/dispatch — spawning a routed agent CLI", () => {
     expect(await Bun.file(join(dir, "pwned")).exists()).toBe(false);
   });
 
+  test("stdin is CLOSED, not an open pipe — a stdin-reading worker sees EOF instead of hanging (evqagdsd)", async () => {
+    // The codex regression from the Phase 2 exit test: `codex exec` reads
+    // stdin, and an inherited pipe that nobody writes and nobody closes
+    // blocks it forever — dispatch.started journaled, then silence. `cat`
+    // is the same shape: on an open pipe it never returns; on /dev/null it
+    // sees EOF immediately. If this test times out, the pipe is back.
+    const { dir, path } = await stub('cat\necho "done after eof"');
+    const result = await spawnDispatch({
+      binary: path,
+      args: [],
+      actorSpec: "agent:codex",
+      cwd: dir,
+    });
+    console.log("[stdin-eof]", result);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("done after eof");
+  }, 10_000);
+
+  test("the worker leads its OWN process group — a backgrounded dispatcher's teardown cannot reap it (evqagdsd)", async () => {
+    // Group leadership means pgid == pid: the `env` wrapper is detached into
+    // a new group and exec's the stub in place, so the stub's own pid IS the
+    // group id. In the dispatcher's group, a signal to that group (what a
+    // detached background shell's teardown delivers) would hit the worker.
+    const { dir, path } = await stub('pgid=$(ps -o pgid= -p $$)\necho "pid=$$ pgid=$pgid"');
+    const result = await spawnDispatch({
+      binary: path,
+      args: [],
+      actorSpec: "agent:codex",
+      cwd: dir,
+    });
+    console.log("[process-group]", result.stdout.trim());
+    const match = /pid=(\d+) pgid=\s*(\d+)/.exec(result.stdout);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe(match![2]);
+  });
+
+  test("a worker killed by a signal is a RESULT with the signal named, never a misdiagnosed spawn failure", async () => {
+    // The other half of the evqagdsd bracket guarantee: a worker that dies
+    // early must still hand the caller something to journal dispatch.ended
+    // with. Before, a signal death (no numeric exit code) was thrown as
+    // "could not spawn" — a misdiagnosis of a worker that demonstrably ran.
+    const { dir, path } = await stub('echo "partial work"\nkill -TERM $$');
+    const result = await spawnDispatch({
+      binary: path,
+      args: [],
+      actorSpec: "agent:claude",
+      cwd: dir,
+    });
+    console.log("[signal death]", result);
+    expect(result.signal).toBe("SIGTERM");
+    expect(result.exitCode).toBe(143);
+    expect(result.stdout).toContain("partial work");
+  });
+
   test("a missing agent binary surfaces as a diagnostic non-zero exit naming the binary", async () => {
     // The agent CLI is looked up like any command: absent, the wrapper exits
     // 127 and says so — the caller records the failed run and shows this.

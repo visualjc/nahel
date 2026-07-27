@@ -76,6 +76,8 @@ interface SetupOptions {
   workerMutates?: boolean;
   /** Exit code the stub worker exits with (default 0). */
   exitCode?: number;
+  /** Have the stub worker die to SIGTERM instead of exiting — evqagdsd's shape. */
+  workerDies?: boolean;
   /** Frontmatter overrides for the repo's work item. */
   item?: Partial<WorkItemFrontmatter>;
   /** Replace the committed config with arbitrary (possibly invalid) YAML. */
@@ -149,6 +151,9 @@ async function setup(options: SetupOptions = {}): Promise<Repo> {
       "    process.exit(90);",
       "  }",
       "}",
+      // A worker dying mid-run rather than exiting: the process kills itself,
+      // so dispatch sees a signal death, not an exit status (evqagdsd).
+      ...(options.workerDies === true ? ['process.kill(process.pid, "SIGTERM");'] : []),
       `process.exit(${options.exitCode ?? 0});`,
       "",
     ].join("\n"),
@@ -294,6 +299,28 @@ describe("nahel dispatch — spawns the routed agent CLI and records the run (F1
     console.log("[dispatch.ended]", ended?.payload);
     expect(ended?.payload["exit_code"]).toBe(3);
     expect(ended?.payload["outcome"]).toBe("failure");
+  });
+
+  test("a worker that DIES to a signal still gets its dispatch.ended and a closed run (evqagdsd)", async () => {
+    // The exit test's real failure: a codex worker that never came back left
+    // dispatch.started with no terminal event — a bracket the trail could
+    // never close. Every started dispatch must end, even when the worker
+    // dies instead of exiting.
+    const repo = await setup({ workerDies: true });
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "try"])).toBe(1);
+    console.log("[stderr]", errs.join("\n"));
+
+    const run = await onlyRun(repo.layout);
+    expect(run.status).toBe("ended");
+    expect(run.phase).toBe("failure");
+
+    const ended = await eventOfType(repo.layout, "dispatch.ended");
+    console.log("[dispatch.ended]", ended?.payload);
+    expect(ended).toBeDefined();
+    expect(ended!.payload["outcome"]).toBe("failure");
+    expect(ended!.payload["signal"]).toBe("SIGTERM");
+    expect(ended!.payload["exit_code"]).toBe(143);
+    expect(errs.join("\n")).toContain("killed by SIGTERM");
   });
 
   test("dispatching a claimed item is refused by the claim guard — and nothing is spawned", async () => {

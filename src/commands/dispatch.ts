@@ -217,7 +217,7 @@ async function journalEnd(
   args: DispatchArgs,
   route: ResolvedRoute,
   run: Run,
-  outcome: { outcome: string; exit_code?: number; error?: string },
+  outcome: { outcome: string; exit_code?: number; signal?: string; error?: string },
 ): Promise<void> {
   await appendEvent(ctx.layout, ctx.env, {
     type: DISPATCH_ENDED_EVENT_TYPE,
@@ -355,6 +355,9 @@ async function runDispatch(
   await journalEnd(ctx, args, route, run, {
     outcome,
     exit_code: result.exitCode,
+    // A worker that died to a signal never chose an exit status: the signal
+    // IS the outcome, journaled so the bracket closes honestly (evqagdsd).
+    ...(result.signal === undefined ? {} : { signal: result.signal }),
     ...(intervention === undefined
       ? {}
       : {
@@ -386,11 +389,14 @@ async function runDispatch(
     return 0;
   }
   console.error(
-    `❌ ${route.agent} exited ${result.exitCode} for ${what}${where}` +
-      (result.exitCode === NOT_FOUND_EXIT
-        ? ` — exit ${NOT_FOUND_EXIT} usually means the agent binary was not found: ` +
-          `check config.dispatch.${route.agent}.binary`
-        : ""),
+    result.signal !== undefined
+      ? `❌ ${route.agent} was killed by ${result.signal} for ${what}${where} — the worker ` +
+          `died before finishing; its output and the dispatch bracket are journaled`
+      : `❌ ${route.agent} exited ${result.exitCode} for ${what}${where}` +
+          (result.exitCode === NOT_FOUND_EXIT
+            ? ` — exit ${NOT_FOUND_EXIT} usually means the agent binary was not found: ` +
+              `check config.dispatch.${route.agent}.binary`
+            : ""),
   );
   return 1;
 }

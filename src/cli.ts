@@ -29,7 +29,13 @@ import { validateCommand } from "./commands/validate";
 import { systemEnv, type Env } from "./schema/env";
 import { NAHEL_ACTOR_VAR } from "./store/actor";
 
-export const VERSION = "0.1.0";
+import { version as VERSION } from "../package.json";
+
+/**
+ * The version is package.json's `version`, bundled into the binary at build
+ * time — one source of truth, so a release bumps exactly one place.
+ */
+export { VERSION };
 
 /** Everything a command may touch beyond its own argv — injected at the entry point. */
 export interface CommandContext {

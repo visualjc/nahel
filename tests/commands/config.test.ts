@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { configCommand, SETTABLE_CONFIG_SECTIONS } from "../../src/commands/config";
+import { readMergeAuthority } from "../../src/governance/authority";
 import type { JournalEvent } from "../../src/schema/records";
 import { listSegments, readJournal } from "../../src/store/journal";
 import { ensureLayout, readConfig, writeConfig, type StoreLayout } from "../../src/store/layout";
@@ -76,6 +77,109 @@ describe("nahel config set — writing optional sections", () => {
     expect(act.payload).toEqual({ section: "inception", value: { tier: "seed" } });
   });
 
+  test("records the constitution signature beside the tier — what the F7 autonomy gate reads", async () => {
+    const { root, layout, env } = await setup();
+    // F7.2: "human-signed" must be mechanically verifiable, so the signature
+    // is a schema-validated FIELD on the inception record, not a vibe about
+    // what the constitution document says. The gate reads two things: this
+    // field, and the actor of the config.updated act that wrote it — an
+    // agent-set signature authorizes nothing (the F3.4 merge precedent).
+    const code = await configCommand.run(
+      ["set", "inception", "--data", "tier=standard", "--data", "constitution_signed_by=jim"],
+      env,
+      root,
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).inception).toEqual({
+      tier: "standard",
+      constitution_signed_by: "jim",
+    });
+    const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
+    expect(errors).toEqual([]);
+
+    // The act carries the signer's provenance: section, value, and the actor
+    // the gate checks for kind `human`.
+    const act = (await journalEvents(layout)).find((event) => event.type === "config.updated")!;
+    expect(act.payload).toEqual({
+      section: "inception",
+      value: { tier: "standard", constitution_signed_by: "jim" },
+    });
+    expect(act.actor.kind).toBeDefined();
+
+    // An empty signature is not a signature: the schema refuses it, and the
+    // refusal leaves the previously recorded section untouched.
+    errs = [];
+    expect(
+      await configCommand.run(
+        ["set", "inception", "--data", "tier=standard", "--data", "constitution_signed_by="],
+        env,
+        root,
+      ),
+    ).toBe(1);
+    expect(errs.join("\n")).toContain("constitution_signed_by");
+    expect((await readConfig(layout)).inception).toEqual({
+      tier: "standard",
+      constitution_signed_by: "jim",
+    });
+  });
+
+  test("founding is settable here too — the conversational door of the mode capture (F9.4, HC5)", async () => {
+    const { root, layout, env } = await setup();
+    const paragraph = 'A "speed count" game for kids.\nPlayable one-handed.';
+    const code = await configCommand.run(
+      ["set", "founding", "--data", "mode=hands-off", "--data", `paragraph=${paragraph}`],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+
+    // Same state, same provenance shape as the `nahel init --hands-off`
+    // shortcut: neither door is privileged (hard constraint 5).
+    expect((await readConfig(layout)).founding).toEqual({ mode: "hands-off", paragraph });
+    const act = (await journalEvents(layout)).find(
+      (event) => event.type === "config.updated" && event.payload["section"] === "founding",
+    )!;
+    expect(act.actor).toEqual({ kind: "human", id: "jim" });
+    expect(act.payload["value"]).toEqual({ mode: "hands-off", paragraph });
+    const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
+    expect(errors).toEqual([]);
+  });
+
+  test("the JSON --data form preserves a paragraph the key=value dialect would trim", async () => {
+    // The shared `--data` dialect trims each entry (log/observe speak it too),
+    // so a paragraph whose leading/trailing whitespace is load-bearing must go
+    // through the JSON form — or through `nahel init --hands-off`, which never
+    // touches it. Recorded here because "verbatim" is the whole promise (F9.5).
+    const { root, layout, env } = await setup();
+    const paragraph = "  Two lines,\n  with outer space and a trailing newline.\n";
+    const code = await configCommand.run(
+      ["set", "founding", "--data", JSON.stringify({ mode: "hands-off", paragraph })],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).founding?.paragraph).toBe(paragraph);
+  });
+
+  test("a hands-off founding with no paragraph is refused — the paragraph IS the signed content", async () => {
+    const { root, layout, env } = await setup();
+    const before = await configBytes(layout);
+    const code = await configCommand.run(
+      ["set", "founding", "--data", "mode=hands-off"],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toContain("paragraph");
+    expect(await configBytes(layout)).toBe(before);
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
   test("sets governance from a JSON --data payload", async () => {
     const { root, layout, env } = await setup();
     const code = await configCommand.run(
@@ -125,17 +229,88 @@ describe("nahel config set — writing optional sections", () => {
     expect(config.actor).toEqual(makeConfig().actor);
   });
 
-  test("re-running the same set changes nothing: identical bytes, no new journal event", async () => {
+  test("re-running the same set writes identical bytes but journals the ACT again (acts repeat honestly)", async () => {
     const { root, layout, env } = await setup();
     expect(await configCommand.run(["set", "inception", "--data", "tier=standard"], env, root)).toBe(0);
     const bytes = await configBytes(layout);
-    const eventCount = (await journalEvents(layout)).length;
+    const first = (await journalEvents(layout)).filter((e) => e.type === "config.updated");
+    expect(first).toHaveLength(1);
 
     logs = [];
     expect(await configCommand.run(["set", "inception", "--data", "tier=standard"], env, root)).toBe(0);
-    expect(logs.join("\n")).toContain("unchanged");
+    // The committed value is byte-identical — the write is idempotent…
     expect(await configBytes(layout)).toBe(bytes);
-    expect((await journalEvents(layout)).length).toBe(eventCount);
+    // …but the journal records ACTS, not diffs: a byte-equal re-set is a second
+    // act, with its own actor. Swallowing it would make provenance repair
+    // (an agent-set section re-attributed to a human) a silent no-op.
+    const second = (await journalEvents(layout)).filter((e) => e.type === "config.updated");
+    expect(second).toHaveLength(2);
+    expect(second[1]!.payload).toEqual({ section: "inception", value: { tier: "standard" } });
+    expect(logs.join("\n")).toContain("inception");
+  });
+
+  test("a HUMAN re-setting the value an AGENT set repairs provenance — the validate fix actually works (F3.4)", async () => {
+    const { root, layout, env } = await setup();
+
+    // The agent's flip: schema-valid, committed, and inert — an agent cannot
+    // grant the human's standing merge authorization.
+    expect(
+      await configCommand.run(
+        ["set", "merge", "--data", "authority=on-approve"],
+        env,
+        root,
+        "agent:claude-code",
+      ),
+    ).toBe(0);
+    const inert = await readMergeAuthority(layout, await readConfig(layout));
+    console.log("[agent-set]", inert);
+    expect(inert.effective).toBe("human");
+    expect(inert.defect).toBe("agent-set");
+    expect(
+      (await validateStore(layout)).filter((f) => f.check === "merge.unauthorized"),
+    ).toHaveLength(1);
+
+    // The exact repair `nahel validate` prescribes: a HUMAN re-runs the SAME
+    // command with the SAME value. The config bytes do not change; the
+    // authorizing act does.
+    expect(
+      await configCommand.run(
+        ["set", "merge", "--data", "authority=on-approve"],
+        env,
+        root,
+        "human:jim",
+      ),
+    ).toBe(0);
+    const repaired = await readMergeAuthority(layout, await readConfig(layout));
+    console.log("[human re-set]", repaired);
+    expect(repaired.effective).toBe("on-approve");
+    expect(repaired.defect).toBeUndefined();
+    expect(repaired.setBy?.actor).toEqual({ kind: "human", id: "jim" });
+    expect((await validateStore(layout)).filter((f) => f.check === "merge.unauthorized")).toEqual(
+      [],
+    );
+  });
+
+  test("sets the merge authority, journaling the actor whose flip authorizes it (F3.4)", async () => {
+    const { root, layout, env } = await setup();
+    const code = await configCommand.run(
+      ["set", "merge", "--data", "authority=on-approve"],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).merge).toEqual({ authority: "on-approve" });
+
+    // The standing authorization IS this event: its actor is the provenance
+    // the review loop checks before merging anything.
+    const act = (await journalEvents(layout)).find((event) => event.type === "config.updated")!;
+    expect(act.payload).toEqual({ section: "merge", value: { authority: "on-approve" } });
+    expect(act.actor).toEqual({ kind: "human", id: "jim" });
+
+    const errors = (await validateStore(layout)).filter((f) => f.severity === "error");
+    expect(errors).toEqual([]);
   });
 
   test("the set's own session closes and archives — no active segments linger", async () => {
@@ -179,6 +354,21 @@ describe("nahel config set — refusals (config untouched, nothing journaled)", 
     );
     expect(code).toBe(1);
     expect(errs.join("\n")).toContain("upgraded");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("an unknown merge authority is refused — the enum is strict, config untouched", async () => {
+    const { root, layout, env } = await setup();
+    const before = await configBytes(layout);
+    const code = await configCommand.run(
+      ["set", "merge", "--data", "authority=auto"],
+      env,
+      root,
+      "human:jim",
+    );
+    expect(code).toBe(1);
+    expect(errs.join("\n")).toContain("merge.authority");
+    expect(await configBytes(layout)).toBe(before);
     expect(await journalEvents(layout)).toEqual([]);
   });
 
@@ -245,10 +435,43 @@ describe("canonical workflow docs driving config set (F4, F3.2)", () => {
     expect(body).toContain("nahel config set governance");
     expect(body).toContain("nahel config set contract");
     expect(body).toContain("nahel item new");
+    // F2.2 config semantics: the written default is {product: delegated,
+    // architecture: human} — the doc's example must record exactly that, and
+    // must no longer claim new projects start all-human.
+    expect(body).toContain("--data product=delegated");
+    expect(body).toContain("--data architecture=human");
+    expect(body).not.toContain("almost always start all-human");
+    // F7.2: the constitution sign-off is RECORDED, in the same `config set
+    // inception` call as the tier — the section replaces wholesale, so a tier
+    // write that omits the signature erases it — and the human runs that
+    // command themselves, because the gate reads the act's actor.
+    expect(body).toContain("--data constitution_signed_by=");
+    expect(body).toContain("in the SAME command");
     // Tier vocabulary, brownfield mode, and the ratchet are stated in the doc.
     for (const term of ["seed", "standard", "full", "rownfield", "ratchet"]) {
       expect(body).toContain(term);
     }
+  });
+
+  test("inception.md asks about merge authority and writes it, with the sparingly guidance and the human-runs-it rule (F3.4)", async () => {
+    const { body } = await shippedWorkflow("inception.md");
+    // F3.4 setup surface: founding is where merge authority gets decided, or
+    // it never gets decided at all and the project inherits a default nobody
+    // chose. The command is the doc's, verbatim.
+    expect(body).toContain("nahel config set merge --data authority=");
+    expect(body).toContain("human");
+    expect(body).toContain("on-approve");
+    // The guidance the PRD requires every surface writing this flag to carry.
+    expect(body).toContain("SPARINGLY");
+    expect(body).toContain("small items, or changes QA testing covers well");
+    // The default when the founder has no opinion — never inferred upward.
+    expect(body.toLowerCase()).toContain("default");
+    // Provenance: on-approve is the HUMAN's standing authorization, so an
+    // agent-run set is inert — the doc must say so where it is written, or a
+    // founding agent will helpfully set it and silently authorize nothing.
+    expect(body).toContain("the HUMAN runs");
+    expect(body).toContain("inert");
+    expect(body).toContain("merge.unauthorized");
   });
 
   test("nahel/workflows/setup-routing.md is a valid canonical doc writing routing via the CLI", async () => {

@@ -698,6 +698,22 @@ describe("schema/records — responsibility routing (F3.1, ADR-0015)", () => {
     );
   });
 
+  test("accepts an optional review2 second-reviewer slot beside review (F3.1)", () => {
+    // The review loop needs TWO reviewer vendors, and one `review` key can
+    // only name one. `review2` is the committed second slot — optional, so
+    // every map written before it existed stays valid.
+    expectAccepted(
+      configSchema,
+      withRouting({ review: { agent: "codex" }, review2: { agent: "claude" } }),
+      "routing review2",
+    );
+    expectAccepted(
+      configSchema,
+      withRouting({ review2: { agent: "claude", model: "claude-opus-4" } }),
+      "routing review2 alone",
+    );
+  });
+
   test("rejects a routing entry that sets neither agent nor model", () => {
     const issues = rejectionIssues(
       configSchema,
@@ -723,6 +739,78 @@ describe("schema/records — responsibility routing (F3.1, ADR-0015)", () => {
       "routing entry unknown key",
     );
     expect(issues.some((i) => i.includes("provider"))).toBe(true);
+  });
+});
+
+describe("schema/records — dispatch invocation config (F1.3, ADR-0016 addendum)", () => {
+  const withDispatch = (dispatch: unknown) => ({ ...validConfig, dispatch });
+
+  test("a config with no dispatch section stays valid (shipped defaults cover every kind)", () => {
+    expectAccepted(configSchema, validConfig, "config no dispatch");
+  });
+
+  test("accepts an override for each known agent kind", () => {
+    expectAccepted(
+      configSchema,
+      withDispatch({
+        claude: { binary: "/opt/bin/claude", args: ["-p"], model_flag: "--model" },
+        codex: { binary: "codex", args: ["exec"], model_flag: "--model" },
+        "cursor-agent": { binary: "cursor-agent", args: ["-p"], model_flag: "--model" },
+      }),
+      "dispatch full",
+    );
+  });
+
+  test("accepts an entry with no model_flag (a CLI that takes no model flag)", () => {
+    expectAccepted(
+      configSchema,
+      withDispatch({ claude: { binary: "claude", args: [] } }),
+      "dispatch no model flag",
+    );
+  });
+
+  test("rejects an unknown agent kind, naming it — a new kind is a deliberate schema change", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withDispatch({ gemini: { binary: "gemini", args: [] } }),
+      "dispatch unknown kind",
+    );
+    expect(issues.some((i) => i.includes("gemini"))).toBe(true);
+  });
+
+  test("rejects an entry missing its binary", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withDispatch({ claude: { args: ["-p"] } }),
+      "dispatch no binary",
+    );
+    expect(issues.some((i) => i.includes("binary"))).toBe(true);
+  });
+
+  test("rejects an empty binary and an empty arg (nothing spawnable)", () => {
+    expect(
+      rejectionIssues(
+        configSchema,
+        withDispatch({ claude: { binary: "", args: [] } }),
+        "dispatch empty binary",
+      ).some((i) => i.includes("binary")),
+    ).toBe(true);
+    expect(
+      rejectionIssues(
+        configSchema,
+        withDispatch({ claude: { binary: "claude", args: [""] } }),
+        "dispatch empty arg",
+      ).some((i) => i.includes("args")),
+    ).toBe(true);
+  });
+
+  test("rejects an unknown key inside a dispatch entry (strict object)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withDispatch({ claude: { binary: "claude", args: [], prompt: "stdin" } }),
+      "dispatch entry unknown key",
+    );
+    expect(issues.some((i) => i.includes("prompt"))).toBe(true);
   });
 });
 
@@ -812,6 +900,68 @@ describe("schema/records — inception tier (F4.1)", () => {
   });
 });
 
+describe("schema/records — founding mode and paragraph (Phase 2 F9.4)", () => {
+  const withFounding = (founding: unknown) => ({ ...validConfig, founding });
+  const PARAGRAPH = "A speed-count game for kids: a timer, a grid of dots, a leaderboard.";
+
+  test("a config with no founding section stays valid (the section is optional)", () => {
+    expectAccepted(configSchema, validConfig, "config no founding");
+  });
+
+  test("accepts a hands-off founding carrying its paragraph, and a bare guided founding", () => {
+    expectAccepted(
+      configSchema,
+      withFounding({ mode: "hands-off", paragraph: PARAGRAPH }),
+      "founding hands-off",
+    );
+    expectAccepted(configSchema, withFounding({ mode: "guided" }), "founding guided");
+  });
+
+  test("rejects hands-off with no paragraph — the paragraph IS the signed content", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withFounding({ mode: "hands-off" }),
+      "founding hands-off no paragraph",
+    );
+    expect(issues.some((issue) => issue.includes("paragraph"))).toBe(true);
+  });
+
+  test("rejects an empty or whitespace-only paragraph (a blank paragraph founds nothing)", () => {
+    for (const blank of ["", "   ", "\n\t \n"]) {
+      const issues = rejectionIssues(
+        configSchema,
+        withFounding({ mode: "hands-off", paragraph: blank }),
+        `founding blank paragraph ${JSON.stringify(blank)}`,
+      );
+      expect(issues.some((issue) => issue.startsWith("founding.paragraph:"))).toBe(true);
+    }
+  });
+
+  test("preserves the paragraph EXACTLY — no trimming, collapsing, or normalization", () => {
+    const verbatim = "  Two lines,\n  with leading space and a trailing newline.\n";
+    const parsed = configSchema.parse(withFounding({ mode: "hands-off", paragraph: verbatim }));
+    expect(parsed.founding?.paragraph).toBe(verbatim);
+  });
+
+  test("rejects an unknown founding mode, pointing at the field", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withFounding({ mode: "yolo", paragraph: PARAGRAPH }),
+      "founding bad mode",
+    );
+    expect(issues.some((issue) => issue.startsWith("founding.mode:"))).toBe(true);
+  });
+
+  test("rejects unknown founding keys (a typo is an error, not silent state)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withFounding({ mode: "hands-off", paragraph: PARAGRAPH, signed_by: "jim" }),
+      "founding unknown key",
+    );
+    expect(issues.some((issue) => issue.includes("signed_by"))).toBe(true);
+  });
+});
+
 describe("schema/records — governance (F4, roadmap §7)", () => {
   const withGovernance = (governance: unknown) => ({ ...validConfig, governance });
 
@@ -862,6 +1012,42 @@ describe("schema/records — governance (F4, roadmap §7)", () => {
       "governance unknown area",
     );
     expect(issues.some((i) => i.includes("qa"))).toBe(true);
+  });
+});
+
+describe("schema/records — merge authority (F3.4)", () => {
+  const withMerge = (merge: unknown) => ({ ...validConfig, merge });
+
+  test("a config with no merge section stays valid — absent means `merge: human`", () => {
+    expectAccepted(configSchema, validConfig, "config no merge");
+  });
+
+  test("accepts both authorities: the human default and the on-approve opt-in", () => {
+    expectAccepted(configSchema, withMerge({ authority: "human" }), "merge human");
+    expectAccepted(configSchema, withMerge({ authority: "on-approve" }), "merge on-approve");
+  });
+
+  test("rejects a non-enum authority, pointing at the field", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withMerge({ authority: "auto" }),
+      "merge bad authority",
+    );
+    expect(issues.some((i) => i.startsWith("merge.authority:"))).toBe(true);
+  });
+
+  test("rejects a merge section without an authority — the authority IS the record", () => {
+    const issues = rejectionIssues(configSchema, withMerge({}), "merge empty");
+    expect(issues.some((i) => i.startsWith("merge.authority:"))).toBe(true);
+  });
+
+  test("rejects unknown merge keys (a typo is an error, not a silently ignored policy)", () => {
+    const issues = rejectionIssues(
+      configSchema,
+      withMerge({ authority: "human", authorized_by: "jim" }),
+      "merge unknown key",
+    );
+    expect(issues.some((i) => i.includes("authorized_by"))).toBe(true);
   });
 });
 

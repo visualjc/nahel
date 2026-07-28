@@ -50,9 +50,52 @@ export const INCEPTION_TIERS = ["seed", "standard", "full"] as const;
 export type InceptionTier = (typeof INCEPTION_TIERS)[number];
 
 /**
+ * How a founding is RUN (glossary: Inception; PRD F9.4): `guided` — the human
+ * is grilled and corrects the drafts; `hands-off` — the human hands over one
+ * paragraph and leaves. These are INTERACTION modes of the one inception
+ * workflow, never two workflows and never two mining procedures: mining is
+ * knowledge-first in both, and the mode decides only who answers the questions
+ * the drafts raise — and, under `hands-off`, what those answers are worth
+ * (only the human's paragraph is signed constitutional content, F9.5).
+ */
+export const FOUNDING_MODES = ["guided", "hands-off"] as const;
+export type FoundingMode = (typeof FOUNDING_MODES)[number];
+
+/**
  * Who owns legislation for a governance area (glossary: Delegated
  * governance): `human` — agents propose, the human approves; `delegated` —
  * agent roles decide via consensus. Recorded in Phase 1, enforced later.
  */
 export const GOVERNANCE_MODES = ["human", "delegated"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
+
+/**
+ * Who may merge a reviewed PR (glossary: Merge authority; PRD F3.4):
+ * `human` — the PR waits for a person, the default everywhere; `on-approve` —
+ * reviewer sign-off merges. `on-approve` is an opt-in to be used SPARINGLY
+ * (small items, or changes QA testing covers well) and is legitimate under
+ * hard constraint 6 / ADR-0011 only as a human-granted standing
+ * authorization: the committed config flip IS the authorization, so it counts
+ * only when the journal proves a human actor made it (governance/authority.ts).
+ */
+export const MERGE_AUTHORITIES = ["human", "on-approve"] as const;
+export type MergeAuthority = (typeof MERGE_AUTHORITIES)[number];
+
+/**
+ * Responsibility (glossary): the kind of judgment routing maps to an
+ * executor. Exactly the keys of `config.routing` minus its `default`
+ * fallback — `default` is what resolution falls back TO, never something
+ * `nahel dispatch <responsibility>` can be asked for (ADR-0015).
+ */
+export const ROUTING_RESPONSIBILITIES = ["architecture", "implementation", "review"] as const;
+export type RoutingResponsibility = (typeof ROUTING_RESPONSIBILITIES)[number];
+
+/**
+ * The agent CLIs `nahel dispatch` knows how to invoke (PRD F1.3). Each kind
+ * ships an invocation default (src/dispatch/invocation.ts) that the optional
+ * `config.dispatch` section may override; a kind outside this list is a
+ * schema error, so teaching nahel a new agent CLI is a deliberate change
+ * here — routing's vocabulary discipline (ADR-0015) applied to executors.
+ */
+export const DISPATCH_AGENT_KINDS = ["claude", "codex", "cursor-agent"] as const;
+export type DispatchAgentKind = (typeof DISPATCH_AGENT_KINDS)[number];

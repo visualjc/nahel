@@ -28,6 +28,7 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 - **Role** — an agent-neutral charter (product-owner, architect) grounded in the knowledge layer; reviews at gates.
 - **Gate** — an artifact transition requiring a verdict (PRD `draft→approved`, epic plan sign-off, diff review). Roles review at gates, not continuously.
 - **Digest** — rendered summary of delegated decisions for human audit (`nahel digest`). Audit, not approval.
+- **Merge authority** — per-project config for who may merge a reviewed PR: `merge: human` (the default everywhere, including when the section is absent — the PR waits for a person) or `merge: on-approve` (reviewer sign-off merges). `on-approve` is the human's standing authorization, so it counts only when the journal shows a **human actor** made the config mutation that set it; an agent-set flag is inert, resolves back to `merge: human`, and `nahel validate` warns. Opt-in, used sparingly: small items, or changes QA testing covers well.
 - **Consensus** — agreement between independent agents of different vendors (e.g. Claude proposes, Codex verifies) required for delegated legislation and AFK escape valves.
 
 ## Execution
@@ -43,13 +44,14 @@ Glossary of the domain model. Terms here are used exactly and consistently in co
 
 - **Responsibility** — a kind of judgment a project needs done: `architecture | implementation | review`. The unit routing maps to an executor; orthogonal to work-item type (one item exercises several responsibilities).
 - **Routing map** — the committed config mapping each responsibility to a preferred executor (agent CLI and/or model), plus a default. Advisory to interactive sessions via the brief; enforced by autonomous dispatch.
+- **Dispatch** — the deterministic act of launching a routed executor (`nahel dispatch <responsibility> --item <id> -- <task>`): resolve the route, compose the agent CLI's invocation (binary, model flag, `NAHEL_ACTOR`, an orientation preamble pointing at the brief), spawn it, record the run. Always item-scoped: every dispatch belongs to a work item, because the run it opens is how the work is attributed. Mechanics only — what to dispatch, when, and whether to stop are the host agent's judgment (ADR-0016).
 
 ## Interfaces
 
 - **Canonical workflow** — the single agent-neutral procedure doc for a task (`workflows/*.md`); the only place logic lives.
 - **Shim** — a generated per-agent entry point (slash command, prompt file) whose only job is "load canonical workflow X". Default prefix `/nd:`.
 - **Mirror** — a one-way projection of local state into an external tracker (GitHub, Linear, …); humans read there, truth lives here. `external_refs` in frontmatter.
-- **Inception** — the founding workflow: constitution, governance, glossary seed, run contract, first plan items. Tiers: `seed | standard | full`; every founding mines first and interviews second — brownfield mines the codebase, greenfield mines agent knowledge + the web (knowledge-first, Phase 2 F9); the interview is always confirm-and-correct. Gates autonomy only.
+- **Inception** — the founding workflow: constitution, governance, glossary seed, run contract, first plan items. Tiers: `seed | standard | full`; every founding mines first and interviews second — brownfield mines the codebase, greenfield mines agent knowledge + the web (knowledge-first, Phase 2 F9); the interview is always confirm-and-correct. **Founding mode** — two interaction modes of the ONE workflow, captured up front and recorded as `config.founding`: `guided` (the human is grilled and corrects the drafts) and `hands-off` (`nahel init --hands-off "<paragraph>"` — the paragraph is the constitution's only human-signed content, verbatim; the agent's elaboration below it is unconfirmed knowledge, never constitutional text). Gates autonomy only.
 - **Skill dependency** — a pinned external skill (`skills.yaml` + lockfile), `kind: markdown` or `kind: tool`.
 - **Lab** — a real dogfood repo whose friction feeds Nahel's backlog.
 - **Scaffolding** — the temporary ccpm + yolo tooling building Nahel until cutover (`nahel import --from-ccpm`).

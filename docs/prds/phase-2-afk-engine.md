@@ -1,7 +1,7 @@
 ---
 name: phase-2-afk-engine
 created: 2026-07-25T15:47:29Z
-updated: 2026-07-25T16:57:23Z
+updated: 2026-07-25T18:42:08Z
 ---
 
 # Phase 2 — AFK engine
@@ -42,7 +42,7 @@ Per ADR-0016: dispatch owns invocation mechanics and nothing else.
 
 **Acceptance criteria**
 
-- [ ] Given a committed routing map, `nahel dispatch implementation -- <task args>` spawns the mapped agent CLI with the mapped model and a correctly attributed run record; the journal shows the dispatch and the spawned agent's own mutations under its own actor id.
+- [ ] Given a committed routing map, `nahel dispatch implementation --item <id> -- <task args>` spawns the mapped agent CLI with the mapped model and a correctly attributed run record; the journal shows the dispatch and the spawned agent's own mutations under its own actor id.
 - [ ] The composed invocation recorded with the dispatch contains the `nahel brief` orientation preamble **ahead of the task prompt** — provable by inspecting the journaled dispatch record, and absent (or trailing) it the criterion fails (F1.1).
 - [ ] With no responsibility-specific route but a configured default, dispatch resolves to the default; with neither, dispatch exits non-zero naming the missing route and the `nahel config set` command that fixes it.
 - [ ] A dispatch invocation-config entry with an unknown agent kind is rejected as a schema error by `validate` and by dispatch itself (F1.3).
@@ -183,7 +183,7 @@ The Phase 1 inception workflow's "mine first, interview second" posture (F4.2 th
 - [ ] A new founding cut short before the artifact set is complete records `seed`, and the delegated-approval and promotion gates refuse accordingly; a cut-short re-founding of a `standard` project leaves the recorded tier at `standard`.
 - [ ] A hands-off founding from a paragraph reaches founded state **recording `standard`** with **zero human turns after the init/kickoff act**: the paragraph appears verbatim as the constitution's only signed content with human-attributed journal provenance, the elaborated knowledge is marked unconfirmed (none of it constitutional); the **complete F9.1 artifact set is recorded in founded state** (drafts alone fail, doctor-proof may remain the F9.3 obligation); the elaboration's verification has the **same provenance shape as F2.2's delegated approval** — separately actor-attributed proposal and verification events from different vendors, bound to the same founded artifact-set revision (content hash or commit), the verification citing the assumption trail and the constitution check, and a decision event linking them (a single-vendor self-note fails); and `governance.product` records `delegated` (F9.4/F9.5).
 - [ ] A failed or incomplete elaboration verification — or a constitutionally insufficient paragraph — leaves the founding at `seed` (or parked), with delegated approval and promotion blocked accordingly; it never silently records `standard` (F9.5).
-- [ ] A work item whose direction contradicts the signed paragraph parks **before its implementation dispatch, on any lane** — exercised in the lab on both a Full-lane drafted PRD and a non-Full-lane item (F9.5).
+- [ ] A work item whose direction contradicts the signed paragraph parks **before its implementation dispatch, on any lane** — exercised in the lab on the hands-off-founded empty repo of the AC above (the signed paragraph is that founding's), on both a Full-lane drafted PRD and a non-Full-lane item (F9.5).
 
 ## Exit test
 
@@ -208,5 +208,5 @@ Pass = both transports, judged by Jim. Failure anywhere feeds the backlog before
 
 1. **`epic-oneshot` retirement** — flagged during Phase 1 (journal `xfkr09sy`) as semantically weakened and a Phase 2 deletion candidate. Whether it dies here or gets rebuilt atop `afk-run` should be decided when F2 lands and shows whether anything still needs it; a direct-lane chore either way, not scoped as an F-requirement.
 2. **Remote transport choice for the exit test** — the bar requires *a* remote transport (Claude Code remote, OpenClaw, Hermes…); which one is exercised depends on what is set up on Jim's infrastructure by phase end. The invariant is transport-agnostic; the test needs one real instance.
-3. **Dispatch invocation-config shape** — F1.3 makes per-agent-CLI knowledge config data; whether it ships as a built-in table with config overrides or pure config with shipped defaults is an implementation call for the F1 design, bounded by "unknown agent kinds fail with a schema error."
+3. ~~Dispatch invocation-config shape~~ — **resolved 2026-07-25** while building F1: a shipped table keyed by a fixed agent-kind enum (`claude | codex | cursor-agent`), each entry replaceable wholesale through an additive `config.dispatch` section, prompt always the trailing argument. Unknown kinds are a schema error from `validate` and from dispatch. Recorded as the ADR-0016 addendum.
 4. ~~Hard constraint 6 amendment for `merge: on-approve`~~ — **resolved 2026-07-25**: Jim approved the amendment (chat, journaled on `b95x0sar`); HC6 and ADR-0011 now permit `on-approve` as a human-granted standing authorization, with use-sparingly guidance (F3.4).

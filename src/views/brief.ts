@@ -1,3 +1,8 @@
+import {
+  readMergeAuthority,
+  resolveGovernance,
+  type MergeAuthorityStatus,
+} from "../governance/authority";
 import type {
   Config,
   JournalEvent,
@@ -17,10 +22,11 @@ import { chronological, loadSnapshot, type Snapshot } from "./snapshot";
 import { renderStatus } from "./status";
 
 /**
- * `nahel brief` view (PRD F7): the deterministic onboarding pack. Six
- * required sections in FIXED order — constitution extract (verbatim by the
- * frozen heading convention, never summarized), knowledge & canonical-truth
- * pointers, item statuses (renderStatus composed), recent activity
+ * `nahel brief` view (PRD F7): the deterministic onboarding pack. Required
+ * sections in FIXED order — constitution extract (verbatim by the frozen
+ * heading convention, never summarized), knowledge & canonical-truth
+ * pointers, governance & merge authority (the operative policy, Phase 2
+ * F2.2/F3.4), item statuses (renderStatus composed), recent activity
  * (renderProgress composed), pending human decisions, validate warnings.
  *
  * 4 KB target budget with a fixed-priority truncation ladder: oldest activity
@@ -55,6 +61,10 @@ export interface BriefInputs {
   productPath: string;
   contextPath: string;
   adrPath: string;
+  /** Governance section from config, or undefined — resolved for display. */
+  governance?: Config["governance"];
+  /** Merge authority in force, with its journal provenance (F3.4). */
+  merge: MergeAuthorityStatus;
   /** Responsibility routing map from config, or undefined when unconfigured. */
   routing?: Config["routing"];
   /**
@@ -151,15 +161,56 @@ function knowledgeBody(inputs: BriefInputs): string {
 }
 
 /**
+ * Section 3 body — the operative policy (PRD F2.2 config semantics, F3.4):
+ * who owns product and architecture legislation, and who may merge. ALWAYS
+ * rendered, unlike routing: every project has a posture, and a posture read
+ * from absence still governs what an agent may do without asking. Defaults
+ * are marked `(default)` so a host agent can tell committed intent from a
+ * resolved default, and an unauthorized `merge: on-approve` is marked inert
+ * with the authority actually in force — never quietly shown as if live.
+ */
+function governanceBody(inputs: BriefInputs): string {
+  const governance = resolveGovernance(inputs.governance);
+  const area = (label: string, resolved: { mode: string; defaulted: boolean }): string =>
+    `${label}: ${resolved.mode}${resolved.defaulted ? " (default)" : ""}`;
+  return [
+    area("product", governance.product),
+    area("architecture", governance.architecture),
+    mergeLine(inputs.merge),
+  ].join("\n");
+}
+
+/** The merge-authority line: what config says, and what is actually in force. */
+function mergeLine(status: MergeAuthorityStatus): string {
+  if (status.defect === undefined) {
+    return `merge: ${status.configured}${status.defaulted ? " (default)" : ""}`;
+  }
+  const why =
+    status.defect === "agent-set"
+      ? `inert — agent-set by ${status.setBy!.actor.kind}:${status.setBy!.actor.id}`
+      : "inert — no journaled config mutation sets it";
+  return `merge: ${status.configured} (${why}; in force: merge: ${status.effective})`;
+}
+
+/**
  * Optional routing section body (PRD F3, ADR-0015): each CONFIGURED
  * responsibility on its own line with its agent/model, in the schema's enum
- * order. Null when nothing is configured — the section is then omitted
- * entirely, so an unconfigured project's brief carries zero routing noise.
+ * order, followed by the two non-responsibility keys — `review2` (the review
+ * loop's second reviewer slot, F3.1) and `default`. A slot nobody can see is a
+ * slot nobody honors: the loop resolves both reviewers off this section. Null
+ * when nothing is configured — the section is then omitted entirely, so an
+ * unconfigured project's brief carries zero routing noise.
  */
 function routingBody(routing: Config["routing"]): string | null {
   if (routing === undefined) return null;
   const lines: string[] = [];
-  for (const responsibility of ["architecture", "implementation", "review", "default"] as const) {
+  for (const responsibility of [
+    "architecture",
+    "implementation",
+    "review",
+    "review2",
+    "default",
+  ] as const) {
     const entry = routing[responsibility];
     if (entry === undefined) continue;
     const parts: string[] = [];
@@ -270,8 +321,9 @@ function assemble(
     "nahel brief",
     `== constitution (${inputs.productPath}) ==\n${constitution}`,
     `== knowledge & canonical truth ==\n${knowledgeBody(inputs)}`,
+    `== governance & merge authority ==\n${governanceBody(inputs)}`,
   ];
-  // Optional, right after knowledge: advisory routing map when configured.
+  // Optional, right after governance: advisory routing map when configured.
   const routing = routingBody(inputs.routing);
   if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
   sections.push(
@@ -366,6 +418,8 @@ export async function composeBrief(
     productPath: config.knowledge.product,
     contextPath: config.knowledge.context,
     adrPath: config.knowledge.adr,
+    governance: config.governance,
+    merge: await readMergeAuthority(layout, config),
     routing: config.routing,
     observations,
     warnings,

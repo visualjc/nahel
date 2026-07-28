@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Env } from "../../src/schema/env";
+import { SELF_RECORDED_EVENT_TYPES } from "../../src/schema/events";
 import { journalEventSchema, type JournalEvent } from "../../src/schema/records";
 import { logCommand, type LogCommandContext } from "../../src/commands/log";
 import { appendEvent, listSegments, readJournal, SESSION_CLOSED_EVENT_TYPE } from "../../src/store/journal";
@@ -408,6 +409,55 @@ describe("nahel log — mutation forgery is refused at the write seam", () => {
       expect(result.code).toBe(1);
       expect(result.stderr).toContain(type);
       expect(result.stderr).toContain("mutation");
+    }
+    expect((await listSegments(layout)).active).toEqual([]);
+  });
+
+  test("config.updated is refused — a logged one would forge the human's merge authorization (F3.4)", async () => {
+    // The provenance check trusts config.updated events by TYPE. If log could
+    // append one, any agent could grant itself `merge: on-approve` without
+    // ever running `nahel config set`.
+    const { root, layout } = await makeStore();
+    const result = await runLog(
+      [
+        "config.updated",
+        "--data",
+        '{"section":"merge","value":{"authority":"on-approve"}}',
+      ],
+      root,
+      { actorOverride: "human:jim" },
+    );
+    console.log("[forged config.updated]", result.stderr);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("config.updated");
+    expect(result.stderr).toContain("nahel config set");
+    // Nothing written: no segment, no event, no forged provenance.
+    expect((await listSegments(layout)).active).toEqual([]);
+    expect(await allEvents(layout)).toEqual([]);
+  });
+
+  test("every self-recorded event type is refused, naming the command that records it", async () => {
+    const { root, layout } = await makeStore();
+    // Data-driven over the WHOLE reservation map, plus a pinned list of the
+    // command-emitted types that MUST be in it — so adding a new journaling
+    // command without reserving its types fails here, not in the field
+    // (wave-1 review: import.* and journal.distilled were forgeable).
+    for (const required of [
+      "config.updated",
+      "dispatch.started",
+      "dispatch.ended",
+      "import.completed",
+      "import.note",
+      "import.prd-relocated",
+      "journal.distilled",
+    ]) {
+      expect(SELF_RECORDED_EVENT_TYPES.has(required)).toBe(true);
+    }
+    for (const type of SELF_RECORDED_EVENT_TYPES.keys()) {
+      const result = await runLog([type], root);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(type);
+      expect(result.stderr).toContain("reserved");
     }
     expect((await listSegments(layout)).active).toEqual([]);
   });

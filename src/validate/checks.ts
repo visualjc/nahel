@@ -1,5 +1,7 @@
 import YAML from "yaml";
 import type { z } from "zod";
+import { resolveReviewSlots } from "../dispatch/invocation";
+import { mergeAuthorityStatus, type MergeAuthorityStatus } from "../governance/authority";
 import {
   configSchema,
   distilledSchema,
@@ -16,8 +18,12 @@ import {
   type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { MUTATION_EVENT_TYPES } from "../schema/events";
+import {
+  MUTATION_EVENT_TYPES,
+  PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
+} from "../schema/events";
 import type { HotState } from "../store/hotstate";
+import type { PrototypeRefScan } from "../store/prototype";
 import {
   compareEvents,
   latestCandidates,
@@ -119,6 +125,14 @@ export interface ValidationInput {
    * the item.investigation-missing warning is skipped.
    */
   investigationPresence?: Record<string, boolean>;
+  /**
+   * The repo's prototype refs — local branches with their tips, the resolved
+   * default branch, and the remote-tracking prototype refs (Phase 2 F5.2),
+   * collected by index.ts so the never-merge checks stay pure. Optional, and an
+   * `error` inside it means the same thing as absence: nahel could not look, so
+   * it reports nothing rather than guessing.
+   */
+  prototypeRefs?: PrototypeRefScan;
 }
 
 /** Default rotation-debt threshold: closed segments awaiting archive. */
@@ -653,6 +667,104 @@ function checkPrdApproval(state: ParsedState): Finding[] {
     });
   }
   return findings;
+}
+
+/**
+ * Merge-authority provenance (PRD F3.4): `merge: on-approve` is legitimate
+ * under hard constraint 6 / ADR-0011 (as amended 2026-07-25) only as the
+ * HUMAN's standing authorization — the committed config flip IS the
+ * authorization — so the flip's provenance must be human, provable from the
+ * journal. A flag an agent set (or one no journaled config mutation accounts
+ * for: a hand edit, a lost flip) authorizes nothing: the review loop treats
+ * the project as `merge: human` and this warns that the flag is inert.
+ *
+ * A third way to fail: two or more config mutations setting the section in the
+ * SAME second that disagree. Same-second acts from different sessions carry no
+ * ordering (F3.4 / authority.ts), so provenance is undecidable and fails safe.
+ *
+ * A WARNING, never an error: an unauthorized flag degrades to the safe
+ * default, it does not corrupt state — but it is never silent (hard
+ * constraint 6: quality invariants are never SILENTLY skipped).
+ */
+function mergeAuthorityCause(status: MergeAuthorityStatus): string {
+  if (status.defect === "agent-set") {
+    return (
+      `the config mutation that set it (event ${status.setBy!.event}) was made by ` +
+      `${status.setBy!.actor.kind}:${status.setBy!.actor.id} — an agent cannot grant ` +
+      `the human's standing merge authorization`
+    );
+  }
+  if (status.defect === "ambiguous") {
+    const tied = (status.tied ?? [])
+      .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
+      .join(", ");
+    return (
+      `${(status.tied ?? []).length} config mutations set it in the same second (${tied}) ` +
+      `and they disagree — same-second acts from different sessions carry no ordering, ` +
+      `so which one governs is undecidable`
+    );
+  }
+  return "no journaled config mutation sets it, so the flip's human provenance cannot be proven";
+}
+
+function checkMergeAuthority(state: ParsedState): Finding[] {
+  if (state.config === undefined) return [];
+  const status = mergeAuthorityStatus(state.config.merge, state.events);
+  if (status.defect === undefined) return [];
+
+  // Ambiguity needs one extra word in the fix: the fresh act must be LATER,
+  // not merely newer in the file.
+  const timing =
+    status.defect === "ambiguous"
+      ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
+      : "";
+  return [
+    {
+      severity: "warning",
+      check: "merge.unauthorized",
+      path: state.input.configPath,
+      message:
+        `nahel/config sets merge: on-approve, but ${mergeAuthorityCause(status)} — ` +
+        `the flag is inert and merge authority stays human (PRs wait for a person)`,
+      fix:
+        "a HUMAN must re-run `nahel config set merge --data authority=on-approve` " +
+        `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
+        "IS the standing authorization. Otherwise drop the section and stay on merge: human",
+    },
+  ];
+}
+
+/**
+ * Cross-vendor review slots (PRD F3.1): the review loop demands two reviewer
+ * VENDORS, and `nahel/workflows/review-loop.md` step 1 refuses to count two
+ * same-vendor reviews as two — a refusal that lands mid-loop, after the work
+ * is done. Resolving both slots from committed config (routing.review2 made
+ * slot 2 nameable) moves that discovery to setup time, where the fix is one
+ * `config set` instead of a parked item.
+ *
+ * A WARNING, never an error: a single-vendor map is an honest state for a
+ * project that never runs the loop, and the loop itself still refuses. Silent
+ * it is not (hard constraint 6).
+ */
+function checkReviewSlots(state: ParsedState): Finding[] {
+  const routing = state.config?.routing;
+  if (routing === undefined) return [];
+  const slots = resolveReviewSlots(routing);
+  if (slots === undefined || slots.slot1.agent !== slots.slot2.agent) return [];
+  return [
+    {
+      severity: "warning",
+      check: "routing.review-same-vendor",
+      path: state.input.configPath,
+      message:
+        `both review slots resolve to the same vendor agent ${JSON.stringify(slots.slot1.agent)} ` +
+        `(slot 1 via ${slots.slot1.via}, slot 2 via ${slots.slot2.via}) — ` +
+        `two same-vendor reviews are not two reviewers, so the review loop refuses to sign off`,
+      fix:
+        "name a second vendor: `nahel config set routing` with a `review2` entry (or a `review` " +
+        "entry) whose agent differs from the other slot's — see nahel/workflows/setup-routing.md",
+    },
+  ];
 }
 
 /** Circular parent / depends_on detection; each cycle reported once. */
@@ -1319,6 +1431,155 @@ function checkSkillsDrift(state: ParsedState): Finding[] {
   return findings;
 }
 
+/**
+ * Read the journaled creation bases: branch → the commit it branched FROM
+ * (`prototype.variants-created`, Phase 2 F5.1). Later records win, which is
+ * the right answer for a branch name that was disposed of and re-created.
+ * Payloads are read defensively — events are data, and a malformed one must
+ * mute its own branch, never poison the check.
+ */
+function prototypeBases(state: ParsedState): Map<string, string> {
+  const bases = new Map<string, string>();
+  for (const event of state.events) {
+    if (event.type !== PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE) continue;
+    const variants = event.payload["variants"];
+    if (!Array.isArray(variants)) continue;
+    for (const entry of variants) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const { branch, base } = entry as Record<string, unknown>;
+      if (typeof branch === "string" && typeof base === "string") bases.set(branch, base);
+    }
+  }
+  return bases;
+}
+
+/**
+ * Never-merge, enforced mechanically (PRD F5.2). Prototype code never merges,
+ * and a prototype ref must never reach a PR or the default branch — so this
+ * check reports three things and guesses at none of them:
+ *
+ * - `prototype.merged` (error), from EITHER of two independent signals:
+ *   - *ancestry* — the branch's tip has moved past the base it was created at
+ *     AND the default branch now contains that tip. Both halves are required:
+ *     a branch still sitting at its base is reachable from the default branch
+ *     by construction, and flagging that would fire on every `nahel prototype
+ *     start` a second after it ran.
+ *   - *patch-id equivalence* — `git cherry` reports commits of this branch
+ *     whose patch already exists in the default branch. A cherry-pick or a
+ *     rebase-style copy lands prototype code as a NEW commit, so ancestry sees
+ *     an innocent branch while the code is merged in every sense that matters;
+ *     the lane's rule 2 forbids a cherry-pick by name, and this is its teeth.
+ *     Needs no creation base, so it judges unrecorded branches too.
+ *
+ *   Honest residual: a SQUASH merge (or a copy that was edited on the way in)
+ *   changes the patch, so neither signal sees it, and detecting it offline
+ *   would mean content-diffing every default-branch commit against every
+ *   prototype commit — a cost out of proportion to a check that runs on every
+ *   `nahel validate`. The mechanical teeth are ancestry + patch equivalence;
+ *   the rest is the never-push/never-PR rule in
+ *   `nahel/workflows/prototype-lane.md`, which is stated there rather than
+ *   pretended at here.
+ * - `prototype.pushed` (error): a remote-tracking prototype ref exists. Pushing
+ *   is the precondition for opening a PR, and it is the furthest an offline,
+ *   deterministic check can see — nahel never asks a remote anything, so "a PR
+ *   exists" is judged by its local footprint, not by an API call.
+ * - `prototype.unrecorded` (warning): a prototype-named branch nahel has no
+ *   creation record for. Without the base, "sitting at its creation point" and
+ *   "merged into the default branch" are the same git observation, so the
+ *   honest report is that the branch cannot be judged — not a verdict.
+ */
+function checkPrototypeRefs(state: ParsedState): Finding[] {
+  const scan = state.input.prototypeRefs;
+  if (scan === undefined || scan.error !== undefined) return [];
+
+  const findings: Finding[] = [];
+  const bases = prototypeBases(state);
+
+  for (const branch of scan.branches) {
+    // Patch-id equivalence first: it needs no creation base, so it judges
+    // hand-made branches the ancestry half can only call unjudgeable.
+    const copies = branch.copiedToDefault;
+    if (scan.defaultBranch !== undefined && copies.length > 0) {
+      findings.push({
+        severity: "error",
+        check: "prototype.merged",
+        message:
+          `prototype branch ${branch.branch} has ${copies.length} commit(s) whose patch is already ` +
+          `in ${scan.defaultBranch} (${copies.join(", ")}) — copied across by cherry-pick or rebase, ` +
+          "and prototype code never merges (nahel/workflows/prototype-lane.md)",
+        fix:
+          `revert those commits out of ${scan.defaultBranch}; promote the variant's mini-PRD ` +
+          "with `nahel prototype promote <variant-item-id>` and rebuild the work in the feature lane",
+      });
+    }
+
+    const base = bases.get(branch.branch);
+    if (base === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "prototype.unrecorded",
+        message:
+          `prototype branch ${branch.branch} has no journaled creation record, so nahel cannot ` +
+          "tell whether its code reached the default branch — an unrecorded prototype ref is unjudgeable, not innocent",
+        fix: "spawn prototype variants with `nahel prototype start <item-id> --variants <n>`, which records each branch's base",
+      });
+      continue;
+    }
+    if (scan.defaultBranch === undefined) continue;
+    if (branch.tip !== base && branch.ancestorOfDefault) {
+      findings.push({
+        severity: "error",
+        check: "prototype.merged",
+        message:
+          `prototype branch ${branch.branch} has commits past its base ${base} and ${scan.defaultBranch} ` +
+          "now contains them — prototype code never merges (nahel/workflows/prototype-lane.md)",
+        fix:
+          `revert the prototype commits out of ${scan.defaultBranch}; promote the variant's mini-PRD ` +
+          "with `nahel prototype promote <variant-item-id>` and rebuild the work in the feature lane",
+      });
+    } else if (
+      branch.mergeBaseWithDefault !== undefined &&
+      branch.mergeBaseWithDefault !== base
+    ) {
+      // Merge-base drift: the third signal, for the merge-then-advance shape.
+      // Merge T1 into the default branch and keep committing — the tip is not
+      // contained (ancestry silent) and the merged commit is genuinely
+      // reachable from the default branch (`git cherry` silent), but the
+      // divergence point has moved off the recorded base. The drift cannot
+      // say WHICH direction history crossed (default merged into the variant
+      // moves it identically) — both directions are forbidden by the lane, so
+      // the verdict is the same either way. Guarded behind the ancestry
+      // signal (else-if) so a fully merged tip reports once, not twice.
+      findings.push({
+        severity: "error",
+        check: "prototype.merged",
+        message:
+          `prototype branch ${branch.branch} has a merge-base with ${scan.defaultBranch} at ` +
+          `${branch.mergeBaseWithDefault}, past its recorded base ${base} — history crossed the ` +
+          "never-merge fence (a prototype commit reached the default branch, or the default " +
+          "branch was merged into the variant; both are forbidden — nahel/workflows/prototype-lane.md)",
+        fix:
+          `if prototype commits reached ${scan.defaultBranch}, revert them out; if ${scan.defaultBranch} ` +
+          "was merged into the variant, dispose it (`nahel prototype dispose`) and re-start — a stale " +
+          "variant is re-started, never refreshed",
+      });
+    }
+  }
+
+  for (const ref of scan.remoteRefs) {
+    findings.push({
+      severity: "error",
+      check: "prototype.pushed",
+      message:
+        `prototype ref ${ref} is pushed to a remote — that is the precondition for a PR, and prototype ` +
+        "code never merges (nahel/workflows/prototype-lane.md)",
+      fix: "delete the remote branch; prototype workspaces stay local and are disposed of with `nahel prototype dispose <variant-item-id>`",
+    });
+  }
+
+  return findings;
+}
+
 /** Deterministic report order: errors first, then check, path, message. */
 function compareFindings(a: Finding, b: Finding): number {
   if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1;
@@ -1341,6 +1602,8 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),
+    ...checkMergeAuthority(state),
+    ...checkReviewSlots(state),
     ...checkCycles(state),
     ...checkClaims(state),
     ...checkClaimedActiveRuns(state),
@@ -1349,6 +1612,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkHotState(state),
     ...checkMaintenance(state),
     ...checkSkillsDrift(state),
+    ...checkPrototypeRefs(state),
   );
   return findings.sort(compareFindings);
 }

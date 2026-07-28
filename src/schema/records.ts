@@ -1,9 +1,11 @@
 import { z } from "zod";
 import {
   ACTOR_KINDS,
+  FOUNDING_MODES,
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
   LANES,
+  MERGE_AUTHORITIES,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_TYPES,
@@ -262,7 +264,22 @@ export type RoutingEntry = z.infer<typeof routingEntrySchema>;
 
 /**
  * Responsibility routing — `config.routing` (PRD F3, ADR-0015): a fixed enum
- * of responsibilities mapped to `{agent, model}` preferences, plus a default.
+ * of responsibilities mapped to `{agent, model}` preferences, plus two keys
+ * that are NOT responsibilities — `default` (what an unrouted responsibility
+ * falls back to) and `review2`.
+ *
+ * `review2` is F3.1's "second review slot" design call: the review loop needs
+ * two reviewer VENDORS and one `review` key can only name one, so the second
+ * slot is a config key rather than a fourth enum member — ADR-0015's
+ * vocabulary discipline holds and `nahel dispatch review2` stays refused. The
+ * slot is filled through the `review` responsibility instead: its driver
+ * reviews it in-session when the driver IS that vendor, and dispatches it with
+ * `nahel dispatch review --slot 2` otherwise, so any capable vendor can drive
+ * the loop. Naming it in committed
+ * state is what lets `nahel validate` catch a same-vendor pairing before a run
+ * discovers it; optional, so every map written before it existed stays valid
+ * (the slot-2 chain then falls through to implementation, then default).
+ *
  * Strict: unknown responsibilities are rejected so the vocabulary stays a
  * deliberate schema change, never an accidental typo. Advisory in Phase 1
  * (surfaced by `nahel brief`); enforced by Phase 2 dispatch.
@@ -271,9 +288,41 @@ export const routingSchema = z.strictObject({
   architecture: routingEntrySchema.optional(),
   implementation: routingEntrySchema.optional(),
   review: routingEntrySchema.optional(),
+  review2: routingEntrySchema.optional(),
   default: routingEntrySchema.optional(),
 });
 export type Routing = z.infer<typeof routingSchema>;
+
+/**
+ * One agent CLI's invocation knowledge (PRD F1.3, ADR-0016 addendum): the
+ * `binary` to spawn, the `args` that precede the prompt (headless flags, a
+ * subcommand), and the `model_flag` the CLI takes its model on. Dispatch
+ * always delivers the prompt as the TRAILING argument — true of every agent
+ * CLI shipped — so there is deliberately no prompt-delivery field. A config
+ * entry REPLACES the shipped default for that kind wholesale, matching
+ * `config set`'s replace-the-section semantics.
+ */
+export const dispatchAgentSchema = z.strictObject({
+  binary: nonEmptyString("dispatch binary"),
+  args: z.array(nonEmptyString("dispatch args entry")),
+  model_flag: nonEmptyString("dispatch model_flag").optional(),
+});
+export type DispatchAgent = z.infer<typeof dispatchAgentSchema>;
+
+/**
+ * Dispatch invocation config — `config.dispatch` (PRD F1.3): per-agent-CLI
+ * overrides of the shipped invocation defaults, keyed by agent kind. Strict
+ * over the fixed kind enum: an unknown agent kind is a schema error here (so
+ * `nahel validate` and `nahel dispatch` both refuse it) rather than a silent
+ * entry nothing ever reads. Omitting the section entirely is the normal
+ * case — the defaults cover every known kind.
+ */
+export const dispatchSchema = z.strictObject({
+  claude: dispatchAgentSchema.optional(),
+  codex: dispatchAgentSchema.optional(),
+  "cursor-agent": dispatchAgentSchema.optional(),
+});
+export type Dispatch = z.infer<typeof dispatchSchema>;
 
 /**
  * Compaction thresholds — `config.compaction` (PRD F6.2, ADR-0004): when
@@ -301,11 +350,56 @@ export type Compaction = z.infer<typeof compactionSchema>;
  * founded at. Written by the inception workflow via `nahel config set`;
  * Phase 2+ autonomy gates and the tier ratchet read it. `full` is recordable
  * now even though the full-tier workflow is deferred.
+ *
+ * `constitution_signed_by` is the human-signature field the autonomy gate
+ * reads (Phase 2 F7.2): "human-signed" has to be verifiable mechanically, so
+ * it is recorded state — who signed — rather than a judgment about what the
+ * constitution document says. Presence alone is not authority: the gate also
+ * requires the `config.updated` act that wrote it to be human-attributed,
+ * exactly as merge authority requires of `on-approve` (F3.4). Optional
+ * because an unsigned project is a legal state — it simply cannot run AFK.
  */
 export const inceptionSchema = z.strictObject({
   tier: z.enum(INCEPTION_TIERS),
+  constitution_signed_by: nonEmptyString("inception.constitution_signed_by").optional(),
 });
 export type Inception = z.infer<typeof inceptionSchema>;
+
+/**
+ * Founding record — `config.founding` (Phase 2 F9.4): which interaction mode
+ * the founding was started in, and — under `hands-off` — the human's founding
+ * `paragraph`, stored VERBATIM.
+ *
+ * The paragraph is not a description of the constitution; under a hands-off
+ * founding it IS the constitution's only human-signed content (F9.5), so this
+ * field is reproduced into the constitution document word for word and
+ * compared against later. Nothing normalizes it: no trim, no reflow, no case
+ * folding — only blank is refused, because a blank paragraph founds nothing.
+ *
+ * Provenance lives where merge authority's does (governance/authority.ts): the
+ * `config.updated` act that wrote THIS section carries the actor, and only a
+ * human-attributed act is a signature. That is why the section is separate
+ * from `inception` — `config set` replaces a section wholesale, so the tier
+ * record (which an agent writes when it finishes founding) would otherwise
+ * overwrite the human's act with its own.
+ */
+export const foundingSchema = z
+  .strictObject({
+    mode: z.enum(FOUNDING_MODES),
+    paragraph: z
+      .string()
+      .refine(
+        (paragraph) => paragraph.trim().length > 0,
+        "founding.paragraph must not be blank — the paragraph is the founding's only human-signed content",
+      )
+      .optional(),
+  })
+  .refine((founding) => founding.mode !== "hands-off" || founding.paragraph !== undefined, {
+    message:
+      "founding.paragraph is required when founding.mode is hands-off — the paragraph IS the signed content",
+    path: ["paragraph"],
+  });
+export type Founding = z.infer<typeof foundingSchema>;
 
 /**
  * Governance — `config.governance` (PRD F4, roadmap §7): who owns
@@ -321,13 +415,30 @@ export const governanceSchema = z.strictObject({
 export type Governance = z.infer<typeof governanceSchema>;
 
 /**
+ * Merge authority — `config.merge` (PRD F3.4): who may merge a reviewed PR.
+ * The PRD's shorthand `merge: on-approve` is spelled as a SECTION with one
+ * `authority` key, matching `inception: {tier}` — every config section is an
+ * object because `config set` replaces sections with a `--data` object, so a
+ * bare scalar would be unsettable through the CLI (hard constraint 3: agents
+ * never hand-edit state). Absent means `merge: human`, the default
+ * everywhere; resolution and the human-provenance rule live in
+ * src/governance/authority.ts.
+ */
+export const mergeSchema = z.strictObject({
+  authority: z.enum(MERGE_AUTHORITIES),
+});
+export type Merge = z.infer<typeof mergeSchema>;
+
+/**
  * Config — `nahel/config`: where the knowledge layer lives (paths relative to
  * the repo root) and the actor entry this checkout mutates as (PRD F9).
  * The optional `validate` block tunes the maintenance-warning thresholds
  * (PRD F8, ADR-0004); the optional `compaction` (PRD F6.2), `contract`
- * (ADR-0014) and `routing` (ADR-0015) sections are additive too, so existing
- * configs stay valid — as are `inception` and `governance` (PRD F4), written
- * by the inception workflow through `nahel config set`.
+ * (ADR-0014), `routing` (ADR-0015) and `dispatch` (Phase 2 F1.3) sections are
+ * additive too, so existing configs stay valid — as are `inception` and
+ * `governance` (PRD F4), written by the inception workflow through
+ * `nahel config set`, `merge` (Phase 2 F3.4), and `founding` (Phase 2 F9.4),
+ * written by `nahel init --hands-off` or the same `config set` door.
  */
 export const configSchema = z.strictObject({
   knowledge: z.strictObject({
@@ -349,7 +460,10 @@ export const configSchema = z.strictObject({
   compaction: compactionSchema.optional(),
   contract: contractSchema.optional(),
   routing: routingSchema.optional(),
+  dispatch: dispatchSchema.optional(),
   inception: inceptionSchema.optional(),
+  founding: foundingSchema.optional(),
   governance: governanceSchema.optional(),
+  merge: mergeSchema.optional(),
 });
 export type Config = z.infer<typeof configSchema>;

@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
+import { CONFIG_UPDATED_EVENT_TYPE } from "../schema/events";
 import { configSchema } from "../schema/records";
 import { appendEvent } from "../store/journal";
 import { readConfig, writeConfig } from "../store/layout";
@@ -18,17 +19,32 @@ import { parseDataEntries } from "./log";
  * workflows write config through; agents never hand-edit state (hard
  * constraint 3). Core sections (knowledge paths, actor) are set at init and
  * deliberately NOT settable here.
+ *
+ * The journaled ACTOR is load-bearing for two sections. `merge` (PRD F3.4):
+ * `merge: on-approve` counts as the human's standing merge authorization only
+ * when THIS event's actor is a human; an agent-attributed flip is inert
+ * (src/governance/authority.ts). And `founding` (Phase 2 F9.5): a hands-off
+ * founding's paragraph is the constitution's only signed content, so the act
+ * that records it is its signature — an agent-run founding act signs nothing.
+ * The actor a checkout runs as is therefore not bookkeeping there — it IS the
+ * authorization. Which is why a set whose value is already committed still
+ * journals: re-running the command as a human is exactly how an agent-set
+ * section's provenance is repaired.
+ *
+ * `founding` is also written by `nahel init --hands-off` (F9.4), which
+ * journals the same `config.updated` act — one section, one provenance rule,
+ * whichever door the founder came through (hard constraint 5).
  */
-
-/** The open-extension event type recording a config section replacement. */
-export const CONFIG_UPDATED_EVENT_TYPE = "config.updated";
 
 /** The optional config sections `config set` may replace. */
 export const SETTABLE_CONFIG_SECTIONS = [
   "compaction",
   "contract",
+  "dispatch",
+  "founding",
   "governance",
   "inception",
+  "merge",
   "routing",
   "validate",
 ] as const;
@@ -102,13 +118,12 @@ async function runConfigSet(
     throw new UsageError(`invalid config after setting ${section} — ${reasons}`);
   }
 
-  // A no-op replacement writes nothing and journals nothing — re-running a
-  // workflow's config step is harmless (the distill precedent).
-  if (JSON.stringify(candidate.data[section]) === JSON.stringify(config[section])) {
-    console.log(`config.${section} unchanged — nothing to do`);
-    return 0;
-  }
-
+  // A byte-equal replacement is journaled all the same: the journal records
+  // ACTS, not diffs, and repeating an act is honest. Swallowing the no-op
+  // would make the ONE repair `nahel validate` prescribes for an agent-set
+  // `merge: on-approve` — a human re-running the identical command — a silent
+  // no-op, leaving provenance permanently unrepairable (PRD F3.4).
+  //
   // Write-ahead like every state change: the act lands in the journal first,
   // then the config is atomically replaced (a crash between the two is healed
   // by re-running the set — the replacement is idempotent).

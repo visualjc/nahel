@@ -1,23 +1,26 @@
 #!/usr/bin/env bun
 // nahel — deterministic CLI for the Nahel state model.
 // Dispatch structure: a registry table of thin command verbs over the store
-// layer. All ambient process access (argv, cwd, exit, real clock) happens
-// here at the entry point and is injected down — commands stay pure over
-// their CommandContext, per-command flags are parsed with node:util parseArgs
-// inside each command.
+// layer. All ambient process access (argv, cwd, home dir, exit, real clock)
+// happens here at the entry point and is injected down — commands stay pure
+// over their CommandContext, per-command flags are parsed with node:util
+// parseArgs inside each command.
 
+import { homedir } from "node:os";
 import { briefCommand } from "./commands/brief";
 import { configCommand } from "./commands/config";
+import { dispatchCommand } from "./commands/dispatch";
 import { distillCommand } from "./commands/distill";
 import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
 import { importCommand } from "./commands/import";
-import { installCommand } from "./commands/install";
+import { CODEX_HOME_VAR, installCommand } from "./commands/install";
 import { claimCommand, handbackCommand, pauseCommand } from "./commands/intervene";
 import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
 import { observeCommand } from "./commands/observe";
 import { progressCommand } from "./commands/progress";
+import { prototypeCommand } from "./commands/prototype";
 import { recallCommand } from "./commands/recall";
 import { runCommand } from "./commands/run";
 import { skillsCommand } from "./commands/skills";
@@ -34,6 +37,21 @@ export interface CommandContext {
   env: Env;
   /** Repo root the command operates on. */
   cwd: string;
+  /**
+   * The user's home directory, injected at the entry point (PRD F8.2). Needed
+   * only by generators whose target lives outside the repo — codex reads its
+   * custom prompts from ~/.codex/prompts and nowhere else. Optional: commands
+   * that need it say so when it is absent rather than guessing a path.
+   */
+  homeDir?: string;
+  /**
+   * `$CODEX_HOME`, if the environment sets it (PRD F8.2). Codex discovers its
+   * custom prompts under `$CODEX_HOME/prompts` and nowhere else, defaulting to
+   * `~/.codex` — a deployment that moved it would otherwise get shims written
+   * where its codex never looks. Read here with every other ambient value;
+   * absent means "use the default", which the install command owns.
+   */
+  codexHome?: string;
   /**
    * NAHEL_ACTOR spec value (`kind:id[:session]`), if set. The entry point
    * reads it from the process environment; commands only ever see this
@@ -78,6 +96,7 @@ export const COMMANDS: Record<string, Command> = {
   brief: briefCommand,
   claim: adapt(claimCommand),
   config: adapt(configCommand),
+  dispatch: adapt(dispatchCommand),
   distill: adapt(distillCommand),
   doctor: doctorCommand,
   handback: adapt(handbackCommand),
@@ -89,6 +108,7 @@ export const COMMANDS: Record<string, Command> = {
   observe: adapt(observeCommand),
   pause: adapt(pauseCommand),
   progress: progressCommand,
+  prototype: adapt(prototypeCommand),
   recall: recallCommand,
   run: adapt(runCommand),
   skills: skillsCommand,
@@ -140,12 +160,17 @@ export async function main(argv: string[], ctx: CommandContext): Promise<number>
 }
 
 if (import.meta.main) {
-  // cli.ts is the single ambient-process reader: argv, cwd, exit, the real
-  // clock, and the NAHEL_ACTOR environment override are all read here and
-  // injected down — no other src/ layer touches process.env.
+  // cli.ts is the single ambient-process reader: argv, cwd, the home
+  // directory, exit, the real clock, and the NAHEL_ACTOR environment override
+  // are all read here and injected down — no other src/ layer touches the
+  // ambient process.
+  // An empty CODEX_HOME is not a location: treat it as unset, like envPresent.
+  const codexHome = process.env[CODEX_HOME_VAR];
   const code = await main(Bun.argv.slice(2), {
     env: systemEnv(),
     cwd: process.cwd(),
+    homeDir: homedir(),
+    ...(codexHome === undefined || codexHome === "" ? {} : { codexHome }),
     actorOverride: process.env[NAHEL_ACTOR_VAR],
     // A var is "set" only when present AND non-empty: an empty value in a .env
     // is not a filled secret. Presence, never the value, crosses into commands.

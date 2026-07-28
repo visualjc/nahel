@@ -14,7 +14,10 @@
   },
   "scripts": {
     "test": "bun test",
-    "cli": "bun run src/cli.ts"
+    "cli": "bun run src/cli.ts",
+    "build": "bun run scripts/build-binary.ts",
+    "build:all": "bun run scripts/build-binary.ts --all",
+    "install:local": "bun run scripts/build-binary.ts --install"
   },
   "devDependencies": {
     "@types/bun": "latest"

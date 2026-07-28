@@ -13,3 +13,9 @@ All procedure logic lives once, in agent-neutral canonical workflow docs (`workf
 ## Consequences
 
 Zero-drift multi-agent support; adding an agent = adding a shim template. Dual-mode use (slash commands and natural language) falls out of the same artifact.
+
+## Addendum — 2026-07-25 (PRD F8.2, codex target)
+
+Shims are **not required to live in the repo**, and the generator's ownership is a *namespace*, not always a directory. Codex loads custom prompts only from `$CODEX_HOME/prompts` (default `~/.codex/prompts`), scanning top-level markdown files; repo-level `.codex/prompts` is an open upstream request (openai/codex #4734, #9848), not a feature. Rather than invent a location codex will not read, the `codex` target is rooted at the **codex home** (`<codex home>/prompts/<prefix>-<name>.md` → `/prompts:nd-brief`), flat, and owns only the `<prefix>-` file-name namespace inside a directory that belongs to the user — pruning never touches the user's own prompts. The codex home follows codex's own discovery: `$CODEX_HOME` when the environment sets it, `~/.codex` otherwise. It is a root of its own rather than a path under `home` because the VARIABLE, not the directory, is what codex reads — a deployment that moved `CODEX_HOME` and got shims written under `~/.codex/prompts` would get shims its codex never sees. Agent table entries therefore carry a root (`repo` | `home` | `codex-home`) and a file-name prefix alongside their directory and renderer; both the home directory and `CODEX_HOME` are read at the cli.ts entry point and injected like every other ambient value.
+
+Consequence: codex shims do not travel with a clone — each machine runs `nahel install --agent codex` once. That is acceptable because shims were always conveniences: what travels is AGENTS.md (which `nahel init` now merges into, F8.3) plus the canonical workflows themselves.

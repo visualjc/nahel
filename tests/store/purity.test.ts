@@ -9,12 +9,14 @@ const EXPECTED_STORE_FILES = [
   "actor.ts",
   "baseline.ts",
   "ccpm.ts",
+  "dispatch.ts",
   "frontmatter.ts",
   "healthcheck.ts",
   "hotstate.ts",
   "journal.ts",
   "layout.ts",
   "mutate.ts",
+  "prototype.ts",
   "rotate.ts",
   "skills.ts",
 ];
@@ -26,14 +28,23 @@ const FS_IMPORT = /from\s+["'](node:)?(fs|fs\/promises)["']/;
 const FORBIDDEN_EVERYWHERE = /from\s+["'](node:)?(net|http|https|http2|dns|tls)["']/;
 
 /**
- * Process spawning is store-layer I/O with exactly three legitimate uses:
+ * Process spawning is store-layer I/O with exactly five legitimate uses:
  * baseline.ts spawning `git` for claim baselines and handback evidence
  * (PRD F9), healthcheck.ts spawning the run contract's healthcheck (PRD F2),
- * and skills.ts spawning `git` / the `skills` CLI to fetch pinned skills
- * (PRD F7, ADR-0009). Everywhere else it stays forbidden.
+ * skills.ts spawning `git` / the `skills` CLI to fetch pinned skills
+ * (PRD F7, ADR-0009), dispatch.ts spawning the routed agent CLI
+ * (Phase 2 F1.4, ADR-0016 — the allowlist joined deliberately), and
+ * prototype.ts spawning `git` for variant worktrees and the never-merge ref
+ * scan (Phase 2 F5). Everywhere else it stays forbidden.
  */
 const PROCESS_SPAWN_IMPORT = /from\s+["'](node:)?(child_process|worker_threads)["']/;
-const SPAWN_ALLOWED = ["baseline.ts", "healthcheck.ts", "skills.ts"];
+const SPAWN_ALLOWED = [
+  "baseline.ts",
+  "dispatch.ts",
+  "healthcheck.ts",
+  "prototype.ts",
+  "skills.ts",
+];
 
 /** Ambient I/O and environment access forbidden in the store layer. */
 const FORBIDDEN_GLOBALS = [/\bfetch\s*\(/, /\bBun\.(file|write|spawn|serve|env)\b/, /\bprocess\.env\b/];
@@ -71,7 +82,7 @@ describe("store layer owns ALL fs I/O", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("spawning processes is store-layer I/O, limited to baseline.ts (git) and healthcheck.ts (contract)", () => {
+  test("spawning processes is store-layer I/O, limited to baseline.ts and prototype.ts (git), healthcheck.ts (contract), skills.ts and dispatch.ts (agent CLI)", () => {
     const allowedPaths = SPAWN_ALLOWED.map((name) => join(STORE_DIR, name));
     const offenders = tsFilesUnder(SRC_DIR)
       .filter((path) => !allowedPaths.includes(path))
@@ -102,9 +113,21 @@ describe("command, template, view, and validate layers are pure over the store",
   // randomness through the injected Env. Templates are pure strings. Views
   // are pure functions over store reads (task #7); validate's checks are pure
   // functions over collected store reads (task #9); install's agent table and
-  // shim rendering are pure functions the install command drives (task #11).
+  // shim rendering are pure functions the install command drives (task #11);
+  // dispatch's routing resolution and invocation composition are pure
+  // functions of committed config plus the task args (Phase 2 F1); governance
+  // resolves the posture and the merge authority's journal provenance from
+  // committed state alone (Phase 2 F2.2/F3.4).
   // Only the cli.ts entry point may touch the ambient process (argv, cwd, exit).
-  for (const layer of ["commands", "install", "templates", "views", "validate"]) {
+  for (const layer of [
+    "commands",
+    "dispatch",
+    "governance",
+    "install",
+    "templates",
+    "views",
+    "validate",
+  ]) {
     test(`src/${layer} files use no ambient environment, time, or randomness`, () => {
       const files = tsFilesUnder(join(SRC_DIR, layer));
       expect(files.length).toBeGreaterThan(0);
@@ -116,6 +139,30 @@ describe("command, template, view, and validate layers are pure over the store",
       }
     });
   }
+
+  test("dispatch reaches no model API: no LLM endpoints, no API keys, no HTTP client (F1.4)", () => {
+    // Hard constraint 1 made mechanical for the one verb that launches models:
+    // dispatch composes an argv and spawns a CLI — the agent CLI holds its own
+    // credentials, and nahel never names, reads, or forwards them.
+    const dispatchFiles = [
+      ...tsFilesUnder(join(SRC_DIR, "dispatch")),
+      join(SRC_DIR, "store", "dispatch.ts"),
+      join(SRC_DIR, "commands", "dispatch.ts"),
+    ];
+    expect(dispatchFiles.length).toBeGreaterThan(2);
+    for (const path of dispatchFiles) {
+      const source = readFileSync(path, "utf8");
+      for (const pattern of [
+        /API_KEY/i,
+        /\bfetch\s*\(/,
+        /api\.anthropic\.com|api\.openai\.com/,
+        FORBIDDEN_EVERYWHERE,
+        /\bprocess\.env\b/,
+      ]) {
+        expect(source).not.toMatch(pattern);
+      }
+    }
+  });
 
   test("src/templates modules import nothing at all — pure string templates", () => {
     for (const path of tsFilesUnder(join(SRC_DIR, "templates"))) {

@@ -1,0 +1,2 @@
+{"id":"grghg8v7","ts":"2026-07-25T18:09:43Z","seq":0,"type":"config.updated","actor":{"kind":"agent","id":"opus-implementer"},"payload":{"section":"governance","value":{"product":"human","architecture":"human"}}}
+{"id":"s8txtmqg","ts":"2026-07-25T18:09:43Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"opus-implementer"},"payload":{}}

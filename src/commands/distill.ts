@@ -21,8 +21,9 @@ const USAGE = `usage:
     Mark archived journal segments (nahel/journal/archive/) as distilled.
     Refuses segments that are still active (not yet rotated) or unknown.`;
 
-/** The open-extension event type recording a distill act. */
-export const DISTILLED_EVENT_TYPE = "journal.distilled";
+// Reserved in the schema layer so `nahel log` refuses to forge it.
+import { DISTILLED_EVENT_TYPE } from "../schema/events";
+export { DISTILLED_EVENT_TYPE };
 
 async function runDistill(
   args: string[],

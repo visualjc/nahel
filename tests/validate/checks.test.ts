@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
@@ -15,7 +15,9 @@ import {
   addDistilled,
   itemPath,
   observationPath,
+  readConfig,
   runRecordPath,
+  writeConfig,
   writeItem,
   writeObservation,
   writeRun,
@@ -421,6 +423,217 @@ describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
     const ids = missing.map((finding) => finding.message).join("\n");
     expect(ids).toContain(a.id);
     expect(ids).toContain(b.id);
+  });
+});
+
+describe("validate — merge-authority provenance (merge.unauthorized, F3.4)", () => {
+  /** Drive the real `nahel config set merge` as the given actor. */
+  async function setMergeAuthority(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    authority: string,
+    actorSpec: string,
+  ): Promise<void> {
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await configCommand.run(
+        ["set", "merge", "--data", `authority=${authority}`],
+        fixture.env,
+        fixture.root,
+        actorSpec,
+      );
+      if (code !== 0) throw new Error(`config set merge failed (${actorSpec})`);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  }
+
+  test("merge: on-approve flipped by a HUMAN is silent — the flip is the standing authorization", async () => {
+    const fixture = await setupFixture(dirs);
+    await setMergeAuthority(fixture, "on-approve", "human:jim");
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "merge.unauthorized")).toEqual([]);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("merge: on-approve flipped by an AGENT warns that the flag is inert, naming the human re-set fix", async () => {
+    const fixture = await setupFixture(dirs);
+    await setMergeAuthority(fixture, "on-approve", "agent:opus-implementer");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "merge.unauthorized");
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("warning");
+    expect(finding.message).toContain("on-approve");
+    expect(finding.message).toContain("opus-implementer");
+    expect(finding.message).toContain("inert");
+    // The fix names the ONE action that repairs it: a human re-running the set.
+    expect(finding.fix).toContain("human");
+    expect(finding.fix).toContain("nahel config set merge");
+    // Never an error: an inert flag degrades to the safe default, it does not
+    // corrupt state.
+    expect(
+      (await validateStore(fixture.layout)).filter((f) => f.severity === "error"),
+    ).toEqual([]);
+  });
+
+  test("a hand-edited merge: on-approve with no journaled flip warns — unprovable is not authorized", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, { ...config, merge: { authority: "on-approve" } });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "merge.unauthorized");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("on-approve");
+    expect(findings[0]!.fix).toContain("nahel config set merge");
+  });
+
+  test("a human re-set after an agent's flip CLEARS the warning — the prescribed fix works end to end", async () => {
+    const fixture = await setupFixture(dirs);
+    await setMergeAuthority(fixture, "on-approve", "agent:opus-implementer");
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toHaveLength(1);
+
+    // The byte-equal human re-set: same section, same value, human actor.
+    await setMergeAuthority(fixture, "on-approve", "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
+  });
+
+  test("two same-second setters that disagree warn as AMBIGUOUS, naming the fresh human set as the fix", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, { ...config, merge: { authority: "on-approve" } });
+
+    // Two config sets from different sessions in the same second: both carry
+    // seq 0, so only the random event id separates them in the total order.
+    // A lottery must never decide whether auto-merge is authorized.
+    const frozen = { now: () => "2026-07-25T12:00:00Z", random: fixture.env.random };
+    for (const actor of [
+      { kind: "human", id: "jim" } as const,
+      { kind: "agent", id: "opus-implementer" } as const,
+    ]) {
+      await appendEvent(fixture.layout, frozen, {
+        type: "config.updated",
+        actor,
+        session: newSessionSegmentId(fixture.env),
+        payload: { section: "merge", value: { authority: "on-approve" } },
+      });
+    }
+
+    const findings = findingsFor(await validateStore(fixture.layout), "merge.unauthorized");
+    console.log("[ambiguous]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("same second");
+    expect(findings[0]!.message).toContain("inert");
+    // The fix names the ONE deterministic repair: a fresh human set, later.
+    expect(findings[0]!.fix).toContain("human");
+    expect(findings[0]!.fix).toContain("nahel config set merge");
+    expect(findings[0]!.fix).toContain("second");
+    expect((await validateStore(fixture.layout)).filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  test("merge: human (explicit or absent) never warns — nothing was delegated", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
+
+    await setMergeAuthority(fixture, "human", "agent:opus-implementer");
+    expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
+  });
+});
+
+describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {
+  /** Commit a routing map straight into config — routing carries no provenance. */
+  async function setRouting(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    routing: Record<string, { agent?: string; model?: string }>,
+  ): Promise<void> {
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, { ...config, routing });
+  }
+
+  test("review and review2 naming the SAME vendor warns, naming both slots and the routing fix", async () => {
+    const fixture = await setupFixture(dirs);
+    await setRouting(fixture, { review: { agent: "codex" }, review2: { agent: "codex" } });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor");
+    console.log("[same-vendor review slots]", findings);
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("warning");
+    expect(finding.message).toContain("codex");
+    expect(finding.message).toContain("routing.review");
+    expect(finding.message).toContain("routing.review2");
+    // The bar it protects, stated so the reader knows why it matters.
+    expect(finding.message).toContain("two same-vendor reviews are not two reviewers");
+    expect(finding.fix).toContain("nahel config set routing");
+    expect(finding.fix).toContain("review2");
+    // Never an error: a single-vendor map is a setup fact, not corrupt state.
+    expect((await validateStore(fixture.layout)).filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  test("review and review2 naming DIFFERENT vendors is silent — that is the configuration the loop wants", async () => {
+    const fixture = await setupFixture(dirs);
+    await setRouting(fixture, {
+      implementation: { agent: "claude" },
+      review: { agent: "codex" },
+      review2: { agent: "claude" },
+      default: { agent: "claude" },
+    });
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+  });
+
+  test("the fall-through case warns: with neither review nor review2 set, both slots land on routing.default", async () => {
+    const fixture = await setupFixture(dirs);
+    await setRouting(fixture, { default: { agent: "claude" } });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("routing.default");
+    expect(findings[0]!.message).toContain("claude");
+  });
+
+  test("with review2 unset, slot 2 falls back to the driving vendor the map names — a different implementation agent is silent", async () => {
+    const fixture = await setupFixture(dirs);
+    // review-loop's pre-review2 rule, resolved from committed state: slot 2 is
+    // the vendor driving the loop, whom the map names under implementation.
+    await setRouting(fixture, {
+      implementation: { agent: "claude" },
+      review: { agent: "codex" },
+      default: { agent: "codex" },
+    });
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+  });
+
+  test("an unroutable or absent map produces no finding — dispatch's own refusal covers a missing route", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+
+    // A map that names no agent for either slot resolves to nothing; there is
+    // no vendor pair to compare, so inventing a warning here would be noise.
+    await setRouting(fixture, { architecture: { agent: "codex" } });
+    expect(findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor")).toEqual(
+      [],
+    );
+  });
+
+  test("a model-only review entry falls through to the agent the next key names", async () => {
+    const fixture = await setupFixture(dirs);
+    // `review` names a model but no agent — unspawnable (dispatch refuses it),
+    // so the vendor answering slot 1 is routing.default's, and it ties slot 2.
+    await setRouting(fixture, { review: { model: "gpt-5" }, default: { agent: "claude" } });
+    const findings = findingsFor(await validateStore(fixture.layout), "routing.review-same-vendor");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("routing.default");
   });
 });
 

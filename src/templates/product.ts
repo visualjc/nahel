@@ -6,6 +6,14 @@
  * FROZEN CONTRACT: `nahel brief` (PRD F7) extracts the `## Goal` and
  * `## Hard constraints` sections VERBATIM by heading convention. The two
  * heading constants below define that convention — never reword them.
+ *
+ * The scaffolded Governance block states the DEFAULTS ACTUALLY IN FORCE
+ * (governance/authority.ts GOVERNANCE_DEFAULTS: product delegated,
+ * architecture human), not illustrative values — a founder reads this file to
+ * learn what nahel does when they declare nothing, and a skeleton showing a
+ * stricter posture than the one in force misleads. Templates import nothing
+ * (they are pure strings, enforced by tests/store/purity.test.ts), so the two
+ * are kept in step by test instead: see the init-templates governance test.
  */
 
 /** Frozen heading `brief` extracts verbatim (PRD F7). */
@@ -49,8 +57,8 @@ ${HARD_CONSTRAINTS_HEADING}
 
 \`\`\`yaml
 governance:
-  product: human        # <who owns product decisions>
-  architecture: human   # <who owns architecture decisions>
+  product: delegated    # <who owns product decisions — this is the default in force when nahel/config declares none>
+  architecture: human   # <who owns architecture decisions — human until the architect slice ships>
 \`\`\`
 
 ## Change log

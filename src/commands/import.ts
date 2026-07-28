@@ -130,12 +130,14 @@ export function preserveTimestamp(raw: unknown, env: Env): string {
 // replay machinery ignores them — they carry no mutation payload).
 // ---------------------------------------------------------------------------
 
-/** One-per-invocation summary of what the import did (the config.updated precedent). */
-export const IMPORT_COMPLETED_EVENT_TYPE = "import.completed";
-/** A per-anomaly note: unmappable status, github-mapping mismatch, dropped dependency, unreferenced PRD. */
-export const IMPORT_NOTE_EVENT_TYPE = "import.note";
-/** A PRD relocated into docs/prds/, its stripped status preserved in this event (ADR-0013 as amended). */
-export const IMPORT_PRD_RELOCATED_EVENT_TYPE = "import.prd-relocated";
+// Event-type constants live in the schema layer (reserved from `nahel log` —
+// readers trust these types by TYPE, so a loggable one would be forgeable).
+import {
+  IMPORT_COMPLETED_EVENT_TYPE,
+  IMPORT_NOTE_EVENT_TYPE,
+  IMPORT_PRD_RELOCATED_EVENT_TYPE,
+} from "../schema/events";
+export { IMPORT_COMPLETED_EVENT_TYPE, IMPORT_NOTE_EVENT_TYPE, IMPORT_PRD_RELOCATED_EVENT_TYPE };
 
 // ---------------------------------------------------------------------------
 // Orchestration (I/O through the store layer + the mutate() choke point).

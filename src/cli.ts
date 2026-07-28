@@ -29,7 +29,7 @@ import { validateCommand } from "./commands/validate";
 import { systemEnv, type Env } from "./schema/env";
 import { NAHEL_ACTOR_VAR } from "./store/actor";
 
-export const VERSION = "0.0.1";
+export const VERSION = "0.1.0";
 
 /** Everything a command may touch beyond its own argv — injected at the entry point. */
 export interface CommandContext {

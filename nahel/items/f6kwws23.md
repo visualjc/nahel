@@ -2,11 +2,11 @@
 id: f6kwws23
 name: phase-2-afk-engine
 type: feature
-status: in-review
+status: done
 lane: full
 depends_on: []
 external_refs: []
 prd: docs/prds/phase-2-afk-engine.md
 created: 2026-07-25T17:01:01Z
-updated: 2026-07-25T21:50:50Z
+updated: 2026-07-28T23:22:54Z
 ---

@@ -1397,6 +1397,127 @@ describe("qa-lane canonical workflow doc — charter stage (F1)", () => {
   });
 });
 
+describe("qa-lane canonical workflow doc — sweep stage (F2)", () => {
+  test("the sweep is gated on a green contract and launches the app the contract describes (F2)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Sweep — drive the app, journal the evidence");
+    expect(step.length).toBeGreaterThan(0);
+    expect(step).toContain("nahel run update <run-id> --phase sweep");
+    // The existing autonomy gate applies: a contract that does not hold means
+    // every result recorded would be about the environment, not the app.
+    expect(step).toContain("nahel doctor` must exit 0 before a sweep starts");
+    expect(step).toContain("not the app the project describes");
+    // Launch through the contract, drive the real interface — the Phase 2
+    // verify-by-driving substitutions, refused again here.
+    expect(step).toContain("contract's `launch` command");
+    expect(step).toContain("`seed`");
+    expect(step).toContain("REAL interface");
+    expect(step).toContain("Tests passing is not driving");
+    // Charter first, then the budgeted exploration from F1.
+    expect(step).toContain("in charter order");
+    expect(step).toContain("then budgeted exploration");
+  });
+
+  test("four event types, no others — with the wild shapes reproduced verbatim (F2 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(body, "### The event vocabulary", "### Evidence or park");
+    expect(section.length).toBeGreaterThan(0);
+
+    // Per-case PASS and per-case FAIL keep the names and payload keys the
+    // first sweeps in the wild already wrote (2026-07-23). Renaming them
+    // would orphan every event already in a target's journal.
+    expect(section).toContain("nahel log qa.result --item <item-id> --run <run-id>");
+    expect(section).toContain("--data case=QA-<nn>");
+    expect(section).toContain("--data result=pass");
+    expect(section).toContain("nahel log qa.finding --item <item-id> --run <run-id>");
+    expect(section).toContain("--data bug=<bug-item-id>");
+    expect(section).toContain("2026-07-23");
+    expect(section).toContain("VERBATIM");
+    expect(section).toContain("not renameable");
+    // The open-extension model stands: the specifics ride extra keys.
+    expect(section).toContain("Extra observation keys are free");
+
+    // The new per-probe type, carrying what was tried and whether it defects.
+    expect(section).toContain("nahel log qa.probe --item <item-id> --run <run-id>");
+    expect(section).toContain("--data probe=");
+    expect(section).toContain("--data observed=");
+    expect(section).toContain("--data defect=<yes|no>");
+
+    // The new whole-sweep type, scoped so brief can never confuse per-case
+    // with per-sweep: exactly one, and the only type brief's QA line reads.
+    expect(section).toContain("qa.sweep-completed");
+    expect(section).toContain("exactly ONE per sweep");
+    expect(section).toContain("`nahel brief` reads ONLY this type");
+    expect(section).toContain("never write two");
+
+    // The link direction is stated, or `bug` can only be filled by a later
+    // correction: file the item first, then journal the finding.
+    expect(section).toContain("file the item first");
+  });
+
+  test("evidence or park — every charter case ends in one of three journaled states (F2 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(body, "### Evidence or park", "### The branch and the PR");
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain("Zero silent omissions");
+    expect(section).toContain("--data park=cannot-drive");
+    expect(section).toContain("--data case=QA-<nn>");
+    // The two substitutions a tiring sweep reaches for, refused by name.
+    expect(section).toContain("is not a result");
+    expect(section).toContain("is a park, not a skip");
+    // A sweep that cannot start parks the ITEM rather than reporting nothing.
+    expect(section).toContain("nahel item update <item-id> --status blocked");
+  });
+
+  test("all sweep work lands on a qa/ branch and closes as a draft PR — never the default branch (F2)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(body, "### The branch and the PR");
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain("git checkout -b qa/<UTC-timestamp>");
+    expect(section).toContain("gh pr create --draft");
+    expect(section).toContain("never a direct commit to the default branch");
+    // Merge authority is the target's, exercised by the review loop, not here.
+    expect(section).toContain("nahel/workflows/review-loop.md");
+    // The AC's teeth: a sweep of a clean repo leaves the default branch alone.
+    expect(section).toContain("leaves the default branch untouched");
+  });
+
+  test("the close writes the report, then exactly one summary event, then ends the run honestly (F2)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Close the sweep");
+    expect(step.length).toBeGreaterThan(0);
+    // The report is readable without the journal, and links every failure to
+    // the item it filed (F3), so nothing lives only in prose.
+    expect(step).toContain("docs/qa-runs/<timestamp>/report.md");
+    expect(step).toContain("commit SHA");
+    expect(step).toContain("budget");
+    expect(step).toContain("LINKED to the item it filed");
+    // One event, last, with the counts final.
+    expect(step).toContain("nahel log qa.sweep-completed --item <item-id> --run <run-id>");
+    expect(step).toContain("--data cases_run=<n>");
+    expect(step).toContain("--data probes=<n>");
+    expect(step).toContain("--data findings_filed=");
+    expect(step).toContain("--data report=docs/qa-runs/<timestamp>/report.md");
+    expect(step).toContain("after the findings are filed");
+    // Finding defects is the job, so a sweep with failures still ends success;
+    // `failure` is reserved for a sweep that could not do the job at all.
+    expect(step).toContain("nahel run end <run-id> success");
+    expect(step).toContain("nahel item update <item-id> --status in-review");
+    expect(step).toContain("still ends `success`");
+    expect(step).toContain("`done` is not yours to grant");
+  });
+
+  test("the document runs charter → sweep → close, in that order", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const charterAt = body.indexOf("Charter — the test plan comes from recorded criteria");
+    const sweepAt = body.indexOf("Sweep — drive the app, journal the evidence");
+    const closeAt = body.indexOf("Close the sweep");
+    expect(charterAt).toBeGreaterThan(0);
+    expect(sweepAt).toBeGreaterThan(charterAt);
+    expect(closeAt).toBeGreaterThan(sweepAt);
+  });
+});
+
 /**
  * The docs are the product, so every CLI example they carry must be one the
  * CLI accepts. `nahel log` bans MUTATION_PAYLOAD_KEYS (`target`, `record`,

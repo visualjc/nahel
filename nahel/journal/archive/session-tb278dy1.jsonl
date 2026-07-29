@@ -1,0 +1,2 @@
+{"id":"jerx4h58","ts":"2026-07-29T05:06:02Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-worker"},"item":"q4s06d1r","payload":{"target":"item","record":{"id":"q4s06d1r","name":"qa-lane-charter-stage","type":"feature","status":"in-review","lane":"direct","parent":"jecq4q2s","depends_on":[],"external_refs":[],"created":"2026-07-29T04:56:10Z","updated":"2026-07-29T05:06:02Z"},"body":""}}
+{"id":"56x9ycpn","ts":"2026-07-29T05:06:02Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-worker"},"payload":{}}

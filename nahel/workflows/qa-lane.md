@@ -173,10 +173,169 @@ Commit the charter, then journal its generation on this run:
       --data charter=docs/qa/qa-plan.md \
       --data basis=<recorded-criteria|knowledge-docs>
 
+## 3. Sweep — drive the app, journal the evidence
+
+    nahel run update <run-id> --phase sweep
+
+**The gate.** `nahel doctor` must exit 0 before a sweep starts — the same
+autonomy gate every AFK run passes (`nahel/workflows/afk-run.md`). A contract
+that does not hold on this machine means the app you are about to drive is
+not the app the project describes, and every result you recorded would be
+about your environment instead of about the software. Anything other than
+exit 0 parks the sweep (below), naming the unset environment variables or the
+failing healthcheck that doctor listed.
+
+**Launch.** Bring the app up with the run contract's `launch` command, and
+`seed` it where the contract defines one. Then drive the REAL interface: a
+browser for a web application, the app's own CLI or HTTP calls for a service.
+Tests passing is not driving; a page that renders is not a flow; re-reading
+the code is not driving at all.
+
+**The order is fixed**: every charter case in charter order,
+then budgeted exploration. Exploration is the expensive part; it goes last,
+against ground the charter left open — edge inputs, sequence breaks, reload
+and persistence probes, empty and overflow states.
+
+### The event vocabulary
+
+Every case and every probe is journaled on this run as a typed event. Four
+types, and no others — a vocabulary that drifts is an onboarding brief that
+lies to the next session.
+
+- **`qa.result`** — one charter case that PASSED. Per case.
+
+      nahel log qa.result --item <item-id> --run <run-id> \
+        --data case=QA-<nn> \
+        --data result=pass \
+        --data <observation>=<what you saw that proves it>
+
+- **`qa.finding`** — one charter case that FAILED, or an exploratory
+  discovery indicating a defect. Per case.
+
+      nahel log qa.finding --item <item-id> --run <run-id> \
+        --data case=QA-<nn> \
+        --data result=<fail|pass_with_known_issue> \
+        --data bug=<bug-item-id> \
+        --data <observation>=<what you saw>
+
+  `bug` carries the item step 4 files for this finding, so file the item first
+  and journal the finding second — a link added by a later correction is a
+  link a reader has to go looking for.
+
+- The `case`, `result` and `bug` keys, and both type names above, are the
+  shapes the first QA sweeps in the wild already wrote on 2026-07-23. They are
+  reproduced here VERBATIM and are not renameable: renaming one orphans every
+  event already sitting in a target's journal. Extra observation keys are free
+  — the journal's extension model is open — and are where the specifics belong
+  (the seed used, the session id, the computed value, the URL driven).
+
+- **`qa.probe`** — one exploratory probe beyond the charter: what you tried,
+  what happened, and whether it indicates a defect.
+
+      nahel log qa.probe --item <item-id> --run <run-id> \
+        --data probe="<what you tried>" \
+        --data observed="<what happened>" \
+        --data defect=<yes|no>
+
+- **`qa.sweep-completed`** — the whole-sweep summary, written once at the
+  close (step 6). There is exactly ONE per sweep, and
+  `nahel brief` reads ONLY this type for its QA line —
+  so a per-case event must never carry this type,
+  and a sweep must never write two — per-case and per-sweep are different
+  scopes, and keeping them in different types is what lets a fresh session
+  read one line and know where QA stands.
+
+### Evidence or park — there is no third outcome
+
+Every charter case ends in exactly one of three journaled states: a
+`qa.result`, a `qa.finding`, or a park carrying its reason.
+Zero silent omissions.
+A case you could not drive — the surface does not exist yet, this
+host has no tooling that reaches it, a precondition the contract does not
+provide — is parked, named, and counted:
+
+    nahel log note --item <item-id> --run <run-id> \
+      --data summary="parked case QA-<nn>: <why it could not be driven, and what you tried>" \
+      --data case=QA-<nn> \
+      --data park=cannot-drive
+
+"It looked fine" is not a result. "I ran out of budget" is a park, not a skip.
+
+If the sweep as a whole cannot start — doctor is not green, or the app will
+not launch — park the ITEM and stop, rather than reporting a sweep that never
+drove anything:
+
+    nahel item update <item-id> --status blocked
+    nahel log note --item <item-id> --run <run-id> \
+      --data summary="parked: cannot sweep — <which precondition failed, and what you tried>" \
+      --data park=cannot-drive
+
+### The branch and the PR
+
+Every artifact a sweep produces — the charter, the run report, the scripts —
+lives on the sweep's own branch in the TARGET repo, created before the first
+commit:
+
+    git checkout -b qa/<UTC-timestamp>
+
+The sweep closes by opening a DRAFT PR, exactly like any other lane's output:
+
+    gh pr create --draft --title "qa/<timestamp>: sweep of <surfaces>" --body-file <file>
+
+Its body carries the trail: the charter's basis, cases run / passed / failed /
+parked, probes run and whether the budget was hit, every finding with the item
+it filed, and the report path. This path is
+never a direct commit to the default branch,
+and never a merge of your own: merge authority belongs to the target
+and is exercised by `nahel/workflows/review-loop.md`. A sweep of a clean repo
+leaves the default branch untouched.
+
+## 4. Close the sweep
+
+Write the report, then the one event that summarizes the whole thing.
+
+**The report** lands at `docs/qa-runs/<timestamp>/report.md` in the target
+repo and records: the commit SHA swept, the UTC time, how the app was launched
+and which surface was driven, the preflight results, the per-case status with
+the observation that justifies each one, every probe and whether the
+exploration budget was hit, every finding LINKED to the item it filed
+(step 4), the exclusions, and the overall verdict. Write it to be read without
+the journal.
+
+**The one summary event:**
+
+    nahel log qa.sweep-completed --item <item-id> --run <run-id> \
+      --data cases_run=<n> \
+      --data passed=<n> \
+      --data failed=<n> \
+      --data parked=<n> \
+      --data probes=<n> \
+      --data budget_hit=<yes|no> \
+      --data findings_filed='["<item-id>", ...]' \
+      --data report=docs/qa-runs/<timestamp>/report.md
+
+Exactly one, written last — after the findings are filed, because the counts
+have to be final. A summary written mid-sweep summarizes a sweep that had not
+happened yet.
+
+Then end honestly and hand the item to review:
+
+    nahel run end <run-id> success
+    nahel item update <item-id> --status in-review
+
+A sweep that found defects still ends `success` — finding them is the job, and
+an outcome that punished discovery would teach the next sweep to look less
+hard. `failure` is for a sweep that could not do the job: the app never came
+up, or the charter could not be driven. `done` is not yours to grant; it comes
+at the human's word, like every leaf item's.
+
 Fallback (degraded environment): if the `nahel` CLI is unavailable, the
 charter itself may still be written — it is prose derived from documents you
 can read — but make NO item, run, or journal mutations, and say which ones are
 pending so a CLI-equipped session can record them. A charter whose sources you
 could not read is not a charter: without `nahel status` and `nahel brief`,
 state that the criteria are unavailable rather than inventing cases to fill
-the gap.
+the gap. Do NOT sweep without the CLI: an undriveable case, a finding, and a
+probe are all evidence, and evidence that lands nowhere is evidence nobody
+will ever act on. If the host cannot drive the app at all, park rather than
+substituting a test run for a sweep.

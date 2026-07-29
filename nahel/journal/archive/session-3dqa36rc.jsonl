@@ -1,0 +1,2 @@
+{"id":"8k3v7jwt","ts":"2026-07-29T04:56:11Z","seq":0,"type":"item.created","actor":{"kind":"human","id":"maintainer"},"item":"wya639cg","payload":{"target":"item","record":{"id":"wya639cg","name":"qa-benchmark-grading-round","type":"qa","status":"backlog","lane":"direct","parent":"jecq4q2s","depends_on":["t6dypfm9","paeqec2z"],"external_refs":[],"created":"2026-07-29T04:56:11Z","updated":"2026-07-29T04:56:11Z"},"body":""}}
+{"id":"5jq2vafn","ts":"2026-07-29T04:56:11Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

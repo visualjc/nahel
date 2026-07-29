@@ -1,0 +1,2 @@
+{"id":"bhcxed0b","ts":"2026-07-29T04:55:52Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"6m19g486","payload":{"target":"item","record":{"id":"6m19g486","name":"phase-3-qa-lane-prd","type":"plan","status":"in-review","lane":"full","depends_on":[],"external_refs":[],"prd":"docs/prds/phase-3-qa-lane.md","created":"2026-07-29T04:45:05Z","updated":"2026-07-29T04:55:52Z"},"body":""}}
+{"id":"22zd4c5f","ts":"2026-07-29T04:55:53Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

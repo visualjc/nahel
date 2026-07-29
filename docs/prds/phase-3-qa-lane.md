@@ -67,9 +67,9 @@ A canonical workflow doc `nahel/workflows/qa-lane.md` (same frontmatter
 format as every lane) that an agent loads to run a QA pass. Step one is
 **charter generation**: derive the test plan from what the store already
 records — the target's PRD acceptance criteria when a PRD exists (via each
-item's `--prd` path), the constitution's hard constraints (each constraint
-becomes at least one probe), and open bug items (each an explicit regression
-check). Brownfield targets with no PRDs charter from the knowledge layer
+item's `--prd` path), the constitution's hard constraints (each DRIVEABLE
+constraint becomes at least one probe; see the applicability classification
+below), and open bug items (each an explicit regression check). Brownfield targets with no PRDs charter from the knowledge layer
 (PRODUCT.md / CONTEXT.md) plus the app's visible surfaces, and say so.
 
 The charter is written to `docs/qa/qa-plan.md` in the **target** repo —
@@ -180,10 +180,11 @@ Severity is recorded as a note, not new schema. A finding that is a product
 ### F4 — the ratchet: exploration hardens into committed scripts
 
 Checks that prove valuable graduate into **deterministic e2e scripts**
-committed to the target repo, runnable under the repo's own test tooling
-(the run contract's `test` command or a named script beside it — the
-speed-count precedent is `scripts/qa/*.test.mjs` run by `node --test`). The
-ratchet rules, stated in the workflow and enforced by review:
+committed to the target repo and wired into the run contract's canonical
+`test` command — always, no side suites (the speed-count precedent's
+standalone `scripts/qa/*.test.mjs` predates this rule; the workflow folds
+such scripts into the canonical command when it meets them). The ratchet
+rules, stated in the workflow and enforced by review:
 
 - Ratchet scripts are wired into the run contract's canonical `test`
   command — the gate every run, review, and verify-by-driving pass already

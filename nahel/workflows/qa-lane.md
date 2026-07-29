@@ -238,7 +238,7 @@ lies to the next session.
         --data defect=<yes|no>
 
 - **`qa.sweep-completed`** — the whole-sweep summary, written once at the
-  close (step 6). There is exactly ONE per sweep, and
+  close (step 5). There is exactly ONE per sweep, and
   `nahel brief` reads ONLY this type for its QA line —
   so a per-case event must never carry this type,
   and a sweep must never write two — per-case and per-sweep are different
@@ -290,7 +290,92 @@ and never a merge of your own: merge authority belongs to the target
 and is exercised by `nahel/workflows/review-loop.md`. A sweep of a clean repo
 leaves the default branch untouched.
 
-## 4. Close the sweep
+## 4. Findings — every defect becomes a typed item
+
+A finding that exists only in a report is a finding the project will lose. So
+in the SAME run that found it, every failed case and every exploratory
+discovery indicating a defect becomes a work item — with a repro somebody else
+can follow, because the person who reproduces it will not be you.
+
+**a. Check for a duplicate first.** Before filing anything:
+
+    nahel status
+    nahel recall "<the symptom, in the target's own words>"
+
+A bug already open for this behavior gets a NOTE, not a twin:
+
+    nahel log note --item <existing-bug-id> --run <run-id> \
+      --data summary="re-found during qa sweep: <case or probe> — <what was observed>" \
+      --data case=QA-<nn> \
+      --data qa_run=<run-id>
+
+Twins are how a backlog stops being readable, and a re-find is genuinely
+useful information on the item that already exists: it says the bug survived
+another release. Search before you file, every time.
+
+**b. Defect, or question?** A defect means the app disagrees with something
+recorded — an acceptance criterion, a hard constraint, a charter case's stated
+expectation. Where nothing recorded says what SHOULD happen, you have found a
+product question, and guessing the intended behavior is how a QA lane quietly
+invents requirements. File it as a `chore` flagged for the human instead:
+
+    nahel item new chore <slug> direct
+    nahel log note --item <chore-id> --run <run-id> \
+      --data summary="question for the human: <what the app does> — nothing recorded says whether this is intended" \
+      --data question=product-behavior \
+      --data case=QA-<nn> \
+      --data qa_run=<run-id>
+
+Do not park the sweep over a question and do not answer it yourself; the
+question goes on the pile and the sweep carries on.
+
+**c. File the bug with its repro.** The investigation stub is the deliverable
+here, not the title. The bar: a fresh agent with no memory of this sweep can
+reproduce the failure from the stub ALONE.
+
+    nahel item new bug <slug> direct --investigation docs/investigations/<slug>.md
+
+Write that document as you file it, carrying at minimum:
+
+- **Repro steps** — the exact actions, in order, with the exact inputs used
+  (the seed, the URL, the payload, the account state). "Click around the
+  settings page until it breaks" is not a repro.
+- **Expected vs observed** — what the recorded criterion or the charter case
+  said should happen, and what actually happened, stated separately. Collapsed
+  into one sentence they stop being checkable against each other.
+- **Environment** — the commit SHA, how the app was launched, which surface
+  you drove, and whatever the contract's `seed` put in place.
+
+The document is the bug lane's starting point (`nahel/workflows/bug-lane.md`),
+which is also where the fix lives. QA files it and moves on.
+
+**d. Severity is a note, never new schema.** The store has no severity field
+and does not need one; a judgment about cost belongs in prose that says why:
+
+    nahel log note --item <bug-id> --run <run-id> \
+      --data summary="severity <blocker|major|minor>: <what it costs a user, and how often>" \
+      --data severity=<blocker|major|minor>
+
+**e. Provenance — the QA run rides the item's trail.** Every item this sweep
+files carries the run that found it, so the path from sweep to finding to
+filing is readable in one direction and back:
+
+    nahel log note --item <bug-id> --run <run-id> \
+      --data summary="filed by qa sweep: <case or probe> — from finding event <event-id>" \
+      --data qa_run=<run-id> \
+      --data finding=<qa.finding-event-id> \
+      --data case=QA-<nn>
+
+Read it back with `nahel progress --item <bug-id>` before moving on. A bug
+item with no QA run in its trail
+cannot be traced to the sweep that found it,
+and an untraceable filing is indistinguishable from a guess somebody typed in.
+
+Only now journal the case's `qa.finding` (step 3), with `bug=<the item id you
+just filed>` — the finding event and the item point at each other, and neither
+needs a later correction.
+
+## 5. Close the sweep
 
 Write the report, then the one event that summarizes the whole thing.
 

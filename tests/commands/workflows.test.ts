@@ -1518,6 +1518,78 @@ describe("qa-lane canonical workflow doc — sweep stage (F2)", () => {
   });
 });
 
+describe("qa-lane canonical workflow doc — findings stage (F3)", () => {
+  test("every defect finding becomes an item in the SAME run — nothing lives only in the report (F3)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Findings — every defect becomes a typed item");
+    expect(step.length).toBeGreaterThan(0);
+    expect(step).toContain("only in a report");
+    expect(step).toContain("SAME run");
+    // The findings step runs before the close, so the summary's counts and the
+    // report's links are about items that already exist.
+    const findingsAt = body.indexOf("Findings — every defect becomes a typed item");
+    expect(findingsAt).toBeGreaterThan(body.indexOf("Sweep — drive the app"));
+    expect(body.indexOf("Close the sweep")).toBeGreaterThan(findingsAt);
+  });
+
+  test("duplicates are checked BEFORE filing; a re-found bug gets a note, never a twin (F3)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Findings — every defect becomes a typed item");
+    expect(step).toContain("nahel status");
+    expect(step).toContain("nahel recall");
+    expect(step).toContain("nahel log note --item <existing-bug-id> --run <run-id>");
+    expect(step).toContain("re-found during qa sweep");
+    expect(step).toContain("a NOTE, not a twin");
+  });
+
+  test("a product question files as a human-flagged chore, never as a bug (F3)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Findings — every defect becomes a typed item");
+    // The split: a defect contradicts something RECORDED. Where nothing
+    // records the intended behavior, guessing it invents a requirement.
+    expect(step).toContain("nahel item new chore");
+    expect(step).toContain("question for the human");
+    expect(step).toContain("--data question=product-behavior");
+    expect(step).toContain("guessing the intended behavior");
+    // A question does not stall the sweep.
+    expect(step).toContain("the sweep carries on");
+  });
+
+  test("the bug carries an investigation stub a fresh agent can reproduce from ALONE (F3 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Findings — every defect becomes a typed item");
+    expect(step).toContain(
+      "nahel item new bug <slug> direct --investigation docs/investigations/<slug>.md",
+    );
+    // The three parts the PRD requires, each named.
+    expect(step).toContain("Repro steps");
+    expect(step).toContain("Expected vs observed");
+    expect(step).toContain("Environment");
+    expect(step).toContain("from the stub ALONE");
+    // The bar for "exact", stated as a refusal rather than an adjective.
+    expect(step).toContain("is not a repro");
+    // The bug lane picks it up from there; QA does not fix it.
+    expect(step).toContain("nahel/workflows/bug-lane.md");
+  });
+
+  test("severity is a note, not new schema (F3)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Findings — every defect becomes a typed item");
+    expect(step).toContain("--data severity=<blocker|major|minor>");
+    expect(step).toContain("never new schema");
+  });
+
+  test("provenance: the QA run id rides the bug item's trail, readable back (F3 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Findings — every defect becomes a typed item");
+    expect(step).toContain("--data qa_run=<run-id>");
+    expect(step).toContain("--data finding=<qa.finding-event-id>");
+    expect(step).toContain("nahel progress --item <bug-id>");
+    // The teeth: an untraceable bug item cannot be scored against the sweep.
+    expect(step).toContain("cannot be traced to the sweep that found it");
+  });
+});
+
 /**
  * The docs are the product, so every CLI example they carry must be one the
  * CLI accepts. `nahel log` bans MUTATION_PAYLOAD_KEYS (`target`, `record`,

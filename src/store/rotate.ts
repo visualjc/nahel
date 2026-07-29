@@ -1,4 +1,4 @@
-import { link, mkdir, unlink } from "node:fs/promises";
+import { link, mkdir, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { listSegments, readLastEvent, SESSION_CLOSED_EVENT_TYPE } from "./journal";
 import { readRun, type StoreLayout } from "./layout";
@@ -39,6 +39,43 @@ async function sessionSegmentIsClosed(path: string): Promise<boolean> {
 }
 
 /**
+ * The sweep is SERIALIZED across processes by an atomic mkdir lock: every
+ * mutation-path command rotates, so concurrent sweepers are the norm, and a
+ * lock-free multi-step move protocol demonstrably leaks duplicate archive
+ * copies under that contention. One sweeper at a time makes the per-segment
+ * move trivially race-free; waiting sweepers re-list under the lock, so the
+ * "every closed segment gets archived" invariant survives whichever process
+ * sweeps last. A sweep takes milliseconds, so a lock older than the retry
+ * budget means a holder that died mid-sweep — it is stolen, and the
+ * link-based no-clobber below keeps even a pathological double-sweep from
+ * ever destroying history.
+ */
+const SWEEP_LOCK = ".rotate.lock";
+const LOCK_RETRY_MS = 25;
+const LOCK_RETRIES = 200; // ~5s budget before a holder is presumed dead
+
+async function acquireSweepLock(layout: StoreLayout): Promise<() => Promise<void>> {
+  const lockDir = join(layout.journalDir, SWEEP_LOCK);
+  const release = async () => {
+    await rmdir(lockDir).catch(() => {});
+  };
+  for (let i = 0; i < LOCK_RETRIES; i++) {
+    try {
+      await mkdir(lockDir);
+      return release;
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+    }
+  }
+  // Budget exhausted: the holder died mid-sweep. Steal the lock and proceed —
+  // the archive step's no-clobber guarantee holds even if the holder revives.
+  await rmdir(lockDir).catch(() => {});
+  await mkdir(lockDir).catch(() => {});
+  return release;
+}
+
+/**
  * Move one closed segment into the archive WITHOUT ever clobbering an
  * existing archive file (bug 7nzsz577, HC6). A same-name collision is
  * legitimate history meeting history: new events for an already-archived run
@@ -48,10 +85,8 @@ async function sessionSegmentIsClosed(path: string): Promise<boolean> {
  * EEXIST atomically where `rename()` silently overwrites — and the source is
  * unlinked only after its content provably exists in the archive.
  *
- * Returns the archived filename, or null when a concurrent sweeper archived
- * the segment first (its copy is already in place; a duplicate we linked in
- * the race window is removed, so every event lands in the archive exactly
- * once).
+ * Returns the archived filename, or null when the source is already gone (a
+ * stolen-lock sweeper got here first — its copy is the one that counts).
  */
 async function archiveSegment(
   layout: StoreLayout,
@@ -70,18 +105,11 @@ async function archiveSegment(
       if (code === "ENOENT") return null; // source gone: another sweeper won
       throw error;
     }
-    try {
-      await unlink(path);
-    } catch (error) {
-      if ((error as { code?: unknown }).code === "ENOENT") {
-        // Another sweeper linked and unlinked the source between our link and
-        // unlink: its archive copy is the one that counts — ours would double
-        // every event on the merged read, so it goes.
-        await unlink(destination).catch(() => {});
-        return null;
-      }
-      throw error;
-    }
+    await unlink(path).catch(() => {
+      // Source vanished between link and unlink: only a revived dead-lock
+      // holder can do that, and the content is safely in the archive either
+      // way — never remove an archive file to tidy up.
+    });
     return candidate;
   }
 }
@@ -89,23 +117,30 @@ async function archiveSegment(
 /** Archive every provably-closed active segment; returns what moved. */
 export async function rotateJournal(layout: StoreLayout): Promise<RotationResult> {
   const archived: string[] = [];
-  const { active } = await listSegments(layout);
-  for (const name of active.sort()) {
-    const path = join(layout.journalDir, name);
-    const runMatch = RUN_SEGMENT.exec(name);
-    const sessionMatch = SESSION_SEGMENT.exec(name);
-    const closed = runMatch
-      ? await runSegmentIsClosed(layout, runMatch[1]!)
-      : sessionMatch
-        ? await sessionSegmentIsClosed(path)
-        : false;
-    if (closed) {
-      // Git never materializes empty directories, so a fresh clone made while
-      // the archive was empty has no journal/archive/ at all.
-      await mkdir(layout.journalArchiveDir, { recursive: true });
-      const landed = await archiveSegment(layout, name, path);
-      if (landed !== null) archived.push(landed);
+  const release = await acquireSweepLock(layout);
+  try {
+    // Listed UNDER the lock: a fresh view, so the last sweeper standing sees
+    // (and archives) segments that closed while it waited.
+    const { active } = await listSegments(layout);
+    for (const name of active.sort()) {
+      const path = join(layout.journalDir, name);
+      const runMatch = RUN_SEGMENT.exec(name);
+      const sessionMatch = SESSION_SEGMENT.exec(name);
+      const closed = runMatch
+        ? await runSegmentIsClosed(layout, runMatch[1]!)
+        : sessionMatch
+          ? await sessionSegmentIsClosed(path)
+          : false;
+      if (closed) {
+        // Git never materializes empty directories, so a fresh clone made
+        // while the archive was empty has no journal/archive/ at all.
+        await mkdir(layout.journalArchiveDir, { recursive: true });
+        const landed = await archiveSegment(layout, name, path);
+        if (landed !== null) archived.push(landed);
+      }
     }
+  } finally {
+    await release();
   }
   return { archived };
 }

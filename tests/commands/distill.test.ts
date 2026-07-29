@@ -16,10 +16,11 @@ import {
   listDistilledMarkers,
   readDistilled,
   writeConfig,
+  writeRun,
   type StoreLayout,
 } from "../../src/store/layout";
 import { rotateJournal } from "../../src/store/rotate";
-import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeFrontmatter, makeRun, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
  * `nahel distill` (PRD F6.1): mark ARCHIVED journal segments as distilled —
@@ -160,6 +161,31 @@ describe("nahel distill — marking archived segments", () => {
       { segments: [first] },
       { segments: [second] },
     ]);
+  });
+});
+
+describe("nahel distill — collision-archived segments (7nzsz577)", () => {
+  test("a numbered archive segment (.2.jsonl) distills like any other — compaction debt can clear", async () => {
+    // Rotation never overwrites an archived segment: a second segment for the
+    // same run lands as run-<id>.2.jsonl. Distill must accept that name, or
+    // the collision copy could never be marked and compaction would report it
+    // as un-distilled debt forever (codex review round 1 on PR #19).
+    const { root, layout, env } = await setup();
+    const actor = { kind: "human", id: "jim" } as const;
+    const item = makeFrontmatter(env);
+    const run = makeRun(env, item.id, { status: "ended", ended: env.now() });
+    await writeRun(layout, run);
+    await appendEvent(layout, env, { type: "run.ended", actor, run: run.id, payload: {} });
+    await rotateJournal(layout);
+    await appendEvent(layout, env, { type: "note", actor, run: run.id, payload: { late: 1 } });
+    const { archived } = await rotateJournal(layout);
+    const numbered = `run-${run.id}.2.jsonl`;
+    expect(archived).toEqual([numbered]);
+
+    const code = await distillCommand.run([`run-${run.id}.jsonl`, numbered], env, root);
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect(await readDistilled(layout)).toEqual([numbered, `run-${run.id}.jsonl`].sort());
   });
 });
 

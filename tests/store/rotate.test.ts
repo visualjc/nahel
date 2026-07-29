@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   appendEvent,
@@ -140,6 +140,80 @@ describe("rotateJournal — closed segments only", () => {
     const after = await Array.fromAsync(readJournal(layout));
     expect(after).toEqual(before);
   });
+
+  test("an archive-name collision NEVER clobbers: the newcomer gets a numbered name (7nzsz577)", async () => {
+    // The speed-count-game incident: a run's segment was already archived,
+    // new events for the same run recreated a live segment with the same
+    // name, and rename() silently overwrote the archived file — history
+    // destroyed by the CLI's own rotation (HC6). Both segments are history;
+    // the later arrival must take a uniquified name, the original untouched.
+    const layout = await setup();
+    const env = seededEnv({ tickSeconds: 1 });
+    const run = makeRun(env, makeFrontmatter(env).id, { status: "ended", ended: env.now() });
+    await writeRun(layout, run);
+    await appendEvent(layout, env, { type: "run.ended", actor, run: run.id, payload: {} });
+    await rotateJournal(layout);
+    const archivedPath = join(layout.journalArchiveDir, `run-${run.id}.jsonl`);
+    const original = await readFile(archivedPath, "utf8");
+
+    // New events for the archived run recreate a live segment of the same name.
+    await appendEvent(layout, env, { type: "note", actor, run: run.id, payload: { late: 1 } });
+    const result = await rotateJournal(layout);
+    console.log("[collision]", result);
+    expect(result.archived).toEqual([`run-${run.id}.2.jsonl`]);
+    expect(await readFile(archivedPath, "utf8")).toBe(original);
+
+    // And again: the suffix keeps counting, nothing is ever lost.
+    await appendEvent(layout, env, { type: "note", actor, run: run.id, payload: { late: 2 } });
+    expect((await rotateJournal(layout)).archived).toEqual([`run-${run.id}.3.jsonl`]);
+    const segments = await listSegments(layout);
+    expect(segments.archived.sort()).toEqual([
+      `run-${run.id}.2.jsonl`,
+      `run-${run.id}.3.jsonl`,
+      `run-${run.id}.jsonl`,
+    ]);
+    // The merged journal still yields every event exactly once.
+    const events = await Array.fromAsync(readJournal(layout));
+    expect(events.filter((e) => e.type === "run.ended")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "note")).toHaveLength(2);
+  });
+
+  test("a pre-seeded UNCLAIMED lock is stolen after the grace period — rotation still sweeps (codex round 2)", async () => {
+    // Codex's round-2 repro shape: a stale lock dir with no ownership marker
+    // (a holder that died before claiming, or a hand-made dir) must not block
+    // rotation forever — and only an EMPTY dir can be cleared this way, so a
+    // claimed lock is never touched by the grace path.
+    const layout = await setup();
+    const env = seededEnv({ tickSeconds: 1 });
+    const run = makeRun(env, makeFrontmatter(env).id, { status: "ended", ended: env.now() });
+    await writeRun(layout, run);
+    await appendEvent(layout, env, { type: "run.ended", actor, run: run.id, payload: {} });
+    await mkdir(join(layout.journalDir, ".rotate.lock"));
+
+    const result = await rotateJournal(layout);
+    console.log("[stale unclaimed lock]", result);
+    expect(result.archived).toEqual([`run-${run.id}.jsonl`]);
+  }, 15_000);
+
+  test("a lock whose holder is DEAD is stolen by exactly its marker — rotation still sweeps", async () => {
+    const layout = await setup();
+    const env = seededEnv({ tickSeconds: 1 });
+    const run = makeRun(env, makeFrontmatter(env).id, { status: "ended", ended: env.now() });
+    await writeRun(layout, run);
+    await appendEvent(layout, env, { type: "run.ended", actor, run: run.id, payload: {} });
+    // A real dead pid: a child that has already exited and been reaped.
+    const { spawn } = await import("node:child_process");
+    const child = spawn("true");
+    expect(typeof child.pid).toBe("number");
+    await new Promise((resolve) => child.once("exit", resolve));
+    const lockDir = join(layout.journalDir, ".rotate.lock");
+    await mkdir(lockDir);
+    await writeFile(join(lockDir, `pid-${child.pid}`), "");
+
+    const result = await rotateJournal(layout);
+    console.log("[dead holder]", result);
+    expect(result.archived).toEqual([`run-${run.id}.jsonl`]);
+  }, 15_000);
 
   test("rotation is idempotent: a second pass archives nothing", async () => {
     const layout = await setup();

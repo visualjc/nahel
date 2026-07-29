@@ -162,8 +162,12 @@ export type ObservationFrontmatter = z.infer<typeof observationFrontmatterSchema
 const segmentFilenameField = z
   .string()
   .regex(
-    /^(run|session)-[0-9a-z]{8}\.jsonl$/,
-    "must be a journal segment filename: (run|session)-<8-char id>.jsonl",
+    // The optional numeric suffix (`.2`, `.3`, …) is a collision-archived
+    // segment: rotation never overwrites an existing archive file, so a
+    // second segment for the same run lands under the first free numbered
+    // name (bug 7nzsz577) — and it must be distillable like any other.
+    /^(run|session)-[0-9a-z]{8}(\.(?:[2-9]|[1-9][0-9]+))?\.jsonl$/,
+    "must be a journal segment filename: (run|session)-<8-char id>[.N].jsonl",
   );
 
 /**

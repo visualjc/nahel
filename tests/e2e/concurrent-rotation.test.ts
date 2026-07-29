@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,6 +80,40 @@ describe("concurrent mutation commands vs. rotation sweep", () => {
       expect(archived.filter((name) => name.startsWith("session-")).length).toBe(WRITERS);
 
       // The store itself is coherent after the storm.
+      const validate = spawnSync("bun", ["run", CLI, "validate"], { cwd, encoding: "utf8" });
+      expect(validate.status).toBe(0);
+    },
+    120_000,
+  );
+
+  test(
+    `a pre-seeded stale sweep lock + ${WRITERS} writers: exactly ${WRITERS} archives, no duplicates (codex round 2 on PR #19)`,
+    async () => {
+      // Codex's adversarial repro: with a time-based steal, every timed-out
+      // waiter cleared each other's lock and swept concurrently — 43 archives
+      // and duplicate event ids from 24 writers. Ownership-safe stealing must
+      // hold the line: one sweeper at a time, every segment archived once.
+      const cwd = await mkdtemp(join(tmpdir(), "nahel-stale-lock-"));
+      spawnSync("git", ["init", "-q", cwd]);
+      const init = spawnSync("bun", ["run", CLI, "init", "--actor", "human:jim"], {
+        cwd,
+        encoding: "utf8",
+      });
+      expect(init.status).toBe(0);
+      await mkdir(join(cwd, "nahel", "journal", ".rotate.lock"), { recursive: true });
+
+      const results = await Promise.all(
+        Array.from({ length: WRITERS }, (_, i) =>
+          nahelAsync(cwd, `agent:writer-${i}`, "item", "new", "chore", `stale-item-${i}`, "direct"),
+        ),
+      );
+      for (const result of results) expect(result.code).toBe(0);
+
+      const journal = await readdir(join(cwd, "nahel", "journal"));
+      expect(journal.filter((name) => name.endsWith(".jsonl"))).toEqual([]);
+      const archived = await readdir(join(cwd, "nahel", "journal", "archive"));
+      expect(archived.filter((name) => name.startsWith("session-")).length).toBe(WRITERS);
+
       const validate = spawnSync("bun", ["run", CLI, "validate"], { cwd, encoding: "utf8" });
       expect(validate.status).toBe(0);
     },

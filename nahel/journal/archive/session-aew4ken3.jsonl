@@ -1,0 +1,2 @@
+{"id":"31b3n9t2","ts":"2026-07-29T03:28:04Z","seq":0,"type":"item.created","actor":{"kind":"human","id":"maintainer"},"item":"7nzsz577","payload":{"target":"item","record":{"id":"7nzsz577","name":"repair-archive-collision-clobbers-history","type":"bug","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-29T03:28:04Z","updated":"2026-07-29T03:28:04Z"},"body":""}}
+{"id":"cctnp2y1","ts":"2026-07-29T03:28:04Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

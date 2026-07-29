@@ -488,6 +488,39 @@ on it (step 3); never work around a claim.
     may merge on sign-off. Either way the invariant here is one trail-carrying
     PR per epic.
 
+    With the PR open, decide whether the surface it changes earns a QA sweep
+    once it merges. Under the default `merge: human` this run ends BEFORE the
+    merge, so "after the merge, sweep" cannot be a live step here — the
+    schedule has to outlive the run, and the only durable carrier is an item.
+    So you MAY file one: a `qa` item whose NAME states what to sweep and what
+    it waits on.
+
+        nahel item new qa "sweep <surface> once PR #<n> merges" direct \
+          --depends-on <item-id>
+
+    It starts in `backlog` and nothing runs now. Under `merge: human` a
+    later runner or kickoff picks it up once the human's merge lands; under a
+    validly activated `merge: on-approve` the same runner may pick it up after
+    its own auto-merge. Either way the lane that runs it is
+    `nahel/workflows/qa-lane.md`, and the `--depends-on` keeps the sweep
+    behind the feature item it sweeps.
+
+    This is a judgment call, and it is journaled EITHER WAY — a "no" that
+    leaves no trace is indistinguishable from having forgotten:
+
+        nahel log note --item <item-id> \
+          --data summary="qa scheduled: <surface> after PR #<n> — <qa-item-id>" \
+          --data qa=<scheduled|not-scheduled>
+
+        nahel log note --item <item-id> \
+          --data summary="qa not scheduled: <surface> — <the reason it is not worth a sweep>" \
+          --data qa=<scheduled|not-scheduled>
+
+    QA never blocks a PR from opening —
+    verify-by-driving remains the pre-PR bar (step 9), and the QA lane is
+    broader and slower and runs after. A sweep decided against is a schedule
+    not filed, never a PR held open.
+
 11. Review. The draft PR from step 10 is what gets reviewed: run the
     checkpoint check (step 3) — handing an item to review is a phase
     transition on it — then invoke the review loop —

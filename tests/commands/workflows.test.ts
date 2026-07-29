@@ -1590,6 +1590,87 @@ describe("qa-lane canonical workflow doc — findings stage (F3)", () => {
   });
 });
 
+describe("qa-lane canonical workflow doc — ratchet stage (F4)", () => {
+  test("ratchet scripts join the run contract's canonical test command — never a side suite (F4)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Ratchet — exploration hardens into committed scripts");
+    expect(step.length).toBeGreaterThan(0);
+    expect(step).toContain("run contract's `test` command");
+    expect(step).toContain("no side suites");
+    expect(step).toContain("remember to run");
+    // A side suite met in the wild is folded in, not left beside the gate.
+    expect(step).toContain("FOLD IT IN");
+    expect(step).toContain("nahel config set contract");
+    // Scripts are deterministic and committed on the sweep's own branch.
+    expect(step).toContain("qa/` branch");
+    expect(step).toContain("deterministic");
+  });
+
+  test("the suite only grows: never deleted, never weakened, never skipped by a QA run (F4)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Ratchet — exploration hardens into committed scripts");
+    expect(step).toContain("The suite only grows");
+    expect(step).toContain("never deleted, never weakened");
+    // The three excuses, refused by name — this is the rule most likely to be
+    // softened by a sweep that wants a green run.
+    expect(step).toContain("not to make a sweep green");
+    expect(step).toContain("human-reviewed PR path");
+    // A committed script that now fails is a finding, not a maintenance chore.
+    expect(step).toContain("that is a FINDING");
+  });
+
+  test("found-but-unfixed bugs are armed with expected-fail markers, and QA never fixes them (F4)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Ratchet — exploration hardens into committed scripts");
+    // Red-first without holding everyone else's work hostage to a red suite.
+    expect(step).toContain("expected-failure marker");
+    expect(step).toContain("bug <bug-item-id>");
+    expect(step).toContain("suite stays green");
+    // The handoff: the bug lane fixes it, and flipping the marker is part of
+    // THAT fix — after which the script guards the recurrence forever.
+    expect(step).toContain("QA never fixes the bug");
+    expect(step).toContain("nahel/workflows/bug-lane.md");
+    expect(step).toContain("flipping the marker");
+    expect(step).toContain("guards the recurrence");
+    // The graduation is journaled, naming what landed and what is armed.
+    expect(step).toContain("--data scripts=");
+    expect(step).toContain("--data expected_fail=");
+  });
+
+  test("later sweeps run committed scripts FIRST, in an order the journal proves (F4 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const sweep = qaSection(body, "Sweep — drive the app, journal the evidence");
+    // The order lives where a sweep actually reads it, not only in the ratchet
+    // section: scripts, then charter, then explore.
+    expect(sweep).toContain("ratchet scripts");
+    expect(sweep).toContain("in charter order");
+    expect(sweep).toContain("then budgeted exploration");
+    // And it is journaled, because dispatch order asserted in prose proves
+    // nothing about what a given sweep actually did.
+    expect(sweep).toContain("--data phase=scripts-first");
+    const step = qaSection(body, "Ratchet — exploration hardens into committed scripts");
+    expect(step).toContain("provable from the journal");
+    expect(step).toContain("earlier than its first `qa.result`");
+    expect(step).toContain("is NOT re-explored");
+  });
+
+  test("the completed document runs charter → sweep → findings → ratchet → close", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const offsets = [
+      "Charter — the test plan comes from recorded criteria",
+      "Sweep — drive the app, journal the evidence",
+      "Findings — every defect becomes a typed item",
+      "Ratchet — exploration hardens into committed scripts",
+      "Close the sweep",
+    ].map((title) => {
+      const at = body.indexOf(title);
+      expect(at).toBeGreaterThan(0);
+      return at;
+    });
+    for (let i = 1; i < offsets.length; i += 1) expect(offsets[i]!).toBeGreaterThan(offsets[i - 1]!);
+  });
+});
+
 /**
  * The docs are the product, so every CLI example they carry must be one the
  * CLI accepts. `nahel log` bans MUTATION_PAYLOAD_KEYS (`target`, `record`,

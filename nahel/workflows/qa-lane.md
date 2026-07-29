@@ -191,10 +191,19 @@ browser for a web application, the app's own CLI or HTTP calls for a service.
 Tests passing is not driving; a page that renders is not a flow; re-reading
 the code is not driving at all.
 
-**The order is fixed**: every charter case in charter order,
-then budgeted exploration. Exploration is the expensive part; it goes last,
-against ground the charter left open — edge inputs, sequence breaks, reload
-and persistence probes, empty and overflow states.
+**The order is fixed**: the committed ratchet scripts (step 5) first,
+then every charter case in charter order,
+then budgeted exploration. Scripts are cheap and deterministic; exploration is
+the expensive, unrepeatable part, so it goes last, against ground the charter
+left open — edge inputs, sequence breaks, reload and persistence probes, empty
+and overflow states.
+
+Run the scripts by running the contract's `test` command, and journal that it
+happened before any case was driven:
+
+    nahel log note --item <item-id> --run <run-id> \
+      --data summary="ratchet scripts run first: <the contract's test command> — <pass/fail>" \
+      --data phase=scripts-first
 
 ### The event vocabulary
 
@@ -238,7 +247,7 @@ lies to the next session.
         --data defect=<yes|no>
 
 - **`qa.sweep-completed`** — the whole-sweep summary, written once at the
-  close (step 5). There is exactly ONE per sweep, and
+  close (step 6). There is exactly ONE per sweep, and
   `nahel brief` reads ONLY this type for its QA line —
   so a per-case event must never carry this type,
   and a sweep must never write two — per-case and per-sweep are different
@@ -284,10 +293,10 @@ The sweep closes by opening a DRAFT PR, exactly like any other lane's output:
 
 Its body carries the trail: the charter's basis, cases run / passed / failed /
 parked, probes run and whether the budget was hit, every finding with the item
-it filed, and the report path. This path is
+it filed, and the report path. A sweep is
 never a direct commit to the default branch,
-and never a merge of your own: merge authority belongs to the target
-and is exercised by `nahel/workflows/review-loop.md`. A sweep of a clean repo
+and it never merges its own PR: merge authority belongs to the target and is
+exercised by `nahel/workflows/review-loop.md`. A sweep of a clean repo
 leaves the default branch untouched.
 
 ## 4. Findings — every defect becomes a typed item
@@ -300,7 +309,7 @@ can follow, because the person who reproduces it will not be you.
 **a. Check for a duplicate first.** Before filing anything:
 
     nahel status
-    nahel recall "<the symptom, in the target's own words>"
+    nahel recall <keywords from the symptom, in the target's own words>
 
 A bug already open for this behavior gets a NOTE, not a twin:
 
@@ -375,7 +384,72 @@ Only now journal the case's `qa.finding` (step 3), with `bug=<the item id you
 just filed>` — the finding event and the item point at each other, and neither
 needs a later correction.
 
-## 5. Close the sweep
+## 5. Ratchet — exploration hardens into committed scripts
+
+A check worth running twice is worth never running by hand again. Checks that
+proved valuable — the ones that caught something, and the ones covering ground
+a regression would be expensive to miss — graduate into deterministic
+end-to-end scripts, committed to the target repo on this sweep's `qa/` branch.
+Deterministic means fixed inputs and a fixed expected result: a script that
+sometimes fails teaches everyone to ignore failures.
+
+Four rules, none of them a sweep's to negotiate.
+
+**1. Wired into the canonical test command — always, no side suites.** A
+ratchet script joins the run contract's `test` command: the gate every run,
+every review, and every verify-by-driving pass already executes. A suite
+somebody has to remember to run is a suite that stops being run, and it stops
+silently. If you meet a pre-existing side suite — QA scripts written before
+this rule, sitting beside the contract's command — FOLD IT IN as part of this
+sweep and say so in the report. A contract change is recorded through the CLI
+like every other:
+
+    nahel config set contract --data test="<the canonical command, now running the qa scripts>" ...
+
+`config set` replaces the WHOLE section, so carry the contract's other fields
+(`launch`, `seed`, the healthcheck) through in the same call or you drop them.
+Never invent a second test command, and never wire a script anywhere else.
+
+**2. The suite only grows.** A script, once merged, is
+never deleted, never weakened, and never marked skipped by a QA run:
+not to make a sweep green, not because it "seems flaky", not because the
+feature moved on. An assertion that genuinely must change goes through the
+ordinary human-reviewed PR path, like any other code change — it is never a QA
+run's own act. And if a committed script now fails,
+that is a FINDING (step 4), not a maintenance chore: the suite is reporting
+exactly what it was committed to report.
+
+**3. Red-first without a red suite: expected-fail markers.** A script for a bug
+you FOUND but that is not FIXED cannot simply be committed red — a red suite
+gates everyone else's work on a bug nobody has started on. Commit it with the
+test framework's expected-failure marker, naming the bug item id in the
+marker's reason:
+
+    <the framework's expected-fail marker>("bug <bug-item-id>: <the failure this pins>")
+
+The suite stays green, the repro is executable, and the bug carries an armed
+test from the day it was filed. **QA never fixes the bug.** The fix is the bug
+lane's (`nahel/workflows/bug-lane.md`), and flipping the marker to a plain
+assertion is part of THAT fix — from then on the script
+guards the recurrence forever. A sweep that fixes what it found has skipped a
+diagnosis and destroyed the evidence for the one it skipped.
+
+**4. Later sweeps run the committed scripts FIRST**, per step 3's fixed order,
+and that order must be provable from the journal rather than asserted here. A
+later sweep's journal shows its `phase=scripts-first` note
+earlier than its first `qa.result` or `qa.finding`, and those earlier than its
+first `qa.probe`. Ground a committed script already covers
+is NOT re-explored: re-exploration is for new ground, and a budget spent
+re-walking scripted paths is a budget that found nothing.
+
+Journal the graduation on this run:
+
+    nahel log note --item <item-id> --run <run-id> \
+      --data summary="ratcheted: <n> scripts committed into the canonical test command" \
+      --data scripts='["<path>", ...]' \
+      --data expected_fail='["<bug-item-id>", ...]'
+
+## 6. Close the sweep
 
 Write the report, then the one event that summarizes the whole thing.
 
@@ -384,7 +458,8 @@ repo and records: the commit SHA swept, the UTC time, how the app was launched
 and which surface was driven, the preflight results, the per-case status with
 the observation that justifies each one, every probe and whether the
 exploration budget was hit, every finding LINKED to the item it filed
-(step 4), the exclusions, and the overall verdict. Write it to be read without
+(step 4), the scripts ratcheted in and the expected-fail markers armed
+(step 5), the exclusions, and the overall verdict. Write it to be read without
 the journal.
 
 **The one summary event:**
@@ -423,4 +498,7 @@ state that the criteria are unavailable rather than inventing cases to fill
 the gap. Do NOT sweep without the CLI: an undriveable case, a finding, and a
 probe are all evidence, and evidence that lands nowhere is evidence nobody
 will ever act on. If the host cannot drive the app at all, park rather than
-substituting a test run for a sweep.
+substituting a test run for a sweep. Ratchet scripts are ordinary code and may
+still be written and committed, but wiring one into the canonical `test`
+command is a `nahel config set contract` act — leave it pending and say so,
+rather than hand-editing the contract.

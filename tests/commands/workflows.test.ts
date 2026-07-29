@@ -1205,6 +1205,199 @@ describe("prototype-lane canonical workflow doc (F5)", () => {
 });
 
 /**
+ * The QA lane (Phase 3 PRD F1–F4). One canonical doc built in four stages:
+ * charter from recorded criteria, sweep the running app, file findings as
+ * typed items, ratchet the valuable checks into the canonical test command.
+ *
+ * The doc is the product here, and its two failure modes are both invisible
+ * in a green suite: prose an editor softens (a budget that becomes "as much
+ * as time allows", an exclusion that stops needing a reason) and prose that
+ * quietly binds the lane to one app. These tests pin the load-bearing lines
+ * verbatim and prove the lane stays target-agnostic.
+ */
+
+/**
+ * Slice one qa-lane section. Sections are addressed by heading TITLE, never by
+ * number: the doc is built stage by stage and the trailing sections renumber
+ * as earlier ones land. `until` bounds a `###` subsection, whose end the
+ * default `\n## ` scan would overshoot.
+ */
+function qaSection(body: string, title: string, until?: string): string {
+  const at = body.indexOf(title);
+  if (at < 0) return "";
+  const end =
+    until === undefined ? body.indexOf("\n## ", at) : body.indexOf(until, at + title.length);
+  return body.slice(at, end < 0 ? body.length : end);
+}
+
+describe("qa-lane canonical workflow doc — charter stage (F1)", () => {
+  test("valid canonical doc whose preamble names the actor, the lifecycle it composes, and the no-hand-edit rule", async () => {
+    const { parsed, body } = await shippedWorkflow("qa-lane.md");
+    expect(parsed.name).toBe("qa-lane");
+    expect(parsed.description.length).toBeGreaterThan(0);
+    expect(parsed.args).toBe("<target hint or item id>");
+    // The actor reminder rides the preamble, like every other lane doc: an
+    // unattributed sweep is a sweep nobody can hold to its evidence.
+    const actorAt = body.indexOf("NAHEL_ACTOR");
+    expect(actorAt).toBeGreaterThan(-1);
+    expect(actorAt).toBeLessThan(body.indexOf("## 1."));
+    // Lifecycle mechanics are composed, never restated.
+    expect(body).toContain("nahel/workflows/task-lifecycle.md");
+    expect(body).toContain("never hand-edit anything under");
+    // The two boundaries the whole lane rests on.
+    expect(body).toContain("QA finds; QA never fixes");
+    expect(body).toContain("QA never gates a merge");
+  });
+
+  test("the lane is target-agnostic and host-neutral — no lab app, no keys, no vendor tooling", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const lower = body.toLowerCase();
+    // A workflow that named a particular lab app — or worse, knew where its
+    // expected results were written down — would test that app and grade
+    // nothing. Everything this lane checks comes from the TARGET's own store.
+    for (const leak of ["answer key", "answer-key", "pop-quiz", "pop quiz", "planted bug"]) {
+      expect(lower).not.toContain(leak);
+    }
+    for (const hostism of ["Claude", "Codex", "Task tool", "subagent", "slash command"]) {
+      expect(body).not.toContain(hostism);
+    }
+    expect(body).toContain("target-agnostic");
+  });
+
+  test("own the work: a `qa` item and a run record, both through the CLI (F1 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Own the work");
+    expect(step.length).toBeGreaterThan(0);
+    expect(step).toContain("nahel item new qa");
+    expect(step).toContain("nahel item update <item-id> --status in-progress");
+    expect(step).toContain("nahel run start <item-id>");
+    expect(step).toContain("nahel run update <run-id> --phase charter");
+    // An existing qa item is opened, never twinned; the resolution is journaled.
+    expect(step).toContain("nahel status");
+    expect(step).toContain("nahel log note");
+    expect(step).toContain("qa scope:");
+    // Which store the run belongs to is not left to inference.
+    expect(step).toContain("TARGET repo's root");
+  });
+
+  test("the charter is DERIVED from the three recorded sources, never invented (F1)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Charter — the test plan comes from recorded criteria");
+    expect(step.length).toBeGreaterThan(0);
+    expect(step).toContain("DERIVE");
+    // a. recorded acceptance criteria, reached through each item's --prd path.
+    expect(step).toContain("acceptance criteria");
+    expect(step).toContain("prd=docs/prds/");
+    // b. the constitution's hard constraints, read from the brief's extract.
+    expect(step).toContain("hard constraints");
+    expect(step).toContain("nahel brief");
+    // c. every open bug is a regression check, its repro lifted from the
+    // investigation document the bug lane already wrote.
+    expect(step).toContain("open `bug` item");
+    expect(step).toContain("regression check");
+    expect(step).toContain("investigation=docs/");
+  });
+
+  test("a PRD-less brownfield target charters from the knowledge layer and SAYS SO (F1 acceptance)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const step = qaSection(body, "Charter — the test plan comes from recorded criteria");
+    expect(step).toContain("Brownfield fallback");
+    expect(step).toContain("PRODUCT.md");
+    expect(step).toContain("CONTEXT.md");
+    // The label is the requirement: a reader must know the plan rests on
+    // inference rather than on criteria the project committed to.
+    expect(step).toContain("LABEL this basis");
+    expect(step).toContain("Never present an inferred case as a traced one");
+  });
+
+  test("every hard constraint is classified driveable or process-rule, exclusions justified (F1)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(
+      body,
+      "### Driveable, or a process rule",
+      "### Write the charter",
+    );
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain("DRIVEABLE");
+    expect(section).toContain("process-rule");
+    expect(section).toContain("EXCLUDED");
+    expect(section).toContain("one-line reason");
+    // The worked example the PRD names, so the classification is recognizable
+    // rather than a category an agent has to invent a boundary for.
+    expect(section).toContain("append-only history is a repo property, not app behavior");
+    // The teeth: dropping the awkward constraints silently is the failure this
+    // classification exists to make impossible.
+    expect(section).toContain("An excluded constraint with no stated reason is an omission");
+  });
+
+  test("the charter document generalizes the proven shape and lives in the TARGET repo (F1)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(body, "### Write the charter", "### The coverage map");
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain("docs/qa/qa-plan.md");
+    expect(section).toContain("TARGET repo");
+    // The sections the hand-built 2026-07-23 plan proved out.
+    for (const part of [
+      "Purpose",
+      "Preconditions",
+      "Run artifacts",
+      "Cases",
+      "Exploratory section",
+      "Coverage map",
+      "Exclusions",
+    ]) {
+      expect(section).toContain(part);
+    }
+    // Numbered cases carrying steps, an expected result fixed BEFORE the
+    // sweep, and the recorded thing each one traces to.
+    expect(section).toContain("QA-01");
+    expect(section).toContain("expected result");
+    expect(section).toContain("what it traces to");
+    expect(section).toContain("an expectation");
+    // Preconditions come from the run contract; artifacts have a fixed layout;
+    // timestamps are real (datetime rule), never estimated.
+    expect(section).toContain("nahel doctor");
+    expect(section).toContain("launch");
+    expect(section).toContain("seed");
+    expect(section).toContain("docs/qa-runs/<UTC-timestamp>/");
+    expect(section).toContain('date -u +"%Y-%m-%dT%H:%M:%SZ"');
+    // An untraceable case is exploratory by definition — never retro-fitted
+    // to a criterion invented to justify it.
+    expect(section).toContain("exploratory BY DEFINITION");
+    expect(section).toContain("Do not invent a criterion");
+  });
+
+  test("the coverage map states the scripted-vs-judgment split in one table (F1)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(body, "### The coverage map", "### The exploration budget");
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain("| Ground | Committed scripts | Charter cases | Exploratory |");
+    // Every cell filled or explicitly empty: an unfilled cell reads as covered.
+    expect(section).toContain("A blank cell is a claim nobody made");
+  });
+
+  test("the exploration budget is a fixed formula, stated in the doc and reported when hit (F1)", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    const section = qaSection(body, "### The exploration budget");
+    expect(section.length).toBeGreaterThan(0);
+    // The formula settles the PRD's former open question; softened into "as
+    // much as time allows" it would settle nothing.
+    expect(section).toContain("the larger of 30 probes or one probe per charter case");
+    expect(section).toContain("never silently");
+    // Charter generation is journaled on the QA run (F1 acceptance).
+    expect(section).toContain("nahel log note --item <item-id> --run <run-id>");
+    expect(section).toContain("charter generated:");
+    expect(section).toContain("--data basis=<recorded-criteria|knowledge-docs>");
+  });
+
+  test("the degraded-environment fallback keeps the discipline when the CLI is gone", async () => {
+    const { body } = await shippedWorkflow("qa-lane.md");
+    expect(body).toContain("Fallback (degraded environment)");
+    expect(body).toContain("NO");
+  });
+});
+
+/**
  * The docs are the product, so every CLI example they carry must be one the
  * CLI accepts. `nahel log` bans MUTATION_PAYLOAD_KEYS (`target`, `record`,
  * `body` — src/store/mutate.ts) from `--data`, so a doc instructing

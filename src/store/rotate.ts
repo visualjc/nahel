@@ -1,4 +1,4 @@
-import { link, mkdir, rmdir, unlink } from "node:fs/promises";
+import { link, mkdir, readdir, rmdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listSegments, readLastEvent, SESSION_CLOSED_EVENT_TYPE } from "./journal";
 import { readRun, type StoreLayout } from "./layout";
@@ -45,34 +45,96 @@ async function sessionSegmentIsClosed(path: string): Promise<boolean> {
  * copies under that contention. One sweeper at a time makes the per-segment
  * move trivially race-free; waiting sweepers re-list under the lock, so the
  * "every closed segment gets archived" invariant survives whichever process
- * sweeps last. A sweep takes milliseconds, so a lock older than the retry
- * budget means a holder that died mid-sweep — it is stolen, and the
- * link-based no-clobber below keeps even a pathological double-sweep from
- * ever destroying history.
+ * sweeps last.
+ *
+ * OWNERSHIP is what makes the lock safe (codex round 2 on PR #19 proved a
+ * time-based steal lets every timed-out waiter clear each other's lock and
+ * sweep concurrently): the holder writes a `pid-<pid>` marker inside the
+ * lock, staleness is decided by process LIVENESS (kill(pid, 0)) rather than
+ * by a clock, and a steal removes exactly the dead holder's marker before
+ * rmdir — a fresh lock with a live holder's marker makes the rmdir fail
+ * ENOTEMPTY, so nobody can ever clear a lock they do not own. Entry is
+ * granted ONLY by winning mkdir and claiming the dir with your own marker.
  */
 const SWEEP_LOCK = ".rotate.lock";
 const LOCK_RETRY_MS = 25;
-const LOCK_RETRIES = 200; // ~5s budget before a holder is presumed dead
+/** Retries granted a fresh lock whose holder has not written its marker yet. */
+const UNCLAIMED_GRACE_RETRIES = 8;
+/** Overall acquisition budget (~10s); past it the sweep is skipped, not hung. */
+const ACQUIRE_RETRIES = 400;
 
-async function acquireSweepLock(layout: StoreLayout): Promise<() => Promise<void>> {
+/** Whether the process holding the lock still exists (EPERM counts as alive). */
+function holderIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code !== "ESRCH";
+  }
+}
+
+/** The holder's pid marker, or null when the lock is unclaimed or gone. */
+async function readHolderMarker(lockDir: string): Promise<string | null> {
+  const entries = await readdir(lockDir).catch(() => null);
+  return entries?.find((name) => name.startsWith("pid-")) ?? null;
+}
+
+/**
+ * Acquire the sweep lock, or return null when a LIVE holder keeps it past
+ * the budget — rotation is best-effort maintenance, so a contended sweep is
+ * skipped (the next mutation rotates again), never hung.
+ */
+async function acquireSweepLock(layout: StoreLayout): Promise<(() => Promise<void>) | null> {
   const lockDir = join(layout.journalDir, SWEEP_LOCK);
+  const ownMarkerPath = join(lockDir, `pid-${process.pid}`);
   const release = async () => {
+    // Ownership-safe teardown: remove only our own marker, then the dir —
+    // if the lock was stolen and re-claimed, both calls fail harmlessly.
+    await unlink(ownMarkerPath).catch(() => {});
     await rmdir(lockDir).catch(() => {});
   };
-  for (let i = 0; i < LOCK_RETRIES; i++) {
+  let unclaimedSightings = 0;
+  for (let i = 0; i < ACQUIRE_RETRIES; i++) {
     try {
       await mkdir(lockDir);
-      return release;
     } catch (error) {
       if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+      const marker = await readHolderMarker(lockDir);
+      if (marker === null) {
+        // Unclaimed: either the holder is between mkdir and marker write, or
+        // it died in that window (or the lock dir was hand-made). Grace for
+        // the former, then rmdir — which only ever succeeds on an EMPTY dir,
+        // so a claimed lock can never be cleared by this path.
+        unclaimedSightings += 1;
+        if (unclaimedSightings > UNCLAIMED_GRACE_RETRIES) {
+          await rmdir(lockDir).catch(() => {});
+          continue;
+        }
+      } else {
+        unclaimedSightings = 0;
+        const holderPid = Number(marker.slice("pid-".length));
+        if (Number.isInteger(holderPid) && !holderIsAlive(holderPid)) {
+          // The holder died mid-sweep. Remove exactly ITS marker, then the
+          // then-empty dir; if a new holder moved in meanwhile, the unlink
+          // ENOENTs and the rmdir fails ENOTEMPTY — their lock stands.
+          await unlink(join(lockDir, marker)).catch(() => {});
+          await rmdir(lockDir).catch(() => {});
+          continue;
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+      continue;
+    }
+    // mkdir won: claim the lock. A failed claim means the empty dir was
+    // swept out from under us between mkdir and write — contend again.
+    try {
+      await writeFile(ownMarkerPath, "");
+      return release;
+    } catch {
+      continue;
     }
   }
-  // Budget exhausted: the holder died mid-sweep. Steal the lock and proceed —
-  // the archive step's no-clobber guarantee holds even if the holder revives.
-  await rmdir(lockDir).catch(() => {});
-  await mkdir(lockDir).catch(() => {});
-  return release;
+  return null;
 }
 
 /**
@@ -118,6 +180,10 @@ async function archiveSegment(
 export async function rotateJournal(layout: StoreLayout): Promise<RotationResult> {
   const archived: string[] = [];
   const release = await acquireSweepLock(layout);
+  // A live holder kept the lock past the budget: skip this sweep rather than
+  // hang the command — every mutation-path command rotates, so the closed
+  // segments are the very next sweep's work.
+  if (release === null) return { archived };
   try {
     // Listed UNDER the lock: a fresh view, so the last sweeper standing sees
     // (and archives) segments that closed while it waited.

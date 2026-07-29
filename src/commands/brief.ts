@@ -62,6 +62,6 @@ async function runBrief(argv: string[], ctx: CommandContext): Promise<number> {
 
 export const briefCommand: Command = {
   description:
-    "render the onboarding pack: constitution extract, knowledge pointers, statuses, recent activity, pending decisions, warnings (4 KB target)",
+    "render the onboarding pack: constitution extract, knowledge pointers, statuses, recent activity, pending decisions, qa state, warnings (4 KB target)",
   run: runBrief,
 };

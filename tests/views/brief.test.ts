@@ -661,7 +661,7 @@ describe("renderBrief — active repro waivers (F5)", () => {
 describe("renderBrief — QA surface (Phase 3 F6)", () => {
   /** The section body: everything under the header up to the next blank line. */
   function qaSection(brief: string): string {
-    return brief.split(QA_HEADER)[1]!.split("\n\n")[0]!;
+    return brief.split(QA_HEADER)[1]!.split("\n\n")[0]!.trimStart();
   }
 
   test("with no qa items and no sweeps the section still renders, saying so in one line", () => {

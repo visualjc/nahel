@@ -38,6 +38,11 @@ describe("cli", () => {
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
+  test("the version IS package.json's — one source of truth, nothing to drift", async () => {
+    const pkg = await Bun.file(new URL("../package.json", import.meta.url)).json();
+    expect(VERSION).toBe(pkg.version);
+  });
+
   test("--version prints the version", async () => {
     const proc = Bun.spawn(["bun", "run", "src/cli.ts", "--version"]);
     const out = await new Response(proc.stdout).text();

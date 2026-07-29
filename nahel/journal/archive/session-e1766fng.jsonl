@@ -1,0 +1,2 @@
+{"id":"12c2wrg6","ts":"2026-07-29T05:25:43Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-worker"},"item":"50a1s8rm","payload":{"target":"item","record":{"id":"50a1s8rm","name":"qa-afk-integration-brief-surface","type":"feature","status":"in-review","lane":"direct","parent":"jecq4q2s","depends_on":["t6dypfm9"],"external_refs":[],"created":"2026-07-29T04:56:10Z","updated":"2026-07-29T05:25:43Z"},"body":""}}
+{"id":"qm18wtvp","ts":"2026-07-29T05:25:43Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-worker"},"payload":{}}

@@ -492,16 +492,21 @@ on it (step 3); never work around a claim.
     once it merges. Under the default `merge: human` this run ends BEFORE the
     merge, so "after the merge, sweep" cannot be a live step here — the
     schedule has to outlive the run, and the only durable carrier is an item.
-    So you MAY file one: a `qa` item whose NAME states what to sweep and what
-    it waits on.
+    So you MAY file one: a `qa` item whose slug NAME states what to sweep and
+    which PR it waits on (item names are slugs — spaces are refused).
 
-        nahel item new qa "sweep <surface> once PR #<n> merges" direct \
+        nahel item new qa sweep-<surface>-after-pr-<n> direct \
           --depends-on <item-id>
 
     It starts in `backlog` and nothing runs now. Under `merge: human` a
     later runner or kickoff picks it up once the human's merge lands; under a
     validly activated `merge: on-approve` the same runner may pick it up after
-    its own auto-merge. Either way the lane that runs it is
+    its own auto-merge. PICKUP RULE, stated here because `--depends-on` cannot
+    carry it: a dependency is satisfied when the feature item finishes review,
+    which happens BEFORE any merge — so whoever picks the scheduled item up
+    must first verify the named PR actually MERGED (`gh pr view <n> --json
+    state`) and journal that check in the pickup note; an unmerged PR parks
+    the sweep, never starts it. Either way the lane that runs it is
     `nahel/workflows/qa-lane.md`, and the `--depends-on` keeps the sweep
     behind the feature item it sweeps.
 

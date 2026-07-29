@@ -166,7 +166,14 @@ stops because it hit the budget says so in the report — never silently, since
 a budget hit with ground left over is exactly what tells the next sweep where
 to start.
 
-Commit the charter, then journal its generation on this run:
+Before the charter's commit — before ANY commit this sweep makes — create
+the sweep's branch, so nothing ever lands on the default branch directly. The
+timestamp is the compact UTC form (`date -u +%Y%m%dT%H%M%SZ`) — colons are
+not valid in a git ref:
+
+    git checkout -b qa/<compact-UTC-timestamp>
+
+Commit the charter on that branch, then journal its generation on this run:
 
     nahel log note --item <item-id> --run <run-id> \
       --data summary="charter generated: <n> traced cases, <n> exploratory, budget <n> probes" \
@@ -282,12 +289,13 @@ drove anything:
 ### The branch and the PR
 
 Every artifact a sweep produces — the charter, the run report, the scripts —
-lives on the sweep's own branch in the TARGET repo, created before the first
-commit:
+lives on the sweep's own branch in the TARGET repo, the `qa/<compact-UTC-timestamp>`
+branch step 2 created before the charter's commit (compact form — a git ref
+cannot carry colons).
 
-    git checkout -b qa/<UTC-timestamp>
-
-The sweep closes by opening a DRAFT PR, exactly like any other lane's output:
+The sweep closes — AFTER its final commit, when the report and any ratchet
+scripts already exist on the branch — by opening a DRAFT PR, exactly like any
+other lane's output:
 
     gh pr create --draft --title "qa/<timestamp>: sweep of <surfaces>" --body-file <file>
 
@@ -365,7 +373,12 @@ and does not need one; a judgment about cost belongs in prose that says why:
       --data summary="severity <blocker|major|minor>: <what it costs a user, and how often>" \
       --data severity=<blocker|major|minor>
 
-**e. Provenance — the QA run rides the item's trail.** Every item this sweep
+**e. Journal the case's `qa.finding` (step 3) — now, with the item filed.**
+Carry `bug=<the item id you just filed>`, so the finding event and the item
+point at each other and neither needs a later correction. The command prints
+the event's id — keep it for the provenance note below.
+
+**f. Provenance — the QA run rides the item's trail.** Every item this sweep
 files carries the run that found it, so the path from sweep to finding to
 filing is readable in one direction and back:
 
@@ -379,10 +392,6 @@ Read it back with `nahel progress --item <bug-id>` before moving on. A bug
 item with no QA run in its trail
 cannot be traced to the sweep that found it,
 and an untraceable filing is indistinguishable from a guess somebody typed in.
-
-Only now journal the case's `qa.finding` (step 3), with `bug=<the item id you
-just filed>` — the finding event and the item point at each other, and neither
-needs a later correction.
 
 ## 5. Ratchet — exploration hardens into committed scripts
 

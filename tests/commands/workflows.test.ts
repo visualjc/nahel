@@ -518,7 +518,7 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
     expect(step).toContain("--depends-on <item-id>");
     // The item's NAME is the schedule — a later runner reads it and knows
     // what to sweep and what it waits on, with zero prior-session memory.
-    expect(step).toContain("sweep <surface> once PR #<n> merges");
+    expect(step).toContain("nahel item new qa sweep-<surface>-after-pr-<n> direct");
     // Backlog, not in-progress: nothing runs now, the schedule waits.
     expect(step).toContain("backlog");
     // The lane that picks it up is named, so the schedule points somewhere.
@@ -1535,7 +1535,7 @@ describe("qa-lane canonical workflow doc — sweep stage (F2)", () => {
     const { body } = await shippedWorkflow("qa-lane.md");
     const section = qaSection(body, "### The branch and the PR");
     expect(section.length).toBeGreaterThan(0);
-    expect(section).toContain("git checkout -b qa/<UTC-timestamp>");
+    expect(section).toContain("qa/<compact-UTC-timestamp>");
     expect(section).toContain("gh pr create --draft");
     expect(section).toContain("never a direct commit to the default branch");
     // Merge authority is the target's, exercised by the review loop, not here.

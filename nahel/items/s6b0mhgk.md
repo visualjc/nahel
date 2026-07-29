@@ -2,12 +2,12 @@
 id: s6b0mhgk
 name: knowledge-first-inception
 type: feature
-status: in-review
+status: done
 lane: direct
 parent: f6kwws23
 depends_on:
   - mwzxhxan
 external_refs: []
 created: 2026-07-25T17:01:30Z
-updated: 2026-07-25T20:06:15Z
+updated: 2026-07-29T04:18:22Z
 ---

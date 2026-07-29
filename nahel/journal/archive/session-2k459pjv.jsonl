@@ -1,0 +1,2 @@
+{"id":"avr8405f","ts":"2026-07-29T04:18:22Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"fzdzssc0","payload":{"target":"item","record":{"id":"fzdzssc0","name":"governance-qualifiers-delegated-approval","type":"feature","status":"done","lane":"direct","parent":"f6kwws23","depends_on":["mwzxhxan"],"external_refs":[],"created":"2026-07-25T17:01:30Z","updated":"2026-07-29T04:18:22Z"},"body":""}}
+{"id":"8b7egc9k","ts":"2026-07-29T04:18:22Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

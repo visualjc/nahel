@@ -1,0 +1,15 @@
+---
+id: zxxck40z
+name: agents-abandon-workflow-on-tool-failure
+created: 2026-07-29T04:20:25Z
+tags:
+  - sandbox
+  - resilience
+  - rtk
+  - cursor
+  - dispatch
+sources:
+  - q9yr1bsh
+  - exn01hk3
+---
+Failure pattern seen live (2026-07-29, speed-count-game): when a tool in the loop fails strangely, agents silently ABANDON the nahel workflow instead of erroring inside it. rtk 0.36 had a slash-ref bug suppressing git diff output (fixed in rtk 0.44.1) plus a cursor sandbox permission issue; codex kicked out of the nahel flow and drove cursor directly, which committed to main in the shared working tree with no worktree. Operational facts: unattended cursor dispatch needs --force --sandbox enabled --trust; codex's own sandbox blocks ps (fails nahel's pgid test). Backlog: f35q1rax (sandbox preflight), hk0wvqhq (fail-inside-the-flow workflow language).

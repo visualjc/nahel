@@ -1,0 +1,2 @@
+{"id":"5qkayv83","ts":"2026-07-29T04:18:21Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"89qr925p","payload":{"target":"item","record":{"id":"89qr925p","name":"review-loop-workflow","type":"feature","status":"done","lane":"direct","parent":"f6kwws23","depends_on":["mwzxhxan"],"external_refs":[],"created":"2026-07-25T17:01:29Z","updated":"2026-07-29T04:18:21Z"},"body":""}}
+{"id":"jns2sa04","ts":"2026-07-29T04:18:21Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

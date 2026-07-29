@@ -1,0 +1,2 @@
+{"id":"x3vg1ymn","ts":"2026-07-29T04:18:22Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"s6b0mhgk","payload":{"target":"item","record":{"id":"s6b0mhgk","name":"knowledge-first-inception","type":"feature","status":"done","lane":"direct","parent":"f6kwws23","depends_on":["mwzxhxan"],"external_refs":[],"created":"2026-07-25T17:01:30Z","updated":"2026-07-29T04:18:22Z"},"body":""}}
+{"id":"py2z5d55","ts":"2026-07-29T04:18:22Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

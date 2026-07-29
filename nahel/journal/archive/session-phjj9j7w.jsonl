@@ -1,0 +1,2 @@
+{"id":"4wgwk65c","ts":"2026-07-29T04:18:21Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"mb6gxyk4","payload":{"target":"item","record":{"id":"mb6gxyk4","name":"dispatch-verb","type":"feature","status":"done","lane":"direct","parent":"f6kwws23","depends_on":[],"external_refs":[],"created":"2026-07-25T17:01:29Z","updated":"2026-07-29T04:18:21Z"},"body":""}}
+{"id":"z6t1dp55","ts":"2026-07-29T04:18:21Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

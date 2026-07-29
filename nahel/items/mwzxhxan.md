@@ -2,11 +2,11 @@
 id: mwzxhxan
 name: governance-merge-authority-config
 type: feature
-status: in-review
+status: done
 lane: direct
 parent: f6kwws23
 depends_on: []
 external_refs: []
 created: 2026-07-25T17:01:29Z
-updated: 2026-07-25T18:11:25Z
+updated: 2026-07-29T04:18:21Z
 ---

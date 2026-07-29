@@ -1,0 +1,13 @@
+---
+id: we8dbjat
+name: roadmap-layer-vision
+created: 2026-07-29T04:20:38Z
+tags:
+  - roadmap
+  - vision
+  - sp2yf32m
+sources:
+  - 20t5286y
+  - n5fv7s8h
+---
+Jim's post-Phase-2 pivot (2026-07-25, deliberately loose — plan item sp2yf32m, GRILL REQUIRED before any PRD): software development has 5 critical parts and nahel covers only development deeply. (1) Product roadmaps -> feature roadmaps; (2) Development (nahel's strength); (3) QA (roadmap Phase 3); (4) Deployment; (5) Marketing/communications. The layer above plan items — roadmap creation and management, the thing that FEEDS the PRD->Epic->Issue engine — is the next pivot once the core loop works. Jim's 2026-07-29 'I don't remember where we are and what is next' is this item's problem statement verbatim.

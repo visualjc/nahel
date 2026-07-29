@@ -1,6 +1,6 @@
 {
   "name": "nahel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Durable, tool-agnostic project state model and workflows for agentic software development",
   "license": "MIT",
   "author": "Jim Carter (https://github.com/visualjc)",

@@ -141,6 +141,43 @@ describe("rotateJournal — closed segments only", () => {
     expect(after).toEqual(before);
   });
 
+  test("an archive-name collision NEVER clobbers: the newcomer gets a numbered name (7nzsz577)", async () => {
+    // The speed-count-game incident: a run's segment was already archived,
+    // new events for the same run recreated a live segment with the same
+    // name, and rename() silently overwrote the archived file — history
+    // destroyed by the CLI's own rotation (HC6). Both segments are history;
+    // the later arrival must take a uniquified name, the original untouched.
+    const layout = await setup();
+    const env = seededEnv({ tickSeconds: 1 });
+    const run = makeRun(env, makeFrontmatter(env).id, { status: "ended", ended: env.now() });
+    await writeRun(layout, run);
+    await appendEvent(layout, env, { type: "run.ended", actor, run: run.id, payload: {} });
+    await rotateJournal(layout);
+    const archivedPath = join(layout.journalArchiveDir, `run-${run.id}.jsonl`);
+    const original = await readFile(archivedPath, "utf8");
+
+    // New events for the archived run recreate a live segment of the same name.
+    await appendEvent(layout, env, { type: "note", actor, run: run.id, payload: { late: 1 } });
+    const result = await rotateJournal(layout);
+    console.log("[collision]", result);
+    expect(result.archived).toEqual([`run-${run.id}.2.jsonl`]);
+    expect(await readFile(archivedPath, "utf8")).toBe(original);
+
+    // And again: the suffix keeps counting, nothing is ever lost.
+    await appendEvent(layout, env, { type: "note", actor, run: run.id, payload: { late: 2 } });
+    expect((await rotateJournal(layout)).archived).toEqual([`run-${run.id}.3.jsonl`]);
+    const segments = await listSegments(layout);
+    expect(segments.archived.sort()).toEqual([
+      `run-${run.id}.2.jsonl`,
+      `run-${run.id}.3.jsonl`,
+      `run-${run.id}.jsonl`,
+    ]);
+    // The merged journal still yields every event exactly once.
+    const events = await Array.fromAsync(readJournal(layout));
+    expect(events.filter((e) => e.type === "run.ended")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "note")).toHaveLength(2);
+  });
+
   test("rotation is idempotent: a second pass archives nothing", async () => {
     const layout = await setup();
     const env = seededEnv({ tickSeconds: 1 });

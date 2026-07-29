@@ -1,4 +1,4 @@
-import { access, mkdir, rename } from "node:fs/promises";
+import { link, mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { listSegments, readLastEvent, SESSION_CLOSED_EVENT_TYPE } from "./journal";
 import { readRun, type StoreLayout } from "./layout";
@@ -38,6 +38,54 @@ async function sessionSegmentIsClosed(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Move one closed segment into the archive WITHOUT ever clobbering an
+ * existing archive file (bug 7nzsz577, HC6). A same-name collision is
+ * legitimate history meeting history: new events for an already-archived run
+ * recreate a live segment under the run's canonical name, so the newcomer
+ * takes the first free numbered name (`run-<id>.2.jsonl`, `.3`, …) and the
+ * original is never touched. `link()` is the no-clobber primitive — it fails
+ * EEXIST atomically where `rename()` silently overwrites — and the source is
+ * unlinked only after its content provably exists in the archive.
+ *
+ * Returns the archived filename, or null when a concurrent sweeper archived
+ * the segment first (its copy is already in place; a duplicate we linked in
+ * the race window is removed, so every event lands in the archive exactly
+ * once).
+ */
+async function archiveSegment(
+  layout: StoreLayout,
+  name: string,
+  path: string,
+): Promise<string | null> {
+  const stem = name.slice(0, -".jsonl".length);
+  for (let attempt = 1; ; attempt++) {
+    const candidate = attempt === 1 ? name : `${stem}.${attempt}.jsonl`;
+    const destination = join(layout.journalArchiveDir, candidate);
+    try {
+      await link(path, destination);
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (code === "EEXIST") continue; // taken — try the next numbered name
+      if (code === "ENOENT") return null; // source gone: another sweeper won
+      throw error;
+    }
+    try {
+      await unlink(path);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "ENOENT") {
+        // Another sweeper linked and unlinked the source between our link and
+        // unlink: its archive copy is the one that counts — ours would double
+        // every event on the merged read, so it goes.
+        await unlink(destination).catch(() => {});
+        return null;
+      }
+      throw error;
+    }
+    return candidate;
+  }
+}
+
 /** Archive every provably-closed active segment; returns what moved. */
 export async function rotateJournal(layout: StoreLayout): Promise<RotationResult> {
   const archived: string[] = [];
@@ -55,21 +103,8 @@ export async function rotateJournal(layout: StoreLayout): Promise<RotationResult
       // Git never materializes empty directories, so a fresh clone made while
       // the archive was empty has no journal/archive/ at all.
       await mkdir(layout.journalArchiveDir, { recursive: true });
-      const destination = join(layout.journalArchiveDir, name);
-      try {
-        await rename(path, destination);
-      } catch (error) {
-        // Concurrent sweepers race between listSegments() and rename(): the
-        // loser's source is gone. That is only success if the segment really
-        // reached the archive — otherwise the error is real and must surface.
-        try {
-          await access(destination);
-        } catch {
-          throw error;
-        }
-        continue;
-      }
-      archived.push(name);
+      const landed = await archiveSegment(layout, name, path);
+      if (landed !== null) archived.push(landed);
     }
   }
   return { archived };

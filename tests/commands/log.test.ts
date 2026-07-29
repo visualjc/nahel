@@ -96,6 +96,45 @@ describe("nahel log — segment resolution", () => {
     expect(result.stdout).toContain(`run-${run.id}`);
   });
 
+  test("a note on an ENDED, already-archived run never clobbers the archived history (7nzsz577)", async () => {
+    // The speed-count-game data-loss path: log recreates a live segment
+    // under the run's canonical name, then rotates in the same invocation
+    // (the run is ended, so the fresh segment is immediately closed) — and
+    // rename() used to overwrite the archived original, deleting its events.
+    const { root, layout } = await makeStore();
+    const env = seededEnv({ tickSeconds: 1 });
+    const item = makeFrontmatter(env, { name: "the-item" });
+    await writeItem(layout, item, "body\n");
+    const run = makeRun(env, item.id, { status: "ended", ended: env.now() });
+    await writeRun(layout, run);
+    await appendEvent(layout, env, {
+      type: "run.ended",
+      actor: { kind: "human", id: "maintainer" },
+      run: run.id,
+      payload: {},
+    });
+    const first = await runLog(["note", "--run", run.id, "--data", "summary=history"], root, {
+      env,
+    });
+    expect(first.code).toBe(0);
+    const archivedPath = join(layout.journalArchiveDir, `run-${run.id}.jsonl`);
+    const original = await readFile(archivedPath, "utf8");
+    expect(original).toContain("history");
+
+    const second = await runLog(["note", "--run", run.id, "--data", "summary=late"], root, {
+      env,
+    });
+    console.log("[late note]", second.stdout, second.stderr);
+    expect(second.code).toBe(0);
+
+    // The archived original is byte-identical, the late note archived beside it.
+    expect(await readFile(archivedPath, "utf8")).toBe(original);
+    const segments = await listSegments(layout);
+    expect(segments.archived.sort()).toEqual([`run-${run.id}.2.jsonl`, `run-${run.id}.jsonl`]);
+    const notes = (await allEvents(layout)).filter((event) => event.type === "note");
+    expect(notes).toHaveLength(2);
+  });
+
   test("a non-run event lands in a writer-scoped session segment, closed and archived by the same invocation", async () => {
     const { root, layout } = await makeStore();
     expect((await listSegments(layout)).active).toEqual([]);

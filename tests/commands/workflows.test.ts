@@ -498,6 +498,68 @@ describe("afk-run canonical workflow doc (F2, F7)", () => {
   });
 
   /**
+   * Phase 3 F6 — QA scheduling at PR-open time. Under the default
+   * `merge: human` the runner ends BEFORE the merge, so "after the merge,
+   * sweep" cannot be a live step: the schedule has to be DURABLE, and a
+   * backlog `qa` item is the only durable carrier nahel has. These tests pin
+   * the judgment call, its journaled record either way, both merge modes, and
+   * the non-negotiable that QA never becomes a PR gate.
+   */
+  const prStepOf = (body: string) =>
+    body.slice(body.indexOf("10. Open ONE draft PR"), body.indexOf("11. Review."));
+
+  test("PR-open time files a backlog qa item as a DURABLE schedule, depending on the feature item (F6)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = prStepOf(body);
+    expect(step.length).toBeGreaterThan(0);
+    // The verb, with the exact flags: type `qa`, and the dependency that keeps
+    // the sweep behind the work it sweeps.
+    expect(step).toContain("nahel item new qa");
+    expect(step).toContain("--depends-on <item-id>");
+    // The item's NAME is the schedule — a later runner reads it and knows
+    // what to sweep and what it waits on, with zero prior-session memory.
+    expect(step).toContain("sweep <surface> once PR #<n> merges");
+    // Backlog, not in-progress: nothing runs now, the schedule waits.
+    expect(step).toContain("backlog");
+    // The lane that picks it up is named, so the schedule points somewhere.
+    expect(step).toContain("nahel/workflows/qa-lane.md");
+  });
+
+  test("the QA scheduling judgment is journaled EITHER WAY — scheduled, or deliberately not with its reason (F6)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = prStepOf(body);
+    // A judgment call whose "no" leaves no trace is indistinguishable from
+    // forgetting: both outcomes get the same grep-able shape.
+    expect(step).toContain("MAY");
+    expect(step).toContain('summary="qa scheduled:');
+    expect(step).toContain('summary="qa not scheduled:');
+    expect(step).toContain("--data qa=<scheduled|not-scheduled>");
+    expect(step).toContain("reason");
+  });
+
+  test("both merge modes are covered: a later runner under `merge: human`, the same runner under `merge: on-approve` (F6)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = prStepOf(body);
+    // The default mode: this run ends before the merge, so someone else picks
+    // the item up — that is exactly why the schedule is an item and not a step.
+    expect(step).toContain("`merge: human`");
+    expect(step).toContain("later runner or kickoff picks it up");
+    // The authorized auto-merge mode: same runner, after its own merge.
+    expect(step).toContain("`merge: on-approve`");
+    expect(step).toContain("the same runner may pick it up");
+  });
+
+  test("QA never blocks a PR from opening — verify-by-driving remains the pre-PR bar (F6)", async () => {
+    const { body } = await shippedWorkflow("afk-run.md");
+    const step = prStepOf(body);
+    // The one line that keeps a broader, slower lane from becoming a gate.
+    expect(step).toContain("QA never blocks a PR from opening");
+    expect(step).toContain("verify-by-driving remains the pre-PR bar");
+    // And the reason it runs after rather than before.
+    expect(step).toContain("broader and slower");
+  });
+
+  /**
    * F6 — intervention. A human reaching into a running AFK loop is the one
    * moment where "the agent kept going" is a safety failure, not a virtue.
    * These tests pin the checkpoint boundaries, the stand-down mechanics, the

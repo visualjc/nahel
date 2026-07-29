@@ -109,6 +109,40 @@ function makeEvent(env: Env, i: number): JournalEvent {
   };
 }
 
+/** A journal event of an arbitrary type with an arbitrary payload. */
+function makeTypedEvent(
+  env: Env,
+  type: string,
+  payload: Record<string, unknown>,
+  ts = "2026-07-17T09:00:00Z",
+): JournalEvent {
+  return {
+    id: generateId(env),
+    ts,
+    seq: 1,
+    type,
+    actor: { kind: "agent", id: "claude-code" },
+    payload,
+  };
+}
+
+/** The payload shape qa-lane.md's close step writes, key for key. */
+function sweepPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cases_run: 12,
+    passed: 10,
+    failed: 2,
+    parked: 0,
+    probes: 5,
+    budget_hit: "no",
+    findings_filed: ["kqm3vx7t", "kqm3vx7u"],
+    report: "docs/qa-runs/2026-07-17T09-00-00Z/report.md",
+    ...overrides,
+  };
+}
+
+const QA_HEADER = "== qa (open items, latest sweep) ==";
+
 const SECTION_HEADERS = [
   "== constitution (PRODUCT.md) ==",
   "== knowledge & canonical truth ==",
@@ -116,6 +150,7 @@ const SECTION_HEADERS = [
   "== item statuses ==",
   "== recent activity (newest last) ==",
   "== pending human decisions ==",
+  QA_HEADER,
   "== validate warnings ==",
 ] as const;
 
@@ -620,6 +655,179 @@ describe("renderBrief — active repro waivers (F5)", () => {
     const bug = await readItem(store.layout, store.taskBetaId);
     await writeItem(store.layout, { ...bug.frontmatter, status: "done" }, bug.body);
     expect(await briefOf(store)).not.toContain("== active repro waivers ==");
+  });
+});
+
+describe("renderBrief — QA surface (Phase 3 F6)", () => {
+  /** The section body: everything under the header up to the next blank line. */
+  function qaSection(brief: string): string {
+    return brief.split(QA_HEADER)[1]!.split("\n\n")[0]!;
+  }
+
+  test("with no qa items and no sweeps the section still renders, saying so in one line", () => {
+    const brief = renderBrief(makeInputs());
+    expect(brief).toContain(`${QA_HEADER}\nnone`);
+  });
+
+  test("open qa items are listed one line each — id, name, status", () => {
+    const env = seededEnv();
+    const backlog = makeFrontmatter(env, {
+      name: "sweep-checkout-once-pr-42-merges",
+      type: "qa",
+      status: "backlog",
+    });
+    const running = makeFrontmatter(env, { name: "sweep-auth", type: "qa", status: "in-progress" });
+    const section = qaSection(
+      renderBrief(makeInputs({ snapshot: { items: [backlog, running], runs: [] } })),
+    );
+    expect(section).toContain(
+      `qa item: sweep-checkout-once-pr-42-merges id=${backlog.id} status=backlog`,
+    );
+    expect(section).toContain(`qa item: sweep-auth id=${running.id} status=in-progress`);
+  });
+
+  test("closed qa items and non-qa items never appear — the section is the OPEN queue", () => {
+    const env = seededEnv();
+    const done = makeFrontmatter(env, { name: "swept-and-done", type: "qa", status: "done" });
+    const dropped = makeFrontmatter(env, { name: "swept-dropped", type: "qa", status: "dropped" });
+    const feature = makeFrontmatter(env, { name: "a-feature", type: "feature", status: "backlog" });
+    const brief = renderBrief(
+      makeInputs({ snapshot: { items: [done, dropped, feature], runs: [] } }),
+    );
+    const section = qaSection(brief);
+    expect(section).toBe("none");
+    expect(section).not.toContain("swept-and-done");
+    expect(section).not.toContain("swept-dropped");
+    expect(section).not.toContain("a-feature");
+  });
+
+  test("the latest qa.sweep-completed renders as one line: when, counts, findings filed, report path", () => {
+    const env = seededEnv();
+    const section = qaSection(
+      renderBrief(
+        makeInputs({
+          events: [makeTypedEvent(env, "qa.sweep-completed", sweepPayload())],
+        }),
+      ),
+    );
+    expect(section).toContain(
+      "latest sweep: 2026-07-17T09:00:00Z cases=12 passed=10 failed=2 findings=2 " +
+        "report=docs/qa-runs/2026-07-17T09-00-00Z/report.md",
+    );
+  });
+
+  test("with several sweeps only the LATEST is surfaced — one line, not a history", () => {
+    const env = seededEnv();
+    const events = [
+      makeTypedEvent(env, "qa.sweep-completed", sweepPayload({ cases_run: 3, report: "docs/qa-runs/old/report.md" }), "2026-07-15T08:00:00Z"),
+      makeTypedEvent(env, "note", { text: "in between" }, "2026-07-16T08:00:00Z"),
+      makeTypedEvent(env, "qa.sweep-completed", sweepPayload({ cases_run: 20, report: "docs/qa-runs/new/report.md" }), "2026-07-17T09:00:00Z"),
+    ];
+    const section = qaSection(renderBrief(makeInputs({ events })));
+    expect(section).toContain("cases=20");
+    expect(section).toContain("report=docs/qa-runs/new/report.md");
+    expect(section).not.toContain("docs/qa-runs/old/report.md");
+    expect(section.split("\n").filter((line) => line.startsWith("latest sweep:"))).toHaveLength(1);
+  });
+
+  test("ONLY qa.sweep-completed feeds the sweep line — per-case qa.result/qa.finding never do (F6)", () => {
+    // The scope split is load-bearing: a per-case event promoted to the
+    // sweep line would report one case as if it were a whole sweep.
+    const env = seededEnv();
+    const events = [
+      makeTypedEvent(env, "qa.result", { case: "QA-01", result: "pass" }),
+      makeTypedEvent(env, "qa.finding", { case: "QA-02", result: "fail", bug: "kqm3vx7t" }),
+      makeTypedEvent(env, "qa.probe", { probe: "reload mid-write", observed: "state kept", defect: "no" }),
+    ];
+    const section = qaSection(renderBrief(makeInputs({ events })));
+    expect(section).toBe("none");
+    expect(section).not.toContain("latest sweep:");
+    expect(section).not.toContain("QA-01");
+    expect(section).not.toContain("QA-02");
+  });
+
+  test("a sweep event missing payload fields degrades visibly — never `undefined`, never a dropped line", () => {
+    const env = seededEnv();
+    const section = qaSection(
+      renderBrief(
+        makeInputs({
+          events: [makeTypedEvent(env, "qa.sweep-completed", { cases_run: 4, passed: 4 })],
+        }),
+      ),
+    );
+    expect(section).toContain("latest sweep: 2026-07-17T09:00:00Z cases=4 passed=4 failed=? findings=? report=?");
+    expect(section).not.toContain("undefined");
+  });
+
+  test("open items and the latest sweep coexist — items first, then the sweep line", () => {
+    const env = seededEnv();
+    const item = makeFrontmatter(env, { name: "sweep-checkout", type: "qa", status: "backlog" });
+    const section = qaSection(
+      renderBrief(
+        makeInputs({
+          snapshot: { items: [item], runs: [] },
+          events: [makeTypedEvent(env, "qa.sweep-completed", sweepPayload())],
+        }),
+      ),
+    );
+    expect(section.indexOf("qa item: sweep-checkout")).toBeGreaterThanOrEqual(0);
+    expect(section.indexOf("latest sweep:")).toBeGreaterThan(section.indexOf("qa item:"));
+  });
+
+  test("the qa block sits after pending human decisions and before validate warnings", () => {
+    const brief = renderBrief(makeInputs());
+    const decisions = brief.indexOf("== pending human decisions ==");
+    const qa = brief.indexOf(QA_HEADER);
+    const warnings = brief.indexOf("== validate warnings ==");
+    expect(decisions).toBeGreaterThanOrEqual(0);
+    expect(qa).toBeGreaterThan(decisions);
+    expect(warnings).toBeGreaterThan(qa);
+  });
+
+  test("composeBrief surfaces a real qa item and a real sweep event from the store", async () => {
+    const store = await populatedWithProduct();
+    const { itemCommand } = await import("../../src/commands/item");
+    const { logCommand } = await import("../../src/commands/log");
+
+    const lines: string[] = [];
+    const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.join(" "));
+    });
+    try {
+      expect(
+        await itemCommand.run(["new", "qa", "sweep-brief-surface", "direct"], store.env, store.root),
+      ).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    const qaItemId = lines[lines.length - 1]!;
+
+    expect(
+      await logCommand.run(
+        [
+          "qa.sweep-completed",
+          "--item",
+          qaItemId,
+          "--data",
+          "cases_run=8",
+          "--data",
+          "passed=7",
+          "--data",
+          "failed=1",
+          "--data",
+          'findings_filed=["kqm3vx7t"]',
+          "--data",
+          "report=docs/qa-runs/2026-07-17/report.md",
+        ],
+        { env: store.env, cwd: store.root, stdout: () => {}, stderr: () => {} },
+      ),
+    ).toBe(0);
+
+    const brief = await briefOf(store);
+    expect(brief).toContain(QA_HEADER);
+    expect(brief).toContain(`qa item: sweep-brief-surface id=${qaItemId} status=backlog`);
+    expect(brief).toContain("cases=8 passed=7 failed=1 findings=1");
+    expect(brief).toContain("report=docs/qa-runs/2026-07-17/report.md");
   });
 });
 

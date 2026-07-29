@@ -1,0 +1,2 @@
+{"id":"9f7secf6","ts":"2026-07-29T00:24:10Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"6h36r9j9","payload":{"target":"item","record":{"id":"6h36r9j9","name":"version-single-source-package-json","type":"chore","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-28T23:55:03Z","updated":"2026-07-29T00:24:10Z"},"body":""}}
+{"id":"2m1g46a0","ts":"2026-07-29T00:24:10Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

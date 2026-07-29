@@ -1,0 +1,2 @@
+{"id":"qtaftk7e","ts":"2026-07-29T04:14:12Z","seq":0,"type":"item.created","actor":{"kind":"human","id":"maintainer"},"item":"hk0wvqhq","payload":{"target":"item","record":{"id":"hk0wvqhq","name":"workflow-survives-tool-failures","type":"feature","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-29T04:14:12Z","updated":"2026-07-29T04:14:12Z"},"body":""}}
+{"id":"jnrfgdz9","ts":"2026-07-29T04:14:12Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

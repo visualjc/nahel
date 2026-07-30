@@ -1,0 +1,2 @@
+{"id":"2zp3yfqm","ts":"2026-07-30T23:34:38Z","seq":0,"type":"note","actor":{"kind":"human","id":"maintainer"},"item":"t4e4476a","payload":{"summary":"Roadmap headline (Jim, chat 2026-07-30): creating change logs and product update documentation. Likely feeds from the journal — merges, done items, and release points are already recorded; this would turn them into human-facing changelog/product-update docs."}}
+{"id":"2bb1vf9h","ts":"2026-07-30T23:34:38Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

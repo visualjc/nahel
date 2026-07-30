@@ -1,0 +1,2 @@
+{"id":"bd2syzay","ts":"2026-07-30T23:34:28Z","seq":0,"type":"item.created","actor":{"kind":"human","id":"maintainer"},"item":"t4e4476a","payload":{"target":"item","record":{"id":"t4e4476a","name":"changelog-and-product-updates","type":"feature","status":"backlog","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-30T23:34:28Z","updated":"2026-07-30T23:34:28Z"},"body":""}}
+{"id":"bnx5d6sz","ts":"2026-07-30T23:34:28Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

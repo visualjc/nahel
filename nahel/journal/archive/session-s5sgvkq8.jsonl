@@ -1,0 +1,2 @@
+{"id":"5pqnv3ye","ts":"2026-07-30T23:34:38Z","seq":0,"type":"note","actor":{"kind":"human","id":"maintainer"},"item":"9m38trg4","payload":{"summary":"Roadmap headline (Jim, chat 2026-07-30): deployment and devops workflows — nahel lane/workflow coverage for deploying and operating the product, not just building it. Scope to be defined at grill/PRD time."}}
+{"id":"t7mx4w5s","ts":"2026-07-30T23:34:38Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

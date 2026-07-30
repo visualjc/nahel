@@ -111,16 +111,20 @@ async function runLogCommand(argv: string[], env: Env, root: string): Promise<vo
 /**
  * Build the populated store. `tempDirs` receives the created root so the
  * caller's afterEach can rm it. Same seed → byte-identical store.
+ * `tickSeconds` is the clock step between events; 0 freezes the clock, so
+ * every invocation's segment lands in the SAME second — the cross-session tie
+ * ordering has to survive.
  */
 export async function buildPopulatedStore(
   tempDirs: string[],
   seed = 42,
+  tickSeconds = 1,
 ): Promise<PopulatedStore> {
   const root = await makeTempDir("nahel-views-");
   tempDirs.push(root);
   const layout = await ensureLayout(root);
   await writeConfig(layout, makeConfig()); // actor: agent:claude-code
-  const env = seededEnv({ seed, tickSeconds: 1 });
+  const env = seededEnv({ seed, tickSeconds });
 
   const epicId = await runMutationCommand(
     itemCommand,

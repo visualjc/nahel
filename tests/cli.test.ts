@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { COMMANDS, main, VERSION, type CommandContext } from "../src/cli";
 import type { JournalEvent } from "../src/schema/records";
 import { NAHEL_ACTOR_VAR } from "../src/store/actor";
 import { readJournal } from "../src/store/journal";
-import { ensureLayout, writeConfig } from "../src/store/layout";
+import { ensureLayout, listItems, storeLayout, writeConfig } from "../src/store/layout";
 import { makeConfig, makeTempDir, seededEnv } from "./store/helpers";
 
 /**
@@ -104,6 +106,73 @@ describe("cli dispatch", () => {
     const result = await runMain(["init", "--definitely-not-a-flag"]);
     expect(result.code).toBe(1);
     expect(result.stderr.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cli — store root resolution from a subdirectory", () => {
+  // The 2026-07-25 quirk: `nahel distill` run from nahel/journal/archive/ died
+  // with "nahel/config not found at <cwd>/nahel/config" because cwd went
+  // straight into the layout. Commands over an EXISTING store now walk up to
+  // the nearest nahel/config, bounded by the git worktree; init stays strict.
+  async function storeRepo(): Promise<string> {
+    const root = await makeTempDir("nahel-cli-walkup-");
+    expect(spawnSync("git", ["init", "-q"], { cwd: root }).status).toBe(0);
+    await writeConfig(await ensureLayout(root), makeConfig());
+    return root;
+  }
+
+  test("a read command run from nahel/journal/archive/ resolves the store above", async () => {
+    const root = await storeRepo();
+    try {
+      const result = await runMain(["status"], join(root, "nahel", "journal", "archive"));
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a mutation command run from a subdirectory writes into the store above", async () => {
+    const root = await storeRepo();
+    try {
+      const sub = join(root, "docs", "adr");
+      await mkdir(sub, { recursive: true });
+      const result = await runMain(["item", "new", "chore", "from-subdir", "direct"], sub);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      expect(await listItems(storeLayout(root))).toHaveLength(1);
+      expect(existsSync(join(sub, "nahel"))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("outside any store the failure still names where it looked and points at `nahel init`", async () => {
+    const dir = await makeTempDir("nahel-cli-nostore-");
+    try {
+      expect(spawnSync("git", ["init", "-q"], { cwd: dir }).status).toBe(0);
+      const sub = join(dir, "sub");
+      await mkdir(sub);
+      const result = await runMain(["status"], sub);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(sub);
+      expect(result.stderr).toContain("nahel init");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("init stays cwd-strict: it creates the store where it is run, never in the parent", async () => {
+    const root = await storeRepo();
+    try {
+      const sub = join(root, "sub");
+      await mkdir(sub);
+      const result = await runMain(["init"], sub);
+      expect(result.code).toBe(0);
+      expect(existsSync(join(sub, "nahel", "config"))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

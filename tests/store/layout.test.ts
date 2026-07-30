@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -11,11 +12,13 @@ import {
   listItems,
   listRuns,
   observationPath,
+  openStore,
   readConfig,
   readDistilled,
   readItem,
   readObservation,
   readRun,
+  resolveStoreRoot,
   runDir,
   runRecordPath,
   storeLayout,
@@ -69,6 +72,100 @@ describe("storeLayout / ensureLayout", () => {
     await writeConfig(layout, makeConfig());
     await ensureLayout(root);
     expect(await readConfig(layout)).toEqual(makeConfig());
+  });
+});
+
+describe("resolveStoreRoot / openStore — find the store like git finds .git", () => {
+  /** Real git, so the boundary tests prove themselves against git's own layout. */
+  function git(cwd: string, ...args: string[]): void {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(" ")} failed in ${cwd}:\n${result.stdout}\n${result.stderr}`);
+    }
+  }
+
+  /** A git repo whose root holds an initialized nahel store. */
+  async function storeRepo(): Promise<string> {
+    const root = await tempRoot();
+    git(root, "init", "-q");
+    await writeConfig(await ensureLayout(root), makeConfig());
+    return root;
+  }
+
+  test("cwd IS the store root: no walking needed", async () => {
+    const root = await storeRepo();
+    expect(await resolveStoreRoot(root)).toBe(root);
+  });
+
+  test("walks up from nahel/journal/archive/ — the 2026-07-25 distill quirk", async () => {
+    const root = await storeRepo();
+    expect(await resolveStoreRoot(join(root, "nahel", "journal", "archive"))).toBe(root);
+  });
+
+  test("walks up from an arbitrary deep subdirectory of the repo", async () => {
+    const root = await storeRepo();
+    const deep = join(root, "src", "commands", "nested");
+    await mkdir(deep, { recursive: true });
+    expect(await resolveStoreRoot(deep)).toBe(root);
+  });
+
+  test("openStore returns a layout rooted at the RESOLVED root, not at cwd", async () => {
+    const root = await storeRepo();
+    const layout = await openStore(join(root, "nahel", "items"));
+    expect(layout.root).toBe(root);
+    expect(layout.configPath).toBe(join(root, "nahel", "config"));
+  });
+
+  test("a nested git repo bounds the walk: an inner checkout never borrows the outer store", async () => {
+    const outer = await storeRepo();
+    const inner = join(outer, "vendor", "inner");
+    await mkdir(inner, { recursive: true });
+    git(inner, "init", "-q");
+    const deep = join(inner, "src");
+    await mkdir(deep);
+    await expect(resolveStoreRoot(deep)).rejects.toThrow(/nahel\/config not found/);
+  });
+
+  test("a git worktree is its own boundary: sibling worktrees stay isolated", async () => {
+    // The parent directory is itself a store — the only arrangement where the
+    // boundary is load-bearing. A worktree's `.git` is a FILE, not a directory,
+    // so the boundary check must accept both spellings.
+    const parent = await storeRepo();
+    const repo = join(parent, "repo");
+    await mkdir(repo);
+    git(repo, "init", "-q");
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "root");
+    const worktree = join(parent, "wt");
+    git(repo, "worktree", "add", "-q", worktree, "-b", "wt");
+    expect((await stat(join(worktree, ".git"))).isFile()).toBe(true);
+    await expect(resolveStoreRoot(worktree)).rejects.toThrow(/nahel\/config not found/);
+  });
+
+  test("no git repo anywhere: cwd-strict, the walk never leaves the directory it was given", async () => {
+    // Outside a git repo there is no boundary to stop at, so walking would run
+    // to the filesystem root and adopt any unrelated store above. The
+    // deliberate bound is cwd itself.
+    const root = await tempRoot();
+    await writeConfig(await ensureLayout(root), makeConfig());
+    const sub = join(root, "sub");
+    await mkdir(sub);
+    expect(await resolveStoreRoot(root)).toBe(root);
+    await expect(resolveStoreRoot(sub)).rejects.toThrow(/nahel\/config not found/);
+  });
+
+  test("nothing found: the error names where it looked and points at `nahel init`", async () => {
+    const root = await tempRoot();
+    git(root, "init", "-q");
+    const sub = join(root, "a", "b");
+    await mkdir(sub, { recursive: true });
+    const error = await resolveStoreRoot(sub).then(
+      () => undefined,
+      (thrown: unknown) => thrown as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error!.message).toContain(sub);
+    expect(error!.message).toContain(root);
+    expect(error!.message).toContain("nahel init");
   });
 });
 

@@ -1,7 +1,12 @@
 import YAML from "yaml";
 import type { z } from "zod";
 import { resolveReviewSlots } from "../dispatch/invocation";
-import { mergeAuthorityStatus, type MergeAuthorityStatus } from "../governance/authority";
+import {
+  foundingSignatureStatus,
+  mergeAuthorityStatus,
+  type FoundingSignatureStatus,
+  type MergeAuthorityStatus,
+} from "../governance/authority";
 import {
   configSchema,
   distilledSchema,
@@ -787,6 +792,73 @@ function checkMergeAuthority(state: ParsedState): Finding[] {
         "a HUMAN must re-run `nahel config set merge --data authority=on-approve` " +
         `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
         "IS the standing authorization. Otherwise drop the section and stay on merge: human",
+    },
+  ];
+}
+
+/**
+ * Founding signature provenance (PRD F9.5, nahel/workflows/inception.md): the
+ * merge.unauthorized analogue for the founding act. Under a hands-off founding
+ * the paragraph IS the constitution's only human-signed content, and
+ * inception.md states the rule twice — "the human-attributed `config.updated`
+ * act that wrote the `founding` section IS the paragraph's signature. An
+ * agent-run founding act signs nothing." Nothing surfaced a bad founding
+ * mechanically: the workflow and the autonomy gate both state the rule, and
+ * both rely on a reader checking the journal by hand.
+ *
+ * Only a founding carrying a PARAGRAPH is judged — a `guided` founding records
+ * which door the project came through and nothing more, so an agent may write
+ * it (inception.md: "only its act's actor is load-bearing" about the hands-off
+ * paragraph).
+ *
+ * A WARNING, never an error: an unsigned founding is a gate refusal, not
+ * corrupt state — the paragraph stays exactly as recorded, it just authorizes
+ * nothing. But it is never silent (hard constraint 6).
+ */
+function foundingSignatureCause(status: FoundingSignatureStatus): string {
+  if (status.defect === "agent-recorded") {
+    return (
+      `the config mutation that recorded it (event ${status.recordedBy!.event}) was made by ` +
+      `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id} — an agent-run founding ` +
+      `act signs nothing`
+    );
+  }
+  if (status.defect === "ambiguous") {
+    const tied = (status.tied ?? [])
+      .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
+      .join(", ");
+    return (
+      `${(status.tied ?? []).length} config mutations recorded it in the same second (${tied}) ` +
+      `under different actor kinds — same-second acts from different sessions carry no ordering, ` +
+      `so which one signed is undecidable`
+    );
+  }
+  return "no journaled config mutation records it, so the paragraph's human provenance cannot be proven";
+}
+
+function checkFoundingSignature(state: ParsedState): Finding[] {
+  const status = foundingSignatureStatus(state.config?.founding, state.events);
+  if (status === undefined || status.signed) return [];
+
+  // Ambiguity needs one extra word in the fix: the fresh act must be LATER,
+  // not merely newer in the file (mergeAuthorityCause's rule, same reason).
+  const timing =
+    status.defect === "ambiguous"
+      ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
+      : "";
+  return [
+    {
+      severity: "warning",
+      check: "founding.unsigned",
+      path: state.input.configPath,
+      message:
+        `nahel/config records a founding paragraph, but ${foundingSignatureCause(status)} — ` +
+        `the constitution is unsigned and the autonomy gate refuses to treat it as founded`,
+      fix:
+        "a HUMAN must re-run `nahel config set founding --data mode=hands-off " +
+        '--data paragraph="<the paragraph>"` ' +
+        `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
+        "IS the paragraph's signature (nahel/workflows/inception.md)",
     },
   ];
 }
@@ -1661,6 +1733,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdApproval(state),
     ...checkChildrenRollup(state),
     ...checkMergeAuthority(state),
+    ...checkFoundingSignature(state),
     ...checkReviewSlots(state),
     ...checkCycles(state),
     ...checkClaims(state),

@@ -591,6 +591,104 @@ describe("validate — merge-authority provenance (merge.unauthorized, F3.4)", (
   });
 });
 
+/**
+ * Founding signature provenance (PRD F9.5, nahel/workflows/inception.md): the
+ * merge.unauthorized analogue for the founding act. "Only the hands-off
+ * paragraph carries authority, so only its act's actor is load-bearing: the
+ * human-attributed `config.updated` act that wrote the `founding` section IS
+ * the paragraph's signature. An agent-run founding act signs nothing."
+ */
+describe("validate — founding signature provenance (founding.unsigned, F9.5)", () => {
+  const PARAGRAPH = "Ship a deterministic CLI for durable project state.";
+
+  /** Drive the real `nahel config set founding` as the given actor. */
+  async function setFounding(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    data: string[],
+    actorSpec: string,
+  ): Promise<void> {
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const args = ["set", "founding"];
+      for (const entry of data) args.push("--data", entry);
+      const code = await configCommand.run(args, fixture.env, fixture.root, actorSpec);
+      if (code !== 0) throw new Error(`config set founding failed (${actorSpec})`);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  }
+
+  test("a hands-off founding recorded by a HUMAN is silent — that act IS the signature", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "human:jim");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[founding, human-recorded]", findings);
+    expect(findingsFor(findings, "founding.unsigned")).toEqual([]);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a hands-off founding recorded by an AGENT warns that the paragraph is unsigned", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "agent:claude-code");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[founding, agent-recorded]", findings);
+    const unsigned = findingsFor(findings, "founding.unsigned");
+    expect(unsigned).toHaveLength(1);
+    expect(unsigned[0]!.severity).toBe("warning");
+    expect(unsigned[0]!.path).toBe(fixture.layout.configPath);
+    expect(unsigned[0]!.message).toContain("claude-code");
+    expect(unsigned[0]!.message).toContain("unsigned");
+    // The fix names the ONE act that repairs it: a HUMAN re-running the set.
+    expect(unsigned[0]!.fix).toContain("human");
+    expect(unsigned[0]!.fix).toContain("nahel config set founding");
+    // Never an error: an unsigned founding is a gate refusal, not corruption.
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a hand-edited founding with no journaled act warns — unprovable is not signed", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: PARAGRAPH },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, unrecorded]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.fix).toContain("nahel config set founding");
+  });
+
+  test("a GUIDED founding recorded by an agent is silent — only the paragraph carries authority", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=guided"], "agent:claude-code");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[founding, guided]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a human re-record after an agent's clears the warning — the prescribed fix works end to end", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "agent:claude-code");
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toHaveLength(1);
+
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
+
+  test("a project with no founding section at all never warns — nothing was founded hands-off", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
+});
+
 describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {
   /** Commit a routing map straight into config — routing carries no provenance. */
   async function setRouting(

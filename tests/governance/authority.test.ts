@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { configCommand } from "../../src/commands/config";
 import {
+  foundingSignatureStatus,
   GOVERNANCE_DEFAULTS,
   MERGE_AUTHORITY_DEFAULT,
   mergeAuthorityStatus,
@@ -67,6 +68,12 @@ function mergeConfigEvent(
 
 const HUMAN: Actor = { kind: "human", id: "jim" };
 const AGENT: Actor = { kind: "agent", id: "claude-code" };
+
+/** A recorded hands-off founding: the paragraph is the signed content (F9.5). */
+const HANDS_OFF = {
+  mode: "hands-off",
+  paragraph: "Build a deterministic CLI for durable project state.",
+} as const;
 
 describe("governance resolution (PRD F2.2 config semantics)", () => {
   test("the canonical defaults are product=delegated, architecture=human", () => {
@@ -273,6 +280,97 @@ describe("merge authority provenance — on-approve counts only when a human set
     const status = mergeAuthorityStatus({ authority: "on-approve" }, [forged]);
     expect(status.effective).toBe("human");
     expect(status.defect).toBe("unrecorded");
+  });
+});
+
+/**
+ * Founding signature provenance (PRD F9.5, nahel/workflows/inception.md):
+ * "the human-attributed `config.updated` act that wrote the `founding`
+ * section IS the paragraph's signature. An agent-run founding act signs
+ * nothing." Only the paragraph carries authority — a `guided` founding
+ * records which door was used and nothing more, so it needs no signature.
+ */
+describe("founding signature provenance — the paragraph is signed by the act that recorded it", () => {
+  /** One `config.updated` event for the `founding` section, by the given actor. */
+  function foundingConfigEvent(id: string, actor: Actor, seq: number): JournalEvent {
+    return {
+      id,
+      ts: `2026-07-25T12:00:0${seq}Z`,
+      seq,
+      type: CONFIG_UPDATED_EVENT_TYPE,
+      actor,
+      payload: {
+        section: "founding",
+        value: { mode: "hands-off", paragraph: HANDS_OFF.paragraph },
+      },
+    };
+  }
+
+  test("no founding section: no paragraph, so no signature question exists", () => {
+    expect(foundingSignatureStatus(undefined, [])).toBeUndefined();
+  });
+
+  test("a guided founding carries no paragraph — an agent may record the door it came through", () => {
+    expect(
+      foundingSignatureStatus({ mode: "guided" }, [
+        foundingConfigEvent("fffffff1", AGENT, 0),
+      ]),
+    ).toBeUndefined();
+  });
+
+  test("a paragraph recorded by a HUMAN act is signed, naming the signing event", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, [foundingConfigEvent("fffffff2", HUMAN, 1)]);
+    expect(status).toEqual({
+      signed: true,
+      recordedBy: { event: "fffffff2", actor: HUMAN },
+    });
+  });
+
+  test("a paragraph recorded by an AGENT act signs nothing", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, [foundingConfigEvent("fffffff3", AGENT, 1)]);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("agent-recorded");
+    expect(status?.recordedBy).toEqual({ event: "fffffff3", actor: AGENT });
+  });
+
+  test("a hand-edited paragraph no journaled act accounts for is unrecorded — unprovable is not signed", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, []);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("unrecorded");
+    expect(status?.recordedBy).toBeUndefined();
+  });
+
+  test("same-second recorders of different actor kinds are ambiguous — a lottery never signs", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, [
+      foundingConfigEvent("fffffff4", HUMAN, 0),
+      foundingConfigEvent("fffffff5", AGENT, 0),
+    ]);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("ambiguous");
+    expect(status?.tied).toHaveLength(2);
+  });
+
+  test("a strictly LATER human act breaks the tie and signs", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, [
+      foundingConfigEvent("fffffff6", AGENT, 0),
+      foundingConfigEvent("fffffff7", HUMAN, 1),
+    ]);
+    expect(status?.signed).toBe(true);
+    expect(status?.recordedBy?.event).toBe("fffffff7");
+  });
+
+  test("a forged non-config event carrying a founding payload signs nothing (type is the key)", () => {
+    const forged: JournalEvent = {
+      id: "fffffff8",
+      ts: "2026-07-25T12:00:00Z",
+      seq: 0,
+      type: "note",
+      actor: HUMAN,
+      payload: { section: "founding", value: HANDS_OFF },
+    };
+    const status = foundingSignatureStatus(HANDS_OFF, [forged]);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("unrecorded");
   });
 });
 

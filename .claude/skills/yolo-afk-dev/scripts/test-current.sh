@@ -9,6 +9,9 @@
 #   - current_failures
 #   - net_new (current minus baseline) — these trigger fix-loop
 #   - baseline_intersection (failing on both) — pre-existing, log only
+#
+# Requires jq: it reads the baseline and assembles the output JSON, so any
+# test cmd or failure line (double quotes, backslashes) encodes safely.
 
 set -euo pipefail
 
@@ -58,31 +61,25 @@ NET_NEW=$(comm -23 <(echo "$CURRENT_FAILURES") <(echo "$BASELINE_FAILURES") 2>/d
 # intersection = current AND baseline
 INTERSECT=$(comm -12 <(echo "$CURRENT_FAILURES") <(echo "$BASELINE_FAILURES") 2>/dev/null || echo "")
 
-json_escape_lines() {
-  # Convert newline-separated input → JSON array of strings
-  echo "$1" \
-    | grep -v '^$' \
-    | sed 's/"/\\"/g' \
-    | awk '{printf "    \"%s\",\n", $0}' \
-    | sed '$ s/,$//'
-}
-
-cat > "$OUT" <<JSON
-{
-  "test_cmd": "$TEST_CMD",
-  "test_exit_code": $TEST_EXIT,
-  "captured_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "raw_log": "$RAW",
-  "current_failures": [
-$(json_escape_lines "$CURRENT_FAILURES")
-  ],
-  "net_new": [
-$(json_escape_lines "$NET_NEW")
-  ],
-  "baseline_intersection": [
-$(json_escape_lines "$INTERSECT")
-  ]
-}
-JSON
+# jq does the encoding — hand-rolled sed escaping only handled `"` and broke
+# on backslashes, and $TEST_CMD was interpolated raw (bug b5e07bmt).
+jq -n \
+  --arg test_cmd "$TEST_CMD" \
+  --argjson test_exit_code "$TEST_EXIT" \
+  --arg captured_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+  --arg raw_log "$RAW" \
+  --arg current_failures "$CURRENT_FAILURES" \
+  --arg net_new "$NET_NEW" \
+  --arg baseline_intersection "$INTERSECT" \
+  'def lines: split("\n") | map(select(length > 0));
+   {
+     test_cmd: $test_cmd,
+     test_exit_code: $test_exit_code,
+     captured_at: $captured_at,
+     raw_log: $raw_log,
+     current_failures: ($current_failures | lines),
+     net_new: ($net_new | lines),
+     baseline_intersection: ($baseline_intersection | lines)
+   }' > "$OUT"
 
 echo "$OUT"

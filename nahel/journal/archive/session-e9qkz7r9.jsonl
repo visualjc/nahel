@@ -1,0 +1,2 @@
+{"id":"b2t7xxhg","ts":"2026-07-30T18:42:21Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"q4s06d1r","payload":{"target":"item","record":{"id":"q4s06d1r","name":"qa-lane-charter-stage","type":"feature","status":"done","lane":"direct","parent":"jecq4q2s","depends_on":[],"external_refs":[],"created":"2026-07-29T04:56:10Z","updated":"2026-07-30T18:42:21Z"},"body":""}}
+{"id":"mdcfc20x","ts":"2026-07-30T18:42:21Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"5tr6q9b7","ts":"2026-07-30T18:42:21Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"ntk4ynbv","payload":{"target":"item","record":{"id":"ntk4ynbv","name":"qa-lane-findings-stage","type":"feature","status":"done","lane":"direct","parent":"jecq4q2s","depends_on":["tdckscqz"],"external_refs":[],"created":"2026-07-29T04:56:10Z","updated":"2026-07-30T18:42:21Z"},"body":""}}
+{"id":"v5ds6cm0","ts":"2026-07-30T18:42:21Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

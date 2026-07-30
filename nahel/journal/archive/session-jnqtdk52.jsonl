@@ -1,0 +1,2 @@
+{"id":"sbw2v4ew","ts":"2026-07-30T18:42:45Z","seq":0,"type":"note","actor":{"kind":"human","id":"maintainer"},"payload":{"summary":"Roadmap gap felt again: Jim delivered speed-count roadmap items via chat because there is no roadmap surface yet — plan sp2yf32m (roadmap layer) remains the fix and still needs the grill session with Jim first."}}
+{"id":"yp8axjvn","ts":"2026-07-30T18:42:45Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

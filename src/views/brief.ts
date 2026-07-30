@@ -27,7 +27,8 @@ import { renderStatus } from "./status";
  * heading convention, never summarized), knowledge & canonical-truth
  * pointers, governance & merge authority (the operative policy, Phase 2
  * F2.2/F3.4), item statuses (renderStatus composed), recent activity
- * (renderProgress composed), pending human decisions, validate warnings.
+ * (renderProgress composed), pending human decisions, QA state (open `qa`
+ * items and the latest `qa.sweep-completed`, Phase 3 F6), validate warnings.
  *
  * 4 KB target budget with a fixed-priority truncation ladder: oldest activity
  * first, then done-item detail, then a constitution clip with an explicit
@@ -257,6 +258,59 @@ function waiversBody(
   return lines.length === 0 ? null : lines.join("\n");
 }
 
+/**
+ * The ONE event type the QA section reads (Phase 3 PRD F6, qa-lane.md): the
+ * whole-sweep summary, written exactly once per sweep. The per-case types
+ * (`qa.result`, `qa.finding`, `qa.probe`) are a different SCOPE and are
+ * deliberately never read here — promoting a per-case event to this line
+ * would report one case as if it were a whole sweep.
+ */
+export const QA_SWEEP_EVENT_TYPE = "qa.sweep-completed";
+
+/** A payload value rendered for a one-line summary; absent reads as `?`. */
+function payloadField(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (value === undefined || value === null) return "?";
+  if (Array.isArray(value)) return String(value.length);
+  return String(value);
+}
+
+/**
+ * QA section body (PRD F6): every OPEN `qa` work item on one line each, then
+ * the latest sweep summary on one line. Always rendered — a project with no
+ * QA state says so explicitly, because "no section" and "no sweep ever" are
+ * different facts to a fresh agent and only one of them is true.
+ *
+ * `findings_filed` is journaled as a list of bug-item ids; the brief shows
+ * its COUNT and points at the report for the ids — a one-line surface stays
+ * one line. Absent payload keys render `?` rather than vanishing: a sweep
+ * that journaled an incomplete summary is itself worth seeing.
+ */
+function qaBody(items: readonly WorkItemFrontmatter[], events: readonly JournalEvent[]): string {
+  const lines: string[] = [];
+  for (const item of items) {
+    if (item.type !== "qa") continue;
+    if (item.status === "done" || item.status === "dropped") continue;
+    lines.push(`qa item: ${item.name} id=${item.id} status=${item.status}`);
+  }
+  // Events arrive oldest → newest, so the last match is the latest sweep.
+  let sweep: JournalEvent | undefined;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (events[i]!.type === QA_SWEEP_EVENT_TYPE) {
+      sweep = events[i];
+      break;
+    }
+  }
+  if (sweep !== undefined) {
+    const field = (key: string): string => payloadField(sweep!.payload, key);
+    lines.push(
+      `latest sweep: ${sweep.ts} cases=${field("cases_run")} passed=${field("passed")} ` +
+        `failed=${field("failed")} findings=${field("findings_filed")} report=${field("report")}`,
+    );
+  }
+  return lines.length === 0 ? "none" : lines.join("\n");
+}
+
 /** Section 5 body: claims, blocked items, paused runs — or an explicit none. */
 function decisionsBody(snapshot: Snapshot): string {
   const lines: string[] = [];
@@ -335,6 +389,10 @@ function assemble(
   // waiver is an alert the next session must see; none configured, no noise.
   const waivers = waiversBody(inputs.observations, inputs.snapshot.items);
   if (waivers !== null) sections.push(`== active repro waivers ==\n${waivers}`);
+  sections.push(
+    // Required, not optional (PRD F6): where QA stands is part of arriving.
+    `== qa (open items, latest sweep) ==\n${qaBody(inputs.snapshot.items, inputs.events)}`,
+  );
   sections.push(
     `== validate warnings ==\n${inputs.warnings.length === 0 ? "none" : inputs.warnings.join("\n")}`,
   );

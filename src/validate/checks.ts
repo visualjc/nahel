@@ -562,6 +562,20 @@ function checkRefs(state: ParsedState): Finding[] {
         });
       }
     }
+    // An observation's `item` names the work it is a fact ABOUT. Items are
+    // never deleted (`dropped` is a status, not a removal), so a ref with no
+    // record behind it is a lost write or a hand deletion — an error, like
+    // every other record-to-record ref here, not the WARNING knowledge
+    // documents get (those legitimately arrive by a later merge).
+    if (record.item !== undefined && !state.itemFiles.has(record.item)) {
+      findings.push({
+        severity: "error",
+        check: "refs.observation-item",
+        path,
+        message: `observation ${record.id} is about item ${record.item}, which does not exist`,
+        fix: "if the item's record write crashed, `nahel validate --repair` materializes it from the journal; otherwise fix or remove the observation's item field",
+      });
+    }
   }
   return findings;
 }

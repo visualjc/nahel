@@ -376,6 +376,52 @@ describe("validate — referential integrity", () => {
     expect(findings[0]!.severity).toBe("error");
     expect(findings[0]!.message).toContain("zzzzzzzz");
   });
+
+  test("an observation whose item ref names a missing item is an error naming both ids", async () => {
+    const fixture = await setupFixture(dirs);
+    // A real journaled source keeps refs.observation-sources quiet, so the
+    // ONLY defect under test is the dangling item ref.
+    const source = await appendEvent(fixture.layout, fixture.env, {
+      type: "note",
+      actor: fixture.agent.actor,
+      payload: {},
+      session: fixture.agent.session,
+    });
+    const observation = makeObservation(fixture.env, [source.id], { item: "zzzzzzzz" });
+    await writeObservation(fixture.layout, observation, "a fact about a vanished item\n");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[observation-item, dangling]", findings);
+    const dangling = findingsFor(findings, "refs.observation-item");
+    expect(dangling).toHaveLength(1);
+    expect(dangling[0]!.severity).toBe("error");
+    expect(dangling[0]!.path).toBe(observationPath(fixture.layout, observation.id));
+    expect(dangling[0]!.message).toContain(observation.id);
+    expect(dangling[0]!.message).toContain("zzzzzzzz");
+    expect(dangling[0]!.fix).toBeDefined();
+    expect(findingsFor(findings, "refs.observation-sources")).toEqual([]);
+  });
+
+  test("an observation whose item ref names an existing item is silent", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, { name: "observed-item" });
+    const source = await appendEvent(fixture.layout, fixture.env, {
+      type: "note",
+      actor: fixture.agent.actor,
+      item: item.id,
+      payload: {},
+      session: fixture.agent.session,
+    });
+    await writeObservation(
+      fixture.layout,
+      makeObservation(fixture.env, [source.id], { item: item.id }),
+      "a fact about a live item\n",
+    );
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[observation-item, resolvable]", findings);
+    expect(findings).toEqual([]);
+  });
 });
 
 describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {

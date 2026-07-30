@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 
 /**
  * The prototype lane's git plumbing (PRD F5). Spawning `git` is store-layer
@@ -29,9 +30,6 @@ const execFileAsync = promisify(execFile);
 /** A prototype git operation failed, or was refused for safety. */
 export class PrototypeError extends Error {}
 
-/** Generous ceiling for ref listings on large repos. */
-const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
-
 interface GitResult {
   code: number;
   stdout: string;
@@ -39,13 +37,23 @@ interface GitResult {
 }
 
 /** Run git, returning its exit code instead of throwing (probe form). */
-async function tryGit(root: string, args: readonly string[]): Promise<GitResult> {
+async function tryGit(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<GitResult> {
   try {
     const { stdout, stderr } = await execFileAsync("git", ["-C", root, ...args], {
-      maxBuffer: MAX_OUTPUT_BYTES,
+      maxBuffer: maxOutputBytes,
     });
     return { code: 0, stdout, stderr };
   } catch (error) {
+    // An output overflow is not git's verdict — it is nahel's own refusal, and
+    // it says so rather than passing "stdout maxBuffer length exceeded" off as
+    // git's reason (the ref scan reports this string to the operator).
+    if (isOutputCapExceeded(error)) {
+      return { code: 1, stdout: "", stderr: outputCapDetail(maxOutputBytes) };
+    }
     const failure = error as { code?: unknown; stdout?: unknown; stderr?: unknown };
     return {
       code: typeof failure.code === "number" ? failure.code : 1,
@@ -61,8 +69,12 @@ async function tryGit(root: string, args: readonly string[]): Promise<GitResult>
 }
 
 /** Run git, throwing PrototypeError with git's own reason on failure. */
-async function git(root: string, args: readonly string[]): Promise<string> {
-  const result = await tryGit(root, args);
+async function git(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
+  const result = await tryGit(root, args, maxOutputBytes);
   if (result.code !== 0) {
     throw new PrototypeError(`git ${args.join(" ")} failed in ${root}: ${result.stderr.trim()}`);
   }
@@ -141,8 +153,11 @@ export function isPrototypeBranch(ref: string): boolean {
  * Read once, before any branch exists, so the journaled creation record can be
  * written write-ahead (see `seedVariant` on why the base is load-bearing).
  */
-export async function headCommit(root: string): Promise<string> {
-  return (await git(root, ["rev-parse", "HEAD"])).trim();
+export async function headCommit(
+  root: string,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
+  return (await git(root, ["rev-parse", "HEAD"], maxOutputBytes)).trim();
 }
 
 /** Everything one variant's workspace needs to exist. */

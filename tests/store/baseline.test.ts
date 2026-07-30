@@ -89,6 +89,19 @@ describe("captureBaseline", () => {
     await expect(attempt).rejects.not.toThrow(/ambiguous argument/);
   });
 
+  test("output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
+    const root = await makeGitRepo();
+    // A 4-byte cap that `git rev-parse HEAD` (a 41-byte SHA line) outruns —
+    // the same overflow the 16 MiB production cap would see on a huge repo.
+    const attempt = captureBaseline(root, 4);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/rev-parse HEAD/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
+    // The repo HAS commits: an overflow must never be read as an unborn HEAD.
+    await expect(attempt).rejects.not.toThrow(/no commits yet/);
+  });
+
   test("identical repo state yields byte-identical baselines", async () => {
     const root = await makeGitRepo();
     await writeFile(join(root, "dirty.txt"), "dirty at claim\n");
@@ -188,6 +201,20 @@ describe("collectHandbackEvidence", () => {
     const first = await collectHandbackEvidence(root, baseline);
     const second = await collectHandbackEvidence(root, baseline);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
+  test("output past the capture cap fails naming the command and the cap", async () => {
+    const root = await makeGitRepo();
+    const baseline = await captureBaseline(root);
+    await writeFile(join(root, "new.txt"), "one more file\n");
+    git(root, "add", "new.txt");
+    git(root, "commit", "-q", "-m", "second");
+
+    const attempt = collectHandbackEvidence(root, baseline, 4);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/rev-list/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
   });
 
   test("a baseline head git does not know fails with a GitError", async () => {

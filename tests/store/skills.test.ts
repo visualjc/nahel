@@ -125,6 +125,17 @@ describe("resolveRef (git ls-remote against a local repo)", () => {
     await expect(resolveRef(repo, "no-such-branch")).rejects.toBeInstanceOf(SkillsError);
     await expect(resolveRef(repo, "no-such-branch")).rejects.toThrow(/no-such-branch/);
   });
+
+  test("output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
+    const { repo } = await makeSkillsRepo({ tdd: "# tdd\n" });
+    // A 4-byte cap that ls-remote's `<sha>\tHEAD` line outruns — the same
+    // overflow the 16 MiB production cap would see on a repo with huge output.
+    const attempt = resolveRef(repo, "HEAD", 4);
+    await expect(attempt).rejects.toBeInstanceOf(SkillsError);
+    await expect(attempt).rejects.toThrow(/ls-remote/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
+  });
 });
 
 describe("restoreViaClone (clone at pinned SHA + symlink)", () => {

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { MAX_OUTPUT_BYTES } from "./exec";
 
 /**
  * Run-contract healthcheck execution (PRD F2, ADR-0014). Spawning a process is
@@ -12,9 +13,6 @@ import { promisify } from "node:util";
  */
 
 const execFileAsync = promisify(execFile);
-
-/** Generous ceiling so a chatty healthcheck's output never trips maxBuffer. */
-const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 /**
  * Default healthcheck deadline (seconds) when the contract names none. Without

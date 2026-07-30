@@ -10,6 +10,7 @@ const EXPECTED_STORE_FILES = [
   "baseline.ts",
   "ccpm.ts",
   "dispatch.ts",
+  "exec.ts",
   "frontmatter.ts",
   "healthcheck.ts",
   "hotstate.ts",

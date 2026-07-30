@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  headCommit,
   isPrototypeBranch,
   prototypeBranch,
   prototypeMiniPrdPath,
@@ -425,6 +426,17 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
 
     const scan = await scanPrototypeRefs(root);
     expect(scan.branches).toEqual([]);
+  });
+
+  test("git output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
+    const root = await makeRepo();
+    // A 4-byte cap that `git rev-parse HEAD` (a 41-byte SHA line) outruns —
+    // the same overflow the 16 MiB production cap would see on a huge repo.
+    const attempt = headCommit(root, 4);
+    await expect(attempt).rejects.toBeInstanceOf(PrototypeError);
+    await expect(attempt).rejects.toThrow(/rev-parse HEAD/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
   });
 
   test("a directory that is not a git repo yields an error finding, never a throw", async () => {

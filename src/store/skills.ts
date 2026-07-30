@@ -3,6 +3,7 @@ import { lstat, mkdir, rm, stat, symlink } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { SkillsLockEntry } from "../schema/records";
+import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 import type { StoreLayout } from "./layout";
 
 /**
@@ -17,9 +18,6 @@ import type { StoreLayout } from "./layout";
  */
 
 const execFileAsync = promisify(execFile);
-
-/** Generous ceiling so chatty git output never trips maxBuffer. */
-const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 /** A git or skills-CLI invocation failed, or a repo spec was unusable. */
 export class SkillsError extends Error {}
@@ -68,11 +66,17 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function runGit(args: readonly string[]): Promise<string> {
+async function runGit(
+  args: readonly string[],
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", [...args], { maxBuffer: MAX_OUTPUT_BYTES });
+    const { stdout } = await execFileAsync("git", [...args], { maxBuffer: maxOutputBytes });
     return stdout;
   } catch (error) {
+    if (isOutputCapExceeded(error)) {
+      throw new SkillsError(`git ${args.join(" ")} failed: ${outputCapDetail(maxOutputBytes)}`);
+    }
     const stderr = (error as { stderr?: unknown }).stderr;
     const detail =
       typeof stderr === "string" && stderr.trim() !== ""
@@ -90,10 +94,14 @@ async function runGit(args: readonly string[]): Promise<string> {
  * (no round-trip). Network I/O by nature; isolated here so `nahel skills lock`
  * stays a thin verb over the returned SHA.
  */
-export async function resolveRef(repo: string, ref: string): Promise<string> {
+export async function resolveRef(
+  repo: string,
+  ref: string,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
   if (SHA_PATTERN.test(ref)) return ref;
   const url = repoToUrl(repo);
-  const output = await runGit(["ls-remote", url, ref]);
+  const output = await runGit(["ls-remote", url, ref], maxOutputBytes);
   const line = output.split("\n").find((entry) => entry.trim() !== "");
   const sha = line?.split("\t")[0]?.trim();
   if (sha === undefined || !SHA_PATTERN.test(sha)) {

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 
 /**
  * Git baseline capture and handback evidence (PRD F9). Spawning `git` is
@@ -17,16 +18,29 @@ const execFileAsync = promisify(execFile);
 /** A git invocation failed; the message carries the command and git's stderr. */
 export class GitError extends Error {}
 
-/** Generous ceiling for porcelain/numstat output on large repos. */
-const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+/**
+ * The git call outran the output cap. A distinct class because it is NOT a
+ * verdict about the repo's revisions — captureBaseline must not read it as an
+ * unborn HEAD, which is the other reason `rev-parse HEAD` fails.
+ */
+class GitOutputCapError extends GitError {}
 
-async function git(root: string, args: readonly string[]): Promise<string> {
+async function git(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
-      maxBuffer: MAX_OUTPUT_BYTES,
+      maxBuffer: maxOutputBytes,
     });
     return stdout;
   } catch (error) {
+    if (isOutputCapExceeded(error)) {
+      throw new GitOutputCapError(
+        `git ${args.join(" ")} failed in ${root}: ${outputCapDetail(maxOutputBytes)}`,
+      );
+    }
     const stderr = (error as { stderr?: unknown }).stderr;
     const detail =
       typeof stderr === "string" && stderr.trim() !== ""
@@ -101,10 +115,10 @@ function parseNumstatLine(line: string): DiffStat {
  * nothing is exactly the unborn case (a missing repo fails the first probe,
  * a detached-but-broken HEAD fails the second).
  */
-async function hasUnbornHead(root: string): Promise<boolean> {
+async function hasUnbornHead(root: string, maxOutputBytes: number): Promise<boolean> {
   try {
-    await git(root, ["rev-parse", "--is-inside-work-tree"]);
-    await git(root, ["symbolic-ref", "--quiet", "HEAD"]);
+    await git(root, ["rev-parse", "--is-inside-work-tree"], maxOutputBytes);
+    await git(root, ["symbolic-ref", "--quiet", "HEAD"], maxOutputBytes);
     return true;
   } catch {
     return false;
@@ -112,14 +126,17 @@ async function hasUnbornHead(root: string): Promise<boolean> {
 }
 
 /** Capture the claim baseline: HEAD SHA + porcelain working-tree snapshot. */
-export async function captureBaseline(root: string): Promise<GitBaseline> {
+export async function captureBaseline(
+  root: string,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<GitBaseline> {
   let head: string;
   try {
-    head = (await git(root, ["rev-parse", "HEAD"])).trim();
+    head = (await git(root, ["rev-parse", "HEAD"], maxOutputBytes)).trim();
   } catch (error) {
     // git's own answer here is "ambiguous argument 'HEAD'", which says nothing
     // about the actual situation: there is no commit to record as a baseline.
-    if (await hasUnbornHead(root)) {
+    if (!(error instanceof GitOutputCapError) && (await hasUnbornHead(root, maxOutputBytes))) {
       throw new GitError(
         `the git repo at ${root} has no commits yet — a claim records the HEAD commit as its ` +
           "baseline, so make an initial commit before claiming",
@@ -127,7 +144,7 @@ export async function captureBaseline(root: string): Promise<GitBaseline> {
     }
     throw error;
   }
-  const dirty = outputLines(await git(root, ["status", "--porcelain"]));
+  const dirty = outputLines(await git(root, ["status", "--porcelain"], maxOutputBytes));
   return gitBaselineSchema.parse({ head, dirty });
 }
 
@@ -139,15 +156,16 @@ export async function captureBaseline(root: string): Promise<GitBaseline> {
 export async function collectHandbackEvidence(
   root: string,
   baseline: GitBaseline,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
 ): Promise<HandbackEvidence> {
   const valid = gitBaselineSchema.parse(baseline);
   const commits = outputLines(
-    await git(root, ["rev-list", "--reverse", `${valid.head}..HEAD`]),
+    await git(root, ["rev-list", "--reverse", `${valid.head}..HEAD`], maxOutputBytes),
   );
-  const diff = outputLines(await git(root, ["diff", "--numstat", valid.head, "HEAD"])).map(
-    parseNumstatLine,
-  );
-  const dirty = outputLines(await git(root, ["status", "--porcelain"]));
+  const diff = outputLines(
+    await git(root, ["diff", "--numstat", valid.head, "HEAD"], maxOutputBytes),
+  ).map(parseNumstatLine);
+  const dirty = outputLines(await git(root, ["status", "--porcelain"], maxOutputBytes));
   return handbackEvidenceSchema.parse({
     baseline_head: valid.head,
     commits,

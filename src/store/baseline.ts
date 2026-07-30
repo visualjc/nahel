@@ -94,9 +94,39 @@ function parseNumstatLine(line: string): DiffStat {
   });
 }
 
+/**
+ * Is this a real repo whose HEAD is unborn — `git init` with no commit yet?
+ * Asked only after `rev-parse HEAD` has already failed: the repo probe
+ * succeeds inside a work tree, and HEAD being a symbolic ref that resolves to
+ * nothing is exactly the unborn case (a missing repo fails the first probe,
+ * a detached-but-broken HEAD fails the second).
+ */
+async function hasUnbornHead(root: string): Promise<boolean> {
+  try {
+    await git(root, ["rev-parse", "--is-inside-work-tree"]);
+    await git(root, ["symbolic-ref", "--quiet", "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Capture the claim baseline: HEAD SHA + porcelain working-tree snapshot. */
 export async function captureBaseline(root: string): Promise<GitBaseline> {
-  const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+  let head: string;
+  try {
+    head = (await git(root, ["rev-parse", "HEAD"])).trim();
+  } catch (error) {
+    // git's own answer here is "ambiguous argument 'HEAD'", which says nothing
+    // about the actual situation: there is no commit to record as a baseline.
+    if (await hasUnbornHead(root)) {
+      throw new GitError(
+        `the git repo at ${root} has no commits yet — a claim records the HEAD commit as its ` +
+          "baseline, so make an initial commit before claiming",
+      );
+    }
+    throw error;
+  }
   const dirty = outputLines(await git(root, ["status", "--porcelain"]));
   return gitBaselineSchema.parse({ head, dirty });
 }

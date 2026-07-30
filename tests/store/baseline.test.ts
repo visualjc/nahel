@@ -79,10 +79,14 @@ describe("captureBaseline", () => {
     await expect(attempt).rejects.toThrow(/rev-parse/);
   });
 
-  test("a repo with no commits yet (unborn HEAD) fails with a GitError", async () => {
+  test("a repo with no commits yet (unborn HEAD) says so instead of leaking git's 'ambiguous argument'", async () => {
     const root = await makeBareDir();
     git(root, "init", "-q");
-    await expect(captureBaseline(root)).rejects.toBeInstanceOf(GitError);
+    const attempt = captureBaseline(root);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/no commits yet/);
+    await expect(attempt).rejects.toThrow(/initial commit/);
+    await expect(attempt).rejects.not.toThrow(/ambiguous argument/);
   });
 
   test("identical repo state yields byte-identical baselines", async () => {

@@ -92,6 +92,19 @@ async function setupWithoutGit() {
   return { root, layout, env };
 }
 
+/** Same as setup() but the repo has no commits yet — an unborn HEAD. */
+async function setupWithoutCommits() {
+  const root = await makeTempDir("nahel-cmd-intervene-unborn-");
+  dirs.push(root);
+  git(root, "init", "-q");
+  git(root, "config", "user.email", "test@example.com");
+  git(root, "config", "user.name", "Test User");
+  const layout = await ensureLayout(root);
+  await writeConfig(layout, makeConfig());
+  const env = seededEnv({ tickSeconds: 1 });
+  return { root, layout, env };
+}
+
 async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
   const events: JournalEvent[] = [];
   for await (const event of readJournal(layout)) events.push(event);
@@ -328,6 +341,21 @@ describe("claim", () => {
     const code = await claimCommand.run([itemId], env, root, JIM);
     expect(code).toBe(1);
     expect(stderr()).not.toBe("");
+    expect((await readItem(layout, itemId)).frontmatter.claimed_by).toBeUndefined();
+    expect(await journalEvents(layout)).toHaveLength(eventsBefore);
+  });
+
+  test("in a repo with no commits yet the refusal says so, not git's 'ambiguous argument'", async () => {
+    const { root, layout, env } = await setupWithoutCommits();
+    const itemId = await newItem(env, root);
+    const eventsBefore = (await journalEvents(layout)).length;
+    errs = [];
+
+    const code = await claimCommand.run([itemId], env, root, JIM);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("no commits yet");
+    expect(stderr()).toContain("initial commit");
+    expect(stderr()).not.toContain("ambiguous argument");
     expect((await readItem(layout, itemId)).frontmatter.claimed_by).toBeUndefined();
     expect(await journalEvents(layout)).toHaveLength(eventsBefore);
   });

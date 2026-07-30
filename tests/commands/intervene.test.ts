@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { rm, writeFile } from "node:fs/promises";
+import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claimCommand, handbackCommand, pauseCommand } from "../../src/commands/intervene";
 import { itemCommand } from "../../src/commands/item";
@@ -103,6 +103,35 @@ async function setupWithoutCommits() {
   await writeConfig(layout, makeConfig());
   const env = seededEnv({ tickSeconds: 1 });
   return { root, layout, env };
+}
+
+/**
+ * Rewrite the journaled item.claimed event's `baseline` payload in place —
+ * the corrupt-segment fixture handback has to survive. `baseline` is set to
+ * the given value, or removed entirely when it is undefined.
+ */
+async function corruptClaimBaseline(layout: StoreLayout, baseline: unknown): Promise<void> {
+  for (const dir of [layout.journalDir, layout.journalArchiveDir]) {
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith(".jsonl")) continue; // skip the archive subdirectory
+      const path = join(dir, name);
+      const text = await readFile(path, "utf8");
+      if (!text.includes('"item.claimed"')) continue;
+      const patched = text
+        .split("\n")
+        .map((line) => {
+          if (!line.includes('"item.claimed"')) return line;
+          const event = JSON.parse(line) as JournalEvent;
+          if (baseline === undefined) delete event.payload["baseline"];
+          else event.payload["baseline"] = baseline;
+          return JSON.stringify(event);
+        })
+        .join("\n");
+      await writeFile(path, patched);
+      return;
+    }
+  }
+  throw new Error("no journaled item.claimed event to corrupt");
 }
 
 async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
@@ -572,6 +601,42 @@ describe("handback", () => {
 
     expect((await readItem(layout, itemId)).frontmatter.claimed_by).toBe("jim");
     expect(await journalEvents(layout)).toHaveLength(eventsBefore);
+  });
+
+  test("a hand-edited claim baseline refuses actionably instead of leaking a schema error", async () => {
+    const { root, layout, env } = await setup();
+    const itemId = await newItem(env, root);
+    expect(await claimCommand.run([itemId], env, root, JIM)).toBe(0);
+    const claimEvent = (await journalEvents(layout)).find((e) => e.type === "item.claimed")!;
+    // The journal is append-only, so this is corruption, not a supported edit:
+    // a hand-edited (or half-written) segment whose baseline no longer parses.
+    await corruptClaimBaseline(layout, { head: "not-a-sha", dirty: [] });
+    const eventsBefore = (await journalEvents(layout)).length;
+    errs = [];
+
+    const code = await handbackCommand.run([itemId], env, root, JIM);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("malformed");
+    expect(stderr()).toContain(itemId);
+    expect(stderr()).toContain(claimEvent.id);
+    expect(stderr()).toContain("40-char lowercase hex commit SHA");
+    expect(stderr()).toContain("restore the journal segment from git");
+    // Refused before any write: the claim still stands, nothing was journaled.
+    expect((await readItem(layout, itemId)).frontmatter.claimed_by).toBe("jim");
+    expect(await journalEvents(layout)).toHaveLength(eventsBefore);
+  });
+
+  test("a claim event with no baseline payload at all refuses the same way", async () => {
+    const { root, layout, env } = await setup();
+    const itemId = await newItem(env, root);
+    expect(await claimCommand.run([itemId], env, root, JIM)).toBe(0);
+    await corruptClaimBaseline(layout, undefined);
+    errs = [];
+
+    expect(await handbackCommand.run([itemId], env, root, JIM)).toBe(1);
+    expect(stderr()).toContain("malformed");
+    expect(stderr()).toContain("restore the journal segment from git");
+    expect((await readItem(layout, itemId)).frontmatter.claimed_by).toBe("jim");
   });
 
   test("fails actionably on an unknown item and on bad argv", async () => {

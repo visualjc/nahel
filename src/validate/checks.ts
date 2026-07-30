@@ -684,6 +684,49 @@ function checkPrdApproval(state: ParsedState): Finding[] {
 }
 
 /**
+ * Parent/child status rollup: `done` on a parent claims the work beneath it
+ * is finished, and nothing else notices when a child disagrees — the state a
+ * parent closed by itself leaves behind, or a merge that reopened a child
+ * under an already-closed parent.
+ *
+ * Settled means done OR dropped, the finished/live split checkPrdApproval
+ * uses: a deliberately cut child is a decision, not pending work.
+ *
+ * A WARNING, never an error: both records are individually valid and either
+ * one may be the correct one — which side to move is a human's call.
+ */
+function checkChildrenRollup(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  // Unfinished children per parent id. state.items is keyed in the collector's
+  // sorted-id order, so each listing is deterministic without re-sorting.
+  const unfinished = new Map<string, string[]>();
+  for (const { record } of state.items.values()) {
+    if (record.parent === undefined) continue;
+    if (record.status === "done" || record.status === "dropped") continue;
+    const listing = unfinished.get(record.parent) ?? [];
+    listing.push(`${record.id} (${record.status})`);
+    unfinished.set(record.parent, listing);
+  }
+
+  for (const { record, path } of state.items.values()) {
+    if (record.status !== "done") continue;
+    const open = unfinished.get(record.id);
+    if (open === undefined) continue;
+    findings.push({
+      severity: "warning",
+      check: "item.children-unfinished",
+      path,
+      message:
+        `item ${record.id} is done but ${open.length} child item(s) are not ` +
+        `done or dropped: ${open.join(", ")}`,
+      fix: `finish or drop the child items, or reopen the parent (\`nahel item update ${record.id} --status in-progress\`)`,
+    });
+  }
+  return findings;
+}
+
+/**
  * Merge-authority provenance (PRD F3.4): `merge: on-approve` is legitimate
  * under hard constraint 6 / ADR-0011 (as amended 2026-07-25) only as the
  * HUMAN's standing authorization — the committed config flip IS the
@@ -1616,6 +1659,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),
+    ...checkChildrenRollup(state),
     ...checkMergeAuthority(state),
     ...checkReviewSlots(state),
     ...checkCycles(state),

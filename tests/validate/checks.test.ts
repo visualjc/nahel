@@ -893,6 +893,81 @@ describe("validate — investigation references (item.investigation-missing, F5)
   });
 });
 
+describe("validate — done-parent children rollup (item.children-unfinished)", () => {
+  test("a done parent with an unfinished child warns, naming the parent and every offending child", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, { name: "rollup-epic", type: "plan", status: "done" });
+    const open = await createItem(fixture, {
+      name: "rollup-open",
+      parent: epic.id,
+      status: "in-progress",
+    });
+    const backlog = await createItem(fixture, {
+      name: "rollup-backlog",
+      parent: epic.id,
+      status: "backlog",
+    });
+    const finished = await createItem(fixture, {
+      name: "rollup-finished",
+      parent: epic.id,
+      status: "done",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished]", findings);
+    const rollup = findingsFor(findings, "item.children-unfinished");
+    expect(rollup).toHaveLength(1);
+    expect(rollup[0]!.severity).toBe("warning");
+    expect(rollup[0]!.path).toBe(itemPath(fixture.layout, epic.id));
+    expect(rollup[0]!.message).toContain(epic.id);
+    expect(rollup[0]!.message).toContain(`${open.id} (in-progress)`);
+    expect(rollup[0]!.message).toContain(`${backlog.id} (backlog)`);
+    // The done child is not an offender and is never listed.
+    expect(rollup[0]!.message).not.toContain(finished.id);
+    expect(rollup[0]!.fix).toBeDefined();
+    // An inconsistent rollup is drift, never corruption: no errors at all.
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a done parent whose children are all done is silent", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, { name: "closed-epic", type: "plan", status: "done" });
+    await createItem(fixture, { name: "closed-a", parent: epic.id, status: "done" });
+    await createItem(fixture, { name: "closed-b", parent: epic.id, status: "done" });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished, all done]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a done parent whose remaining children were dropped is silent — dropped is settled, not pending", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, { name: "trimmed-epic", type: "plan", status: "done" });
+    await createItem(fixture, { name: "trimmed-shipped", parent: epic.id, status: "done" });
+    await createItem(fixture, { name: "trimmed-cut", parent: epic.id, status: "dropped" });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished, dropped child]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a parent that is NOT done never warns, however mixed its children are", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, {
+      name: "live-epic",
+      type: "plan",
+      status: "in-progress",
+    });
+    await createItem(fixture, { name: "live-a", parent: epic.id, status: "done" });
+    await createItem(fixture, { name: "live-b", parent: epic.id, status: "blocked" });
+    await createItem(fixture, { name: "live-c", parent: epic.id, status: "backlog" });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished, live parent]", findings);
+    expect(findings).toEqual([]);
+  });
+});
+
 describe("validate — circular references", () => {
   test("a parent cycle is detected and reported once with the cycle path", async () => {
     const fixture = await setupFixture(dirs);

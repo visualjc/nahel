@@ -11,12 +11,10 @@ import { makeTempDir } from "../store/helpers";
  * output JSON was written. The failing-tests path always worked; these
  * tests pin both paths.
  *
- * Real processes against real temp git repos — no mocks. `timeout(1)` is
- * absent on stock macOS (separate item y7vzx3be), and test-current.sh
- * wraps its test command in it — so these tests prepend a PATH shim whose
- * `timeout` simply drops the duration and execs the command. The shim is a
- * host dependency stand-in, not part of the system under test; timeout
- * *enforcement* is deliberately not covered here.
+ * Real processes against real temp git repos — no mocks. test-current.sh's
+ * 5-minute cap now goes through `with_timeout` (item y7vzx3be), which works
+ * with or without GNU `timeout` installed; that shim has its own coverage in
+ * yolo-with-timeout.test.ts, so these tests just run under the host PATH.
  */
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -38,7 +36,6 @@ interface ScriptResult {
 async function runScript(script: string, args: string[], cwd: string): Promise<ScriptResult> {
   const proc = Bun.spawn(["bash", script, ...args], {
     cwd,
-    env: { ...process.env, PATH: `${await timeoutShimDir()}:${process.env.PATH ?? ""}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -48,17 +45,6 @@ async function runScript(script: string, args: string[], cwd: string): Promise<S
     proc.exited,
   ]);
   return { code, stdout, stderr };
-}
-
-/** PATH dir holding a `timeout` that drops the duration and execs the command. */
-async function timeoutShimDir(): Promise<string> {
-  const dir = await makeTempDir("nahel-yolo-timeout-shim-");
-  tempDirs.push(dir);
-  const shim = join(dir, "timeout");
-  await writeFile(shim, '#!/bin/bash\nshift\nexec "$@"\n');
-  const proc = Bun.spawn(["chmod", "+x", shim], { stdout: "ignore", stderr: "ignore" });
-  await proc.exited;
-  return dir;
 }
 
 async function git(cwd: string, ...args: string[]): Promise<void> {

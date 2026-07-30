@@ -15,6 +15,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/with-timeout.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/with-timeout.sh"
+
 STATE_DIR="${1:-}"
 PRD_NAME="${2:-}"
 ISSUE_ID="${3:-}"
@@ -43,8 +46,8 @@ cd "$WORKTREE_PATH"
 
 set +e
 echo "===== TEST CMD: $TEST_CMD =====" >"$RAW"
-# 5-minute hard timeout
-( timeout 300 bash -c "$TEST_CMD" ) >>"$RAW" 2>&1
+# 5-minute hard timeout (124 on expiry, same as GNU timeout)
+with_timeout 300 bash -c "$TEST_CMD" >>"$RAW" 2>&1
 TEST_EXIT=$?
 set -e
 

@@ -119,7 +119,7 @@ These are infra/undecidability, not judgment — halting is correct because the 
 - Treat as failure (timeout)
 - Apply normal retry budget for Codex grill turn (1 retry)
 - If retry also hangs → halt
-- Phase 10.2.e diff review is bounded by `timeout 600`; inspect the
+- Phase 10.2.e diff review is bounded by `with_timeout 600`; inspect the
   per-issue `codex-review-iter-<N>.log`, `codex-review-iter-<N>-prompt.md`,
   and `codex-review-iter-<N>-status.txt` artifacts before retrying manually.
 

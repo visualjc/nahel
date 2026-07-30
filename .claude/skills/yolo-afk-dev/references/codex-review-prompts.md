@@ -2,7 +2,7 @@
 
 Three review touchpoints. Each calls `codex exec` with a structured prompt. Codex output gets parsed for findings tagged `[BLOCKER]` or `[NIT]`.
 
-**Invocation contract.** All three review scripts (`codex-review-prd.sh`, `codex-review-epic.sh`, `codex-review-diff.sh`) pass the prompt to codex via stdin (`codex exec - < prompt-file`), NEVER via argv. Large prompts (full PRD + epic + concatenated task files, multi-iteration diffs) routinely exceed macOS `ARG_MAX` (~256 KB) and would silently hang codex if passed via argv. Every script also saves the resolved prompt to `<phase>-prompt.md` (or `codex-review-iter-<N>-prompt.md`) for post-mortem and Sonnet-fallback re-use, runs under `timeout 600`, and writes a `<phase>-status.txt` only on timeout/failure (signal for the Sonnet fallback).
+**Invocation contract.** All three review scripts (`codex-review-prd.sh`, `codex-review-epic.sh`, `codex-review-diff.sh`) pass the prompt to codex via stdin (`codex exec - < prompt-file`), NEVER via argv. Large prompts (full PRD + epic + concatenated task files, multi-iteration diffs) routinely exceed macOS `ARG_MAX` (~256 KB) and would silently hang codex if passed via argv. Every script also saves the resolved prompt to `<phase>-prompt.md` (or `codex-review-iter-<N>-prompt.md`) for post-mortem and Sonnet-fallback re-use, runs under `with_timeout 600`, and writes a `<phase>-status.txt` only on timeout/failure (signal for the Sonnet fallback).
 
 Every template below begins with a `{{CCPM_CONTEXT_PRIMING}}` placeholder. Each review fires a fresh codex session, so priming has to be injected every time. Resolution rule: see SKILL.md → "Codex priming" (resolves to a fixed priming block when `.claude/context/*.md` exists, else empty string).
 
@@ -172,7 +172,7 @@ This is the **most important** review — it gates every commit. Anti-revert lan
 The script pins this review to `gpt-5.3-codex-spark` and runs it as a bounded review-only Codex call:
 
 ```
-timeout 600 codex exec --ignore-user-config -m gpt-5.3-codex-spark --sandbox read-only --json -o <output-path> - < <prompt-file>
+with_timeout 600 codex exec --ignore-user-config -m gpt-5.3-codex-spark --sandbox read-only --json -o <output-path> - < <prompt-file>
 ```
 
 Artifacts per iteration:

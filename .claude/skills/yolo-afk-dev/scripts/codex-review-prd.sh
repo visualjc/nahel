@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/with-timeout.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/with-timeout.sh"
+
 STATE_DIR="${1:-}"
 PRD_NAME="${2:-}"
 PRD_PATH="${3:-}"
@@ -40,7 +43,7 @@ PROMPT="$(cat)"
 printf '%s\n' "$PROMPT" > "$PROMPT_FILE"
 rm -f "$OUT" "$LOG" "$STATUS"
 
-if timeout 600 codex exec \
+if with_timeout 600 codex exec \
      --ignore-user-config \
      -m gpt-5.3-codex-spark \
      --sandbox read-only \

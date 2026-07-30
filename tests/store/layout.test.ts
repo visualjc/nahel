@@ -13,6 +13,7 @@ import {
   listRuns,
   observationPath,
   openStore,
+  openStoreTolerant,
   readConfig,
   readDistilled,
   readItem,
@@ -151,6 +152,22 @@ describe("resolveStoreRoot / openStore — find the store like git finds .git", 
     await mkdir(sub);
     expect(await resolveStoreRoot(root)).toBe(root);
     await expect(resolveStoreRoot(sub)).rejects.toThrow(/nahel\/config not found/);
+  });
+
+  test("openStoreTolerant walks like openStore when a store is there", async () => {
+    const root = await storeRepo();
+    const layout = await openStoreTolerant(join(root, "nahel", "journal", "archive"));
+    expect(layout.root).toBe(root);
+  });
+
+  test("openStoreTolerant falls back to cwd when the walk finds nothing", async () => {
+    // validate must REPORT a missing config as a finding (PRD F8) and skills
+    // works off skills.yaml alone (PRD F7) — neither may die in the resolver.
+    const root = await tempRoot();
+    git(root, "init", "-q");
+    const layout = await openStoreTolerant(root);
+    expect(layout.root).toBe(root);
+    expect(layout.configPath).toBe(join(root, "nahel", "config"));
   });
 
   test("nothing found: the error names where it looked and points at `nahel init`", async () => {

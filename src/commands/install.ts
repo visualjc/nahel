@@ -11,10 +11,10 @@ import {
 import { readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
 import {
   listMarkdownDocs,
+  openStore,
   readConfig,
   readTextFile,
   removeFile,
-  storeLayout,
   workflowsDir,
 } from "../store/layout";
 import { UsageError } from "./item";
@@ -82,7 +82,9 @@ const CODEX_HOME_DIR = ".codex";
 
 /**
  * Where a target's shims live, and how that path is shown to the user.
- * Repo-rooted targets stay repo-relative (path-standards.md); a home-rooted
+ * Repo-rooted targets go under the RESOLVED store root rather than cwd — an
+ * install from a subdirectory writes the repo's shims, not a nested copy of
+ * them — and stay repo-relative (path-standards.md); a home-rooted
  * one is shown as `~/…`; a codex-home one follows codex's own discovery —
  * `$CODEX_HOME` when the entry point saw it set, `~/.codex` otherwise — and
  * an env-moved home is shown in full, because that is the path the user has
@@ -91,8 +93,9 @@ const CODEX_HOME_DIR = ".codex";
 function resolveShimRoot(
   root: ShimRoot,
   ctx: CommandContext,
+  repoRoot: string,
 ): { base: string; display: string } | undefined {
-  if (root === "repo") return { base: ctx.cwd, display: "" };
+  if (root === "repo") return { base: repoRoot, display: "" };
   if (root === "home") {
     return ctx.homeDir === undefined ? undefined : { base: ctx.homeDir, display: "~" };
   }
@@ -132,7 +135,7 @@ async function pruneStaleShims(
 async function runInstall(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const flags = parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: workflows live under nahel/, so a repo without
     // config gets the `nahel init` pointer instead of a confusing empty scan.
     await readConfig(layout);
@@ -149,7 +152,7 @@ async function runInstall(argv: string[], ctx: CommandContext): Promise<number> 
         );
         return 1;
       }
-      const resolved = resolveShimRoot(target.root, ctx);
+      const resolved = resolveShimRoot(target.root, ctx, layout.root);
       if (resolved === undefined) {
         const missing =
           target.root === "codex-home"

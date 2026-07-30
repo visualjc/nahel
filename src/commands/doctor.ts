@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import { DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS, runHealthcheck } from "../store/healthcheck";
-import { readConfig, storeLayout } from "../store/layout";
+import { openStore, readConfig } from "../store/layout";
 import { UsageError } from "./item";
 
 /**
@@ -52,7 +52,7 @@ function parseFlags(argv: string[]): void {
 async function runDoctor(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing/malformed config errors with the
     // `nahel init` pointer (exit 1) rather than a confusing contract verdict.
     const config = await readConfig(layout);

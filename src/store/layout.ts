@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
@@ -65,6 +65,99 @@ export function storeLayout(root: string): StoreLayout {
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
   };
+}
+
+/** True when anything exists at `path` (a file, a directory, a symlink target). */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+/** The `.git` entry: a directory in a clone, a FILE in a worktree or submodule. */
+const GIT_MARKER = ".git";
+
+/**
+ * Nearest ancestor of `from` (inclusive) holding a `.git` entry, or null when
+ * `from` is not inside a git repository at all.
+ */
+async function findGitBoundary(from: string): Promise<string | null> {
+  let dir = from;
+  while (true) {
+    if (await pathExists(join(dir, GIT_MARKER))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Resolve the root of the store `cwd` sits in, the way git finds `.git`: walk
+ * up to the nearest directory holding `nahel/config`. Every command over an
+ * EXISTING store goes through this, so `nahel distill` works from
+ * `nahel/journal/archive/` exactly as it does from the repo root.
+ *
+ * The walk is BOUNDED by the current git repository or worktree — the nearest
+ * ancestor carrying a `.git` entry, which the walk may look at but never pass.
+ * That boundary is what keeps checkouts isolated: a worktree's `.git` is a
+ * file in its own checkout directory, so a worktree (or a nested repo, or a
+ * submodule) can never adopt the store of a directory above it.
+ *
+ * Outside a git repository there is no boundary, and the deliberate choice is
+ * the safer one: nothing is walked at all, cwd is the only candidate. Walking
+ * to the filesystem root would let any command run anywhere under `$HOME`
+ * silently adopt an unrelated store.
+ *
+ * `nahel init` deliberately does NOT use this — it creates the store at cwd.
+ */
+export async function resolveStoreRoot(cwd: string): Promise<string> {
+  const start = resolve(cwd);
+  const { root, boundary } = await searchStoreRoot(start);
+  if (root !== null) return root;
+  throw new Error(
+    `nahel/config not found at ${join(start, "nahel", "config")}` +
+      (boundary === start ? "" : ` or in any parent up to ${boundary}`) +
+      " — run `nahel init`",
+  );
+}
+
+/**
+ * The walk itself: the nearest ancestor of `start` (inclusive, bounded — see
+ * resolveStoreRoot) holding `nahel/config`, or null with the boundary it
+ * stopped at, so both the strict and the tolerant open share one traversal.
+ */
+async function searchStoreRoot(start: string): Promise<{ root: string | null; boundary: string }> {
+  const boundary = (await findGitBoundary(start)) ?? start;
+  let dir = start;
+  while (true) {
+    if (await pathExists(join(dir, "nahel", "config"))) return { root: dir, boundary };
+    const parent = dirname(dir);
+    if (dir === boundary || parent === dir) return { root: null, boundary };
+    dir = parent;
+  }
+}
+
+/** Layout of the store `cwd` sits in — the walking read of storeLayout. */
+export async function openStore(cwd: string): Promise<StoreLayout> {
+  return storeLayout(await resolveStoreRoot(cwd));
+}
+
+/**
+ * Layout of the store `cwd` sits in, falling back to cwd itself when the walk
+ * finds none — the tolerant open, for the two commands that must still run on
+ * an uninitialized directory: `nahel validate` REPORTS a missing config as a
+ * finding rather than dying on it (PRD F8), and `nahel skills` operates on
+ * skills.yaml / skills.lock, which stand on their own (PRD F7).
+ */
+export async function openStoreTolerant(cwd: string): Promise<StoreLayout> {
+  const start = resolve(cwd);
+  const { root } = await searchStoreRoot(start);
+  return storeLayout(root ?? start);
 }
 
 /** Create the full directory structure (idempotent — never clobbers). */

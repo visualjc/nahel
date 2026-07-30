@@ -2,9 +2,9 @@ import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import type { SkillsLockEntry } from "../schema/records";
 import {
+  openStoreTolerant,
   readSkillsLock,
   readSkillsManifest,
-  storeLayout,
   writeSkillsLock,
   type StoreLayout,
 } from "../store/layout";
@@ -95,7 +95,7 @@ async function restore(layout: StoreLayout, ctx: CommandContext): Promise<number
 async function runSkills(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const sub = parseSubcommand(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStoreTolerant(ctx.cwd);
     if (sub === "lock") return await lock(layout, ctx);
     if (sub === "restore") return await restore(layout, ctx);
     throw new UsageError(`unknown skills subcommand: ${sub}`);

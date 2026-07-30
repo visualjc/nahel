@@ -8,7 +8,7 @@ import {
   newSessionSegmentId,
   SESSION_CLOSED_EVENT_TYPE,
 } from "../store/journal";
-import { itemExists, readConfig, readRun, storeLayout } from "../store/layout";
+import { itemExists, openStore, readConfig, readRun } from "../store/layout";
 import { MUTATION_PAYLOAD_KEYS } from "../store/mutate";
 import { rotateJournal } from "../store/rotate";
 import { UsageError } from "./item";
@@ -160,7 +160,7 @@ async function runLog(argv: string[], ctx: LogCommandContext): Promise<number> {
     const flags = parseFlags(argv);
     const payload = parsePayload(flags.data);
 
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Identity comes from the config actor entry or the NAHEL_ACTOR override —
     // resolution failures (including a missing config) are hard errors with
     // the fix spelled out by the store.

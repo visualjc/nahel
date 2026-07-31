@@ -448,4 +448,51 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     expect(scan.branches).toEqual([]);
     expect(scan.remoteRefs).toEqual([]);
   });
+
+  /**
+   * The PROBE path (tryGit's non-throwing form) is where an output-cap
+   * overflow does real damage: `git cherry` is how a cherry-picked prototype
+   * commit is caught, and an overflow that comes back as an ordinary non-zero
+   * exit makes copiedToDefault report ZERO copies — a never-merge violation
+   * silently downgraded to a clean bill of health. A refusal must look like a
+   * refusal, never like an answer.
+   */
+  test("an overflow inside the scan refuses instead of reporting a clean 'no copies'", async () => {
+    const root = await makeRepo();
+    const branch = prototypeBranch("capscan", 1);
+    git(root, "checkout", "-q", "-b", branch);
+    const shas: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      await writeFile(join(root, `variant-${i}.txt`), `variant work ${i}\n`);
+      git(root, "add", "-A");
+      git(root, "commit", "-m", `variant commit ${i}`);
+      shas.push(git(root, "rev-parse", "HEAD").trim());
+    }
+    git(root, "checkout", "-q", "main");
+    // main moves on first, so the copies below land as NEW commits with the
+    // variant's patch — a same-second cherry-pick straight onto the shared
+    // base would recreate the variant's own commit objects verbatim and be a
+    // fast-forward, not the copy this test is about.
+    await writeFile(join(root, "mainline.txt"), "main moved on\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-m", "mainline work");
+    // Three of the variant's commits copied onto main — the exact violation
+    // `git cherry` exists to catch.
+    for (const sha of shas.slice(0, 3)) git(root, "cherry-pick", sha);
+
+    // Control: at the production cap the scan SEES the violation.
+    const honest = await scanPrototypeRefs(root);
+    expect(honest.error).toBeUndefined();
+    expect(honest.branches[0]!.copiedToDefault).toHaveLength(3);
+
+    // A 200-byte cap: the branch listing (~114 bytes) still fits, `git cherry`
+    // (10 lines of 43 bytes) does not — so the overflow lands on the probe.
+    const capped = await scanPrototypeRefs(root, 200);
+    expect(capped.error).toBeDefined();
+    expect(capped.error).toContain("200-byte capture cap");
+    // No half-answer: an empty branch list WITHOUT an error would read as
+    // "scanned, nothing wrong".
+    expect(capped.branches).toEqual([]);
+    expect(capped.remoteRefs).toEqual([]);
+  });
 });

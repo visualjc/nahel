@@ -4,16 +4,20 @@ import { join } from "node:path";
 import { makeTempDir } from "../store/helpers";
 
 /**
- * Coverage for the portable `timeout(1)` shim (item y7vzx3be,
- * macos-timeout-shim). Stock macOS ships no GNU coreutils, so `timeout` is
- * simply absent — yet five yolo-afk-dev scripts wrapped their long-running
- * child in it, and all five branch on exit code 124 to distinguish "timed
- * out" from "failed". Without a shim those runs died with 127.
+ * Coverage for `with_timeout` (item y7vzx3be, macos-timeout-shim). Stock macOS
+ * ships no GNU coreutils, so `timeout(1)` is simply absent — yet five
+ * yolo-afk-dev scripts wrapped their long-running child in it, and all five
+ * branch on exit code 124 to distinguish "timed out" from "failed". Those runs
+ * died with 127 instead.
  *
- * Real processes, no mocks. Absence of `timeout` is simulated by running with
- * PATH set to a single temp dir holding symlinks to exactly the tools under
- * test — nothing else is reachable, so `command -v timeout` fails
- * deterministically whether or not the host has coreutils installed.
+ * The replacement is a perl watchdog used uniformly, never delegating to
+ * `timeout` even where it exists: `timeout -k` reports 137 rather than 124
+ * when the KILL escalation is what ended the command, which no caller can tell
+ * apart from an external kill.
+ *
+ * Real processes, no mocks. Each case runs with PATH set to a single temp dir
+ * holding symlinks to exactly the tools under test — nothing else is
+ * reachable, so host coreutils can neither help nor interfere.
  */
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -65,10 +69,10 @@ async function runWithPath(
   return { code, stdout, stderr };
 }
 
-/** Tools the fallback watchdog and these snippets need. */
-const FALLBACK_TOOLS = ["bash", "perl", "sleep", "cat", "printf"];
+/** Tools the watchdog and these snippets need. */
+const WATCHDOG_TOOLS = ["bash", "perl", "sleep", "cat", "printf"];
 
-/** TERM→KILL grace the shim promises, identical on both paths. */
+/** TERM->KILL grace the watchdog promises. */
 const KILL_AFTER_SECONDS = 2;
 
 /** Pids that must not survive a test; killed in afterEach so a red run leaks nothing. */
@@ -118,9 +122,9 @@ async function readPid(file: string): Promise<number> {
 const TERM_IGNORING_CHILD =
   `perl -e '$SIG{TERM} = "IGNORE"; open my $f, ">", $ENV{PIDFILE} or die; print $f $$; close $f; sleep 60;'`;
 
-describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
+describe("with-timeout.sh — the watchdog", () => {
   test("returns the command's own exit status when it finishes in time", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     const result = await runWithPath(`with_timeout 10 printf 'hello\\n'`, bin);
 
     expect(result.stderr).toBe("");
@@ -129,14 +133,14 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   });
 
   test("propagates a non-zero exit status unchanged", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     const result = await runWithPath(`with_timeout 10 bash -c 'exit 7'; echo "rc=$?"`, bin);
 
     expect(result.stdout.trim()).toBe("rc=7");
   });
 
   test("returns 124 and kills the child when the duration elapses", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     const started = Date.now();
     const result = await runWithPath(`with_timeout 1 sleep 30; echo "rc=$?"`, bin);
     const elapsed = Date.now() - started;
@@ -150,7 +154,7 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   });
 
   test("passes stdin through to the command", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     const result = await runWithPath(`with_timeout 10 cat`, bin, { stdin: "piped payload\n" });
 
     expect(result.code).toBe(0);
@@ -158,7 +162,7 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   });
 
   test("passes arguments through verbatim without a shell re-parse", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     // $HOME and the spaces/quotes must survive as literal argv bytes.
     const result = await runWithPath(
       `with_timeout 10 printf '[%s]' 'a b' '"c"' '$HOME'`,
@@ -170,7 +174,7 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   });
 
   test("escalates to KILL, so a child that ignores TERM still dies at the hard cap", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     const scratch = await makeTempDir("nahel-yolo-pid-");
     tempDirs.push(scratch);
     const pidFile = join(scratch, "child.pid");
@@ -188,7 +192,7 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   }, 30000);
 
   test("kills the whole process tree, so descendants do not outlive the timeout", async () => {
-    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
     const scratch = await makeTempDir("nahel-yolo-desc-");
     tempDirs.push(scratch);
     const descFile = join(scratch, "descendant.pid");
@@ -206,121 +210,48 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   }, 30000);
 });
 
-/**
- * Stand-in for the GNU `timeout(1)` binary this host does not have. It is
- * poll-based on purpose — a different mechanism from the shim's alarm-based
- * watchdog, so these tests are not the implementation checking itself. It
- * records its argv, honours an optional `-k GRACE`, and returns 124 on expiry
- * as coreutils documents. Given NO `-k` it never escalates past TERM and bails
- * out with 199, leaving the child alive: exactly the defect under test.
- */
-async function fakeTimeoutBin(argvRecord: string): Promise<string> {
-  const bin = await sandboxBin(FALLBACK_TOOLS);
-  const perl = Bun.which("perl");
-  if (!perl) throw new Error("test prerequisite missing from host PATH: perl");
-  const src = `#!${perl}
-use strict;
-use warnings;
-use POSIX ();
-
-open my $rec, ">", $ENV{FAKE_TIMEOUT_ARGV} or die "record argv: $!";
-print $rec join("\\n", @ARGV), "\\n";
-close $rec;
-
-my @a = @ARGV;
-my $grace;
-if (@a >= 2 and $a[0] eq "-k") { shift @a; $grace = shift @a; }
-my $secs = shift @a;
-
-my $pid = fork();
-die "fork: $!" unless defined $pid;
-if ($pid == 0) { POSIX::setpgid(0, 0); exec { $a[0] } @a; exit 127; }
-POSIX::setpgid($pid, $pid);
-
-my $phase = 0;
-my $next = time + $secs;
-while (1) {
-  my $r = waitpid($pid, POSIX::WNOHANG());
-  if ($r == $pid) {
-    my $st = $?;
-    exit($phase ? 124 : ($st & 127 ? 128 + ($st & 127) : $st >> 8));
-  }
-  my $now = time;
-  if ($phase == 0 and $now >= $next) {
-    kill "TERM", -$pid;
-    $phase = 1;
-    $next = $now + (defined $grace ? $grace : 6);
-  } elsif ($phase == 1 and $now >= $next) {
-    exit 199 unless defined $grace;
-    kill "KILL", -$pid;
-    $phase = 2;
-    $next = $now + 5;
-  } elsif ($phase == 2 and $now >= $next) {
-    exit 198;
-  }
-  select undef, undef, undef, 0.05;
-}
-`;
-  await writeFile(join(bin, "timeout"), src, { mode: 0o755 });
-  return bin;
-}
-
-describe("with-timeout.sh — `timeout` present on PATH", () => {
-  async function setup(): Promise<{ bin: string; argvRecord: string }> {
-    const scratch = await makeTempDir("nahel-yolo-argv-");
-    tempDirs.push(scratch);
-    const argvRecord = join(scratch, "timeout.argv");
-    return { bin: await fakeTimeoutBin(argvRecord), argvRecord };
+describe("with-timeout.sh — a `timeout` binary on PATH", () => {
+  /**
+   * A `timeout` that would be glaringly wrong if it were ever used. The shim
+   * must never reach for it: GNU `timeout -k` reports 137 (128+SIGKILL), not
+   * 124, when the KILL escalation is what actually ended the command, and that
+   * is indistinguishable from a child the OOM killer took. Callers branch on
+   * 124, so the watchdog owns the timing on every host.
+   */
+  async function binWithSabotageTimeout(): Promise<string> {
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
+    await writeFile(join(bin, "timeout"), "#!/bin/bash\nexit 99\n", { mode: 0o755 });
+    return bin;
   }
 
-  async function recordedArgv(file: string): Promise<string[]> {
-    return (await Bun.file(file).text()).split("\n").slice(0, -1);
-  }
-
-  test("delegates to the real `timeout` when it is installed", async () => {
-    const { bin, argvRecord } = await setup();
-    const result = await runWithPath(`with_timeout 10 printf 'delegated\\n'`, bin, {
-      env: { FAKE_TIMEOUT_ARGV: argvRecord },
-    });
+  test("ignores it entirely and still runs the command itself", async () => {
+    const bin = await binWithSabotageTimeout();
+    const result = await runWithPath(`with_timeout 10 printf 'ours\\n'`, bin);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toBe("delegated\n");
-    // The last argv entry is printf's literal two-char `\n` format, not a newline.
-    expect(await recordedArgv(argvRecord)).toEqual([
-      "-k",
-      String(KILL_AFTER_SECONDS),
-      "10",
-      "printf",
-      String.raw`delegated\n`,
-    ]);
+    expect(result.stdout).toBe("ours\n");
   });
 
-  test("asks `timeout` for a KILL deadline, with the same grace as the fallback", async () => {
-    const { bin, argvRecord } = await setup();
-    await runWithPath(`with_timeout 10 printf 'x'`, bin, { env: { FAKE_TIMEOUT_ARGV: argvRecord } });
-
-    // Without -k, a TERM-ignoring child runs forever under GNU timeout — the
-    // two paths would then promise different things.
-    expect((await recordedArgv(argvRecord)).slice(0, 3)).toEqual([
-      "-k",
-      String(KILL_AFTER_SECONDS),
-      "10",
-    ]);
-  });
-
-  test("a TERM-ignoring child dies at the hard cap, and 124 survives delegation", async () => {
-    const { bin, argvRecord } = await setup();
-    const scratch = await makeTempDir("nahel-yolo-pid-");
-    tempDirs.push(scratch);
-    const pidFile = join(scratch, "child.pid");
-
-    const result = await runWithPath(`with_timeout 1 ${TERM_IGNORING_CHILD}; echo "rc=$?"`, bin, {
-      env: { FAKE_TIMEOUT_ARGV: argvRecord, PIDFILE: pidFile },
-    });
+  test("ignores it entirely and still reports 124 on expiry", async () => {
+    const bin = await binWithSabotageTimeout();
+    const result = await runWithPath(`with_timeout 1 sleep 30; echo "rc=$?"`, bin);
 
     expect(result.stdout.trim()).toBe("rc=124");
-    expect(await died(await readPid(pidFile))).toBe(true);
-  }, 30000);
+  });
+});
+
+describe("with-timeout.sh — perl missing", () => {
+  test("fails loudly rather than running the command unbounded", async () => {
+    // perl is the watchdog, so without it nothing can enforce the cap. Running
+    // a 600s codex call unbounded is far worse than refusing. 125 is what GNU
+    // timeout uses for "the timeout tool itself failed", and is distinct from
+    // the 127 that means "the command was not found".
+    const bin = await sandboxBin(["bash", "sleep", "printf"]);
+    const result = await runWithPath(`with_timeout 10 printf 'ran'; echo "rc=$?"`, bin);
+
+    expect(result.stdout.trim()).toBe("rc=125");
+    expect(result.stderr).toContain("perl");
+  });
 });
 
 describe("test-current.sh under a PATH without `timeout`", () => {

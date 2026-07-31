@@ -729,6 +729,98 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     expect(findings[0]!.message).not.toContain("records different paragraph bytes");
   });
 
+  /**
+   * Ambiguity has TWO disagreement modes since the paragraph bytes joined the
+   * fail-safe: same-second acts can differ on who acted, on what they
+   * recorded, or on both. The warning must describe the tie at hand rather
+   * than assert one mode for all of them.
+   */
+  describe("same-second ties name the disagreement that actually applies", () => {
+    /** Two same-second founding acts, straight into the journal. */
+    async function tie(
+      fixture: Awaited<ReturnType<typeof setupFixture>>,
+      acts: { actor: { kind: "human" | "agent"; id: string }; paragraph: string }[],
+    ): Promise<void> {
+      const frozen = { now: () => "2026-07-25T12:00:00Z", random: fixture.env.random };
+      for (const act of acts) {
+        await appendEvent(fixture.layout, frozen, {
+          type: "config.updated",
+          actor: act.actor,
+          session: newSessionSegmentId(fixture.env),
+          payload: {
+            section: "founding",
+            value: { mode: "hands-off", paragraph: act.paragraph },
+          },
+        });
+      }
+    }
+
+    /** Commit a hands-off paragraph without journaling anything. */
+    async function commitParagraph(
+      fixture: Awaited<ReturnType<typeof setupFixture>>,
+      paragraph: string,
+    ): Promise<void> {
+      const config = await readConfig(fixture.layout);
+      await writeConfig(fixture.layout, {
+        ...config,
+        founding: { mode: "hands-off", paragraph },
+      });
+    }
+
+    test("two same-second HUMAN acts recording DIFFERENT paragraphs say so — not 'different actor kinds'", async () => {
+      const fixture = await setupFixture(dirs);
+      await commitParagraph(fixture, PARAGRAPH);
+      await tie(fixture, [
+        { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH },
+        { actor: { kind: "human", id: "dana" }, paragraph: "A rival paragraph, same second." },
+      ]);
+
+      const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+      console.log("[founding, tie on paragraph]", findings);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.severity).toBe("warning");
+      expect(findings[0]!.message).toContain("same second");
+      expect(findings[0]!.message).toContain("different paragraphs");
+      // Both humans: asserting an actor-kind disagreement here would be false.
+      expect(findings[0]!.message).not.toContain("different actor kinds");
+      expect(findings[0]!.message).toContain("human:jim");
+      expect(findings[0]!.message).toContain("human:dana");
+    });
+
+    test("a tie on ACTOR KIND alone still says actor kind", async () => {
+      const fixture = await setupFixture(dirs);
+      await commitParagraph(fixture, PARAGRAPH);
+      await tie(fixture, [
+        { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH },
+        { actor: { kind: "agent", id: "claude-code" }, paragraph: PARAGRAPH },
+      ]);
+
+      const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+      console.log("[founding, tie on actor kind]", findings);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.message).toContain("different actor kinds");
+      expect(findings[0]!.message).not.toContain("different paragraphs");
+    });
+
+    test("a tie disagreeing on BOTH names both", async () => {
+      const fixture = await setupFixture(dirs);
+      await commitParagraph(fixture, PARAGRAPH);
+      await tie(fixture, [
+        { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH },
+        {
+          actor: { kind: "agent", id: "claude-code" },
+          paragraph: "An agent's rival paragraph, same second.",
+        },
+      ]);
+
+      const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+      console.log("[founding, tie on both]", findings);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.message).toContain("different actor kinds");
+      expect(findings[0]!.message).toContain("different paragraphs");
+    });
+  });
+
   test("a whitespace-bearing paragraph recorded through the JSON --data form stays silent end to end", async () => {
     // The byte comparison must survive the real write path — JSON payload,
     // YAML config, and back — or every honest hands-off founding would warn.

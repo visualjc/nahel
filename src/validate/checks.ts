@@ -824,11 +824,17 @@ function foundingSignatureCause(status: FoundingSignatureStatus): string {
     );
   }
   if (status.defect === "paragraph-mismatch") {
+    // Only a HUMAN act ever signed anything, so only there can the text have
+    // moved out from under a signature. Saying that of an agent act would
+    // assert a signature F9.5 never granted it.
+    const consequence =
+      status.recordedBy!.actor.kind === "human"
+        ? "the text moved after it was signed, and an act signs only the bytes it recorded"
+        : "and an agent-run founding act signs nothing anyway, so this paragraph was never signed";
     return (
       `the latest founding act (event ${status.recordedBy!.event}, by ` +
       `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id}) records different ` +
-      "paragraph bytes than nahel/config holds — the text moved after it was signed, and an " +
-      "act signs only the bytes it recorded"
+      `paragraph bytes than nahel/config holds — ${consequence}`
     );
   }
   if (status.defect === "ambiguous") {

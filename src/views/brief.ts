@@ -189,6 +189,11 @@ function foundingBody(
  * disagree) and a mismatching one HAS an act (it records other bytes), so
  * reporting either as "none recorded" would be both untrue and a pointer at
  * the wrong repair. The no-act wording is reserved for an empty journal.
+ *
+ * A mismatch's wording turns on WHO acted: only a human act ever signed
+ * anything (F9.5), so only there can the text have moved out from under a
+ * signature — claiming that of an agent act would assert a signature it never
+ * had, and read as though a human's intent had been overwritten.
  */
 function foundingAttribution(status: FoundingSignatureStatus): string {
   const named = (entry: { event: string; actor: Actor }): string =>
@@ -201,7 +206,11 @@ function foundingAttribution(status: FoundingSignatureStatus): string {
           .map(named)
           .join(", ")}`
       : status.defect === "paragraph-mismatch"
-        ? `${named(status.recordedBy!)} records different paragraph bytes — the text moved after it was signed`
+        ? `${named(status.recordedBy!)} records different paragraph bytes${
+            status.recordedBy!.actor.kind === "human"
+              ? " — the text moved after it was signed"
+              : " and, being agent-run, signed nothing anyway"
+          }`
         : status.recordedBy === undefined
           ? "no journaled act records it"
           : `recorded by ${named(status.recordedBy)}`;

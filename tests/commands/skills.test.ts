@@ -34,9 +34,16 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-/** A local git repo with the named skills, returning its path + HEAD SHA. */
-async function makeSkillsRepo(skills: string[]): Promise<{ repo: string; sha: string }> {
-  const repo = await tempDir("nahel-skillsrepo-");
+/**
+ * A local git repo with the named skills, returning its path + HEAD SHA. `at`
+ * places it at a known path (a manifest naming it RELATIVELY needs that).
+ */
+async function makeSkillsRepo(
+  skills: string[],
+  at?: string,
+): Promise<{ repo: string; sha: string }> {
+  const repo = at ?? (await tempDir("nahel-skillsrepo-"));
+  await mkdir(repo, { recursive: true });
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test User");
@@ -204,6 +211,57 @@ describe("nahel skills — run from a subdirectory (store root walk-up)", () => 
 
     expect((await runSkills(sub, ["lock"])).code).toBe(0);
     expect((await runSkills(sub, ["restore"])).code).toBe(0);
+    expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+      "# tdd\n",
+    );
+  });
+
+  test("a RELATIVE repo spec is resolved from the STORE ROOT: lock + restore from a subdirectory", async () => {
+    // `./vendor/…` in skills.yaml means "relative to the repo the manifest is
+    // committed in" — the only reading that survives being run from anywhere.
+    // Resolved from the process's own cwd it names a different directory
+    // entirely: a missing path, or worse, a same-named sibling repo.
+    const root = await makeStoreRepo();
+    const { sha } = await makeSkillsRepo(["tdd"], join(root, "vendor", "skills-src"));
+    await writeFile(
+      join(root, "skills.yaml"),
+      "skills:\n  - repo: ./vendor/skills-src\n    ref: HEAD\n    use: [tdd]\n",
+    );
+    const sub = join(root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    const locked = await runSkills(sub, ["lock"]);
+    expect(locked.stderr).toBe("");
+    expect(locked.code).toBe(0);
+    expect((await readSkillsLock(storeLayout(root)))!.entries[0]!.sha).toBe(sha);
+
+    const restored = await runSkills(sub, ["restore"]);
+    expect(restored.stderr).toBe("");
+    expect(restored.code).toBe(0);
+    expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+      "# tdd\n",
+    );
+  });
+
+  test("restore alone clones a RELATIVE spec from the store root — a committed lock is enough", async () => {
+    // The clone path on its own: skills.lock is committed, so a fresh checkout
+    // restores in ONE command, from wherever the user happens to stand.
+    const root = await makeStoreRepo();
+    const { sha } = await makeSkillsRepo(["tdd"], join(root, "vendor", "skills-src"));
+    await writeFile(
+      join(root, "skills.lock"),
+      `${JSON.stringify(
+        { entries: [{ repo: "./vendor/skills-src", ref: "HEAD", sha, skills: ["tdd"] }] },
+        null,
+        2,
+      )}\n`,
+    );
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+
+    const result = await runSkills(sub, ["restore"]);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
     expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
       "# tdd\n",
     );

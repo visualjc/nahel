@@ -314,6 +314,33 @@ describe("renderBrief — the signed founding paragraph (F9.5)", () => {
     );
     expect(brief).toContain(PARAGRAPH);
     expect(brief).toContain("UNSIGNED");
+    expect(brief).toContain("no journaled act records it");
+  });
+
+  test("an AMBIGUOUS signature names the tied acts — never the false claim that none exists", () => {
+    // Same-second acts that disagree leave tied acts but no single recordedBy.
+    // "no journaled act records it" would be a plain untruth about the journal
+    // here, and it points the reader at the wrong repair.
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: PARAGRAPH },
+        events: [
+          { ...foundingAct("human", "jim"), id: "f0f0f0f1" },
+          { ...foundingAct("agent", "claude-code"), id: "f0f0f0f2" },
+        ],
+      }),
+    );
+    console.log("[brief, ambiguous founding]\n", brief);
+    expect(brief).toContain(PARAGRAPH);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).not.toContain("no journaled act records it");
+    // Both tied acts are named, by event id and actor, so the reader sees
+    // exactly what needs breaking apart.
+    expect(brief).toContain("f0f0f0f1");
+    expect(brief).toContain("human:jim");
+    expect(brief).toContain("f0f0f0f2");
+    expect(brief).toContain("agent:claude-code");
+    expect(brief).toContain("ambiguous");
   });
 
   test("no founding paragraph, no section — a guided project carries zero founding noise", () => {

@@ -41,7 +41,12 @@ export function isOutputCapExceeded(error: unknown): boolean {
  *   - GIT_DIR / GIT_COMMON_DIR name another repository outright;
  *   - GIT_WORK_TREE / GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY /
  *     GIT_ALTERNATE_OBJECT_DIRECTORIES swap out pieces of the one it finds;
- *   - GIT_CEILING_DIRECTORIES can stop discovery before it reaches the root.
+ *   - GIT_CEILING_DIRECTORIES stops discovery before it reaches the root;
+ *   - GIT_DISCOVERY_ACROSS_FILESYSTEM lets discovery CONTINUE past a
+ *     filesystem boundary, so a root below a mount point resolves to an OUTER
+ *     repo. The last two bracket the same mistake from either side — one cuts
+ *     the search short, one lets it run on — and this one answers SUCCESSFULLY
+ *     about the wrong repository, so no failure path can catch it.
  *
  * Hooks, CI runners, `git rebase --exec`, and any shell that exported one and
  * moved on all set these, so inheriting them is the ordinary case rather than
@@ -60,6 +65,7 @@ const GIT_REPOSITORY_SELECTION_VARS = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
   "GIT_CEILING_DIRECTORIES",
+  "GIT_DISCOVERY_ACROSS_FILESYSTEM",
 ] as const;
 
 /**

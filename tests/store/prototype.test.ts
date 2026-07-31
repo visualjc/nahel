@@ -463,6 +463,31 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
   });
 
   /**
+   * git's repository-selection variables point it somewhere else entirely: an
+   * inherited GIT_DIR makes every probe report "not a git repository" — about
+   * the path in the ENVIRONMENT, never about the root we asked at. Read as
+   * proof of absence, it turns a repo full of prototype refs into silence.
+   */
+  test("an inherited GIT_DIR does not make a real repo look absent", async () => {
+    const root = await makeRepo();
+    git(root, "branch", prototypeBranch("ambient", 1));
+
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = "/definitely-not-a-git-dir";
+    try {
+      const scan = await scanPrototypeRefs(root);
+      expect(scan.error).toBeUndefined();
+      expect(scan.scanFailed).toBeUndefined();
+      expect(scan.branches.map((branch) => branch.branch)).toEqual([
+        prototypeBranch("ambient", 1),
+      ]);
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
+  });
+
+  /**
    * Absence must be PROVEN, never inferred from a second failure. A fault that
    * stops git running at all — here a malformed config — fails the ref listing
    * AND the repo probe, and reading that as "there is no repo here" files a

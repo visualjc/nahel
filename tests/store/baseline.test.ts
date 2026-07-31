@@ -119,6 +119,34 @@ describe("captureBaseline", () => {
     await expect(attempt).rejects.not.toThrow(/initial commit/);
   });
 
+  /**
+   * The quietest failure in this module: git's repository-selection variables
+   * REDIRECT it. With GIT_DIR naming another repo, `rev-parse HEAD` answers
+   * about THAT repo at exit 0 — so a claim would journal a baseline for a
+   * repository the human never touched, and nothing would look wrong.
+   */
+  test("an inherited GIT_DIR does not move the baseline to another repo", async () => {
+    const mine = await makeGitRepo();
+    const other = await makeGitRepo();
+    // Distinct content, or the two identical initial commits hash the same.
+    await writeFile(join(other, "elsewhere.txt"), "a different repository\n");
+    git(other, "add", "elsewhere.txt");
+    git(other, "commit", "-q", "-m", "elsewhere");
+    const myHead = git(mine, "rev-parse", "HEAD").trim();
+    expect(myHead).not.toBe(git(other, "rev-parse", "HEAD").trim());
+
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = join(other, ".git");
+    try {
+      const baseline = await captureBaseline(mine);
+      expect(baseline.head).toBe(myHead);
+      expect(baseline.dirty).toEqual([]); // the OTHER repo's index would differ
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
+  });
+
   test("output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
     const root = await makeGitRepo();
     // A 4-byte cap that `git rev-parse HEAD` (a 41-byte SHA line) outruns —

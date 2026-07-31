@@ -436,6 +436,29 @@ async function probeValue(
   throw new ScanAbortError(`git ${args.join(" ")} failed in ${root}: ${result.stderr.trim()}`);
 }
 
+/**
+ * Git's own words for "there is no repository here" — the ONLY proof of
+ * absence the scan accepts. Matched case-insensitively on the phrase, not on
+ * the whole message, whose parenthetical varies by git version.
+ */
+const NOT_A_REPOSITORY = /not a git repository/i;
+
+/**
+ * Is the absence of a repo PROVEN? Only git answering "not a git repository"
+ * proves it. A probe that failed for any other reason — a config it cannot
+ * parse, a directory it cannot read — did not answer at all, and an
+ * unanswered probe must never be read as "there is nothing here to verify".
+ *
+ * The phrase match is the fragile part, and it fails in the SAFE direction: a
+ * translated git message does not match, so absence goes unproven and the
+ * scan aborts loudly rather than falling silent.
+ */
+async function provenNoRepo(root: string, maxOutputBytes: number): Promise<boolean> {
+  const result = await tryGit(root, ["rev-parse", "--git-dir"], maxOutputBytes);
+  if (result.code === 0) return false; // a repo answered: it is right here
+  return NOT_A_REPOSITORY.test(result.stderr);
+}
+
 /** Parse `<short-name>\t<sha>` lines from for-each-ref. */
 function parseRefLines(output: string): { name: string; sha: string }[] {
   const refs: { name: string; sha: string }[] = [];
@@ -491,9 +514,11 @@ async function collectPrototypeRefs(
     );
   } catch (error) {
     if (!(error instanceof ScanAbortError)) throw error;
-    const insideRepo = (await tryGit(root, ["rev-parse", "--git-dir"], maxOutputBytes)).code === 0;
-    // No repo: no prototype refs exist, so nothing was left unjudged.
-    if (!insideRepo) return { branches: [], remoteRefs: [], error: error.message };
+    // Silence requires absence PROVEN — never inferred from a second failure.
+    if (await provenNoRepo(root, maxOutputBytes)) {
+      // No repo means no prototype refs exist: nothing was left unjudged.
+      return { branches: [], remoteRefs: [], error: error.message };
+    }
     throw error;
   }
 

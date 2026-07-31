@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstat, mkdir, rm, stat, symlink } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SkillsLockEntry } from "../schema/records";
 import type { StoreLayout } from "./layout";
@@ -199,13 +199,28 @@ export async function restoreViaClone(
   return placed;
 }
 
-/** True when the external `skills` CLI is on PATH (delegate to it when so). */
-export async function skillsCliAvailable(): Promise<boolean> {
+/**
+ * The external `skills` CLI as an ABSOLUTE path, or null when it is not on
+ * PATH (then the clone fallback runs). Resolved FROM THE STORE ROOT — the
+ * directory the CLI is then run in — and returned as a path rather than a
+ * yes/no, because those are two different resolutions otherwise: a relative
+ * PATH entry (`./tools/bin`) is resolved by the shell against ITS cwd but by
+ * the spawn against the PARENT process's, so a boolean probe and the later
+ * execution can disagree in both directions (a detected CLI that then fails
+ * to spawn, or a missed one that silently falls back to cloning). Answering
+ * once with the resolved path removes the second resolution entirely.
+ */
+export async function skillsCliPath(layout: StoreLayout): Promise<string | null> {
   try {
-    await execFileAsync("/bin/sh", ["-c", "command -v skills"], { maxBuffer: MAX_OUTPUT_BYTES });
-    return true;
+    const { stdout } = await execFileAsync("/bin/sh", ["-c", "command -v skills"], {
+      cwd: layout.root,
+      maxBuffer: MAX_OUTPUT_BYTES,
+    });
+    const found = stdout.trim();
+    if (found === "") return null;
+    return isAbsolute(found) ? found : resolve(layout.root, found);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -215,16 +230,18 @@ export async function skillsCliAvailable(): Promise<boolean> {
  * names handed to the CLI. The CLI owns placement into .claude/skills/ —
  * relative to ITS cwd, so it is run in the store root exactly as the clone
  * fallback writes there: which tool is installed must not change where skills
- * land. Takes the layout for that reason, mirroring restoreViaClone.
+ * land. Takes the layout for that reason, mirroring restoreViaClone, and the
+ * `cli` path skillsCliPath already resolved from that same root.
  */
 export async function restoreViaSkillsCli(
   layout: StoreLayout,
   entry: SkillsLockEntry,
+  cli: string,
 ): Promise<string[]> {
   const url = repoToUrl(entry.repo);
   const args = ["add", `${url}@${entry.sha}`, ...entry.skills];
   try {
-    await execFileAsync("skills", args, { cwd: layout.root, maxBuffer: MAX_OUTPUT_BYTES });
+    await execFileAsync(cli, args, { cwd: layout.root, maxBuffer: MAX_OUTPUT_BYTES });
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr;
     const detail =

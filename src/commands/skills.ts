@@ -12,7 +12,7 @@ import {
   resolveRef,
   restoreViaClone,
   restoreViaSkillsCli,
-  skillsCliAvailable,
+  skillsCliPath,
 } from "../store/skills";
 import { UsageError } from "./item";
 
@@ -80,14 +80,17 @@ async function restore(layout: StoreLayout, ctx: CommandContext): Promise<number
     ctx.stderr("❌ skills.yaml exists but skills.lock does not — run `nahel skills lock` first");
     return 1;
   }
-  const useCli = await skillsCliAvailable();
+  // One resolution serves both the choice and the run: the CLI is delegated to
+  // by the exact path found from the store root, never by name a second time.
+  const cli = await skillsCliPath(layout);
   for (const entry of locked.entries) {
-    const placed = useCli
-      ? await restoreViaSkillsCli(layout, entry)
-      : await restoreViaClone(layout, entry);
+    const placed =
+      cli === null
+        ? await restoreViaClone(layout, entry)
+        : await restoreViaSkillsCli(layout, entry, cli);
     ctx.stdout(`restored ${entry.repo}@${entry.sha}: ${placed.join(", ")}`);
   }
-  const via = useCli ? " via skills CLI" : "";
+  const via = cli === null ? "" : " via skills CLI";
   ctx.stdout(`restored ${locked.entries.length} skill source(s)${via}`);
   return 0;
 }

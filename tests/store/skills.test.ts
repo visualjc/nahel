@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { SkillsLock } from "../../src/schema/records";
 import {
   ensureLayout,
@@ -17,7 +17,7 @@ import {
   restoreViaClone,
   restoreViaSkillsCli,
   skillsCacheDir,
-  skillsCliAvailable,
+  skillsCliPath,
   SkillsError,
 } from "../../src/store/skills";
 import { makeTempDir } from "./helpers";
@@ -268,15 +268,18 @@ describe("skills CLI delegation", () => {
     };
   }
 
-  test("skillsCliAvailable is false when no skills binary is on PATH", async () => {
+  test("skillsCliPath is null when no skills binary is on PATH", async () => {
     // The test environment has no `skills` CLI installed.
-    expect(await skillsCliAvailable()).toBe(false);
+    expect(await skillsCliPath(await initTargetRepo())).toBeNull();
   });
 
-  test("skillsCliAvailable is true when a skills binary is on PATH", async () => {
+  test("skillsCliPath returns the ABSOLUTE path of a skills binary on PATH", async () => {
     const restore = await withFakeSkills("#!/bin/sh\nexit 0\n");
     try {
-      expect(await skillsCliAvailable()).toBe(true);
+      const found = await skillsCliPath(await initTargetRepo());
+      expect(found).not.toBeNull();
+      expect(isAbsolute(found!)).toBe(true);
+      expect(found!.endsWith("/skills")).toBe(true);
     } finally {
       restore();
     }
@@ -297,7 +300,7 @@ describe("skills CLI delegation", () => {
         sha: "b".repeat(40),
         skills: ["tdd", "grilling"],
       };
-      const placed = await restoreViaSkillsCli(layout, entry);
+      const placed = await restoreViaSkillsCli(layout, entry, (await skillsCliPath(layout))!);
       // The delegated CLI places relative to its own cwd: it must be the root.
       expect((await readFile(cwdFile, "utf8")).trim()).toBe(await realpath(layout.root));
       expect(placed).toEqual(["tdd", "grilling"]);
@@ -316,12 +319,12 @@ describe("skills CLI delegation", () => {
   test("restoreViaSkillsCli surfaces a non-zero CLI exit as SkillsError", async () => {
     const restore = await withFakeSkills("#!/bin/sh\necho boom 1>&2\nexit 3\n");
     try {
-      const attempt = restoreViaSkillsCli(await initTargetRepo(), {
-        repo: "a/b",
-        ref: "main",
-        sha: "c".repeat(40),
-        skills: ["tdd"],
-      });
+      const layout = await initTargetRepo();
+      const attempt = restoreViaSkillsCli(
+        layout,
+        { repo: "a/b", ref: "main", sha: "c".repeat(40), skills: ["tdd"] },
+        (await skillsCliPath(layout))!,
+      );
       await expect(attempt).rejects.toBeInstanceOf(SkillsError);
     } finally {
       restore();

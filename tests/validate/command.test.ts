@@ -108,6 +108,29 @@ describe("nahel validate — the command", () => {
     expect(result.code).toBe(1); // exit code matches the severity
   });
 
+  /**
+   * The silent shape of the same failure: a broken ref makes git WARN and
+   * answer with a SHORT list at exit 0, so the scan looks entirely successful
+   * — while the unreadable branch could be the one that reached main.
+   */
+  test("a broken ref (incomplete listing at exit 0) is reported too, exit 1", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    git(fixture.root, "init", "-q", "--initial-branch=main");
+    git(fixture.root, "config", "user.email", "test@example.com");
+    git(fixture.root, "config", "user.name", "Test User");
+    await writeFile(join(fixture.root, "app.txt"), "one\n");
+    git(fixture.root, "add", "app.txt");
+    git(fixture.root, "commit", "-q", "-m", "initial");
+    await writeFile(join(fixture.root, ".git", "refs", "heads", "broken"), "garbage-not-a-sha\n");
+
+    const result = await runValidate([], fixture.root);
+    const output = result.stdout.join("\n");
+    expect(output).toContain("prototype.scan-failed");
+    expect(output).toContain("ignoring broken ref");
+    expect(result.code).toBe(1);
+  });
+
   test("stays clean (exit 0, no findings) after log-driven rotation archives segments", async () => {
     const fixture = await setupFixture(dirs);
     await createItem(fixture);

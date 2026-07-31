@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   headCommit,
@@ -460,6 +460,68 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     expect(scan.error).toContain("packed-refs");
     expect(scan.scanFailed).toBe(true);
     expect(scan.branches).toEqual([]);
+  });
+
+  /**
+   * The nastiest shape: git EXITS 0 and answers anyway, having quietly left
+   * something out. `for-each-ref` warns "ignoring broken ref" on stderr and
+   * returns a SHORT list — so a prototype branch can be missing from a scan
+   * that looks entirely successful.
+   */
+  test("a broken ref leaves the listing incomplete at exit 0 — an abort, not an answer", async () => {
+    const root = await makeRepo();
+    await writeFile(join(root, ".git", "refs", "heads", "broken"), "garbage-not-a-sha\n");
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.error).toContain("ignoring broken ref");
+    expect(scan.branches).toEqual([]);
+  });
+
+  test("a prototype ref pointing at a missing object aborts the per-branch probes", async () => {
+    const root = await makeRepo();
+    await mkdir(join(root, ".git", "refs", "heads", "prototype", "ghost"), { recursive: true });
+    // A well-formed SHA for an object that does not exist: for-each-ref lists
+    // it happily and every judgment probe then fails with 128 — which used to
+    // read as "not an ancestor, no copies", an all-clear nobody could see.
+    await writeFile(
+      join(root, ".git", "refs", "heads", "prototype", "ghost", "variant-1"),
+      `${"0".repeat(39)}1\n`,
+    );
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.error).toMatch(/merge-base|cherry/);
+  });
+
+  describe("documented negatives stay silent — git's clean 'no' is an answer", () => {
+    test("no resolvable default branch: both lookups return git's documented exit 1", async () => {
+      const root = await makeRepo();
+      git(root, "branch", "-m", "main", "trunk"); // no main, no master, no origin/HEAD
+      git(root, "branch", prototypeBranch("quiet", 1));
+
+      const scan = await scanPrototypeRefs(root);
+      expect(scan.error).toBeUndefined();
+      expect(scan.scanFailed).toBeUndefined();
+      expect(scan.defaultBranch).toBeUndefined();
+      expect(scan.branches).toHaveLength(1);
+    });
+
+    test("unrelated histories: merge-base exits 1 for 'no merge base', which is not an error", async () => {
+      const root = await makeRepo();
+      git(root, "checkout", "-q", "--orphan", prototypeBranch("orphan", 1));
+      await writeFile(join(root, "orphan.txt"), "unrelated history\n");
+      git(root, "add", "orphan.txt");
+      git(root, "commit", "-m", "orphan root");
+      git(root, "checkout", "-q", "main");
+
+      const scan = await scanPrototypeRefs(root);
+      expect(scan.error).toBeUndefined();
+      expect(scan.scanFailed).toBeUndefined();
+      expect(scan.branches).toHaveLength(1);
+      expect(scan.branches[0]!.ancestorOfDefault).toBe(false); // is-ancestor exit 1
+      expect(scan.branches[0]!.mergeBaseWithDefault).toBeUndefined(); // merge-base exit 1
+    });
   });
 
   /**

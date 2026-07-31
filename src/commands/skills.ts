@@ -60,7 +60,7 @@ async function lock(layout: StoreLayout, ctx: CommandContext): Promise<number> {
   }
   const entries: SkillsLockEntry[] = [];
   for (const source of manifest.skills) {
-    const sha = await resolveRef(source.repo, source.ref);
+    const sha = await resolveRef(layout, source.repo, source.ref);
     entries.push({ repo: source.repo, ref: source.ref, sha, skills: source.use });
     ctx.stdout(`locked ${source.repo}@${source.ref} → ${sha}`);
   }

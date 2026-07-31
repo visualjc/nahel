@@ -32,7 +32,8 @@ const SHORTHAND_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
  * Normalize a manifest `repo` spec into something git can clone / ls-remote.
  * Pure — no I/O — so it is unit-tested without the network:
  *   - an explicit URL (`scheme://…` or scp-style `git@host:…`) passes through;
- *   - a local filesystem path (absolute or `./`, `../`) passes through;
+ *   - a local filesystem path (absolute or `./`, `../`) passes through, and a
+ *     relative one is anchored at the store root by the git runs below;
  *   - `owner/name` shorthand expands to a GitHub HTTPS URL;
  *   - anything else is a config mistake and throws.
  */
@@ -68,9 +69,15 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function runGit(args: readonly string[]): Promise<string> {
+/**
+ * Run git IN `cwd` — always the store root. A manifest may name a local repo
+ * relatively (`./vendor/skill`, `../shared-skills`), which can only mean
+ * "relative to the repo the manifest is committed in"; inheriting the process
+ * cwd would resolve it from wherever the command happened to be launched.
+ */
+async function runGit(cwd: string, args: readonly string[]): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", [...args], { maxBuffer: MAX_OUTPUT_BYTES });
+    const { stdout } = await execFileAsync("git", [...args], { cwd, maxBuffer: MAX_OUTPUT_BYTES });
     return stdout;
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr;
@@ -86,14 +93,19 @@ async function runGit(args: readonly string[]): Promise<string> {
 
 /**
  * Resolve a manifest `ref` (branch/tag) to an exact 40-hex commit SHA via
- * `git ls-remote`. A ref that is already a pinned SHA passes through untouched
- * (no round-trip). Network I/O by nature; isolated here so `nahel skills lock`
- * stays a thin verb over the returned SHA.
+ * `git ls-remote`, run at the store root so a relative `repo` spec means what
+ * the manifest says. A ref that is already a pinned SHA passes through
+ * untouched (no round-trip). Network I/O by nature; isolated here so
+ * `nahel skills lock` stays a thin verb over the returned SHA.
  */
-export async function resolveRef(repo: string, ref: string): Promise<string> {
+export async function resolveRef(
+  layout: StoreLayout,
+  repo: string,
+  ref: string,
+): Promise<string> {
   if (SHA_PATTERN.test(ref)) return ref;
   const url = repoToUrl(repo);
-  const output = await runGit(["ls-remote", url, ref]);
+  const output = await runGit(layout.root, ["ls-remote", url, ref]);
   const line = output.split("\n").find((entry) => entry.trim() !== "");
   const sha = line?.split("\t")[0]?.trim();
   if (sha === undefined || !SHA_PATTERN.test(sha)) {
@@ -109,16 +121,17 @@ export async function resolveRef(repo: string, ref: string): Promise<string> {
  * later restores), checking out the exact commit. `--no-checkout` avoids a
  * throwaway checkout of the default branch before we move to the pinned one.
  */
-async function ensureClone(cacheDir: string, url: string, sha: string): Promise<string> {
+async function ensureClone(layout: StoreLayout, url: string, sha: string): Promise<string> {
+  const cacheDir = skillsCacheDir(layout);
   const dest = join(cacheDir, sha);
   if (await pathExists(join(dest, ".git"))) {
-    await runGit(["-C", dest, "checkout", "--quiet", sha]);
+    await runGit(layout.root, ["-C", dest, "checkout", "--quiet", sha]);
     return dest;
   }
   await mkdir(cacheDir, { recursive: true });
   await rm(dest, { recursive: true, force: true });
-  await runGit(["clone", "--no-checkout", "--quiet", url, dest]);
-  await runGit(["-C", dest, "checkout", "--quiet", sha]);
+  await runGit(layout.root, ["clone", "--no-checkout", "--quiet", url, dest]);
+  await runGit(layout.root, ["-C", dest, "checkout", "--quiet", sha]);
   return dest;
 }
 
@@ -170,7 +183,7 @@ export async function restoreViaClone(
   entry: SkillsLockEntry,
 ): Promise<string[]> {
   const url = repoToUrl(entry.repo);
-  const cloneDir = await ensureClone(skillsCacheDir(layout), url, entry.sha);
+  const cloneDir = await ensureClone(layout, url, entry.sha);
   const placed: string[] = [];
   for (const name of entry.skills) {
     const dir = await locateSkill(cloneDir, name);

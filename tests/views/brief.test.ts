@@ -340,7 +340,8 @@ describe("renderBrief — the signed founding paragraph (F9.5)", () => {
     expect(brief).toContain("human:jim");
     expect(brief).toContain("f0f0f0f2");
     expect(brief).toContain("agent:claude-code");
-    expect(brief).toContain("ambiguous");
+    // Stated in the brief's plain prose, not the defect's internal label.
+    expect(brief).toContain("same-second acts disagree");
   });
 
   test("no founding paragraph, no section — a guided project carries zero founding noise", () => {

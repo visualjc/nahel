@@ -2,9 +2,11 @@ import {
   foundingSignatureStatus,
   readMergeAuthority,
   resolveGovernance,
+  type FoundingSignatureStatus,
   type MergeAuthorityStatus,
 } from "../governance/authority";
 import type {
+  Actor,
   Config,
   JournalEvent,
   ObservationFrontmatter,
@@ -178,15 +180,29 @@ function foundingBody(
 ): string | null {
   const status = foundingSignatureStatus(founding, events);
   if (status === undefined) return null;
-  const actor = status.recordedBy?.actor;
-  const attribution = status.signed
-    ? `signed by: ${actor!.kind}:${actor!.id} (act ${status.recordedBy!.event})`
-    : `UNSIGNED — ${
-        actor === undefined
-          ? "no journaled act records it"
-          : `recorded by ${actor.kind}:${actor.id}`
-      }; it authorizes nothing until a human re-records it (nahel validate: founding.unsigned)`;
-  return `${founding!.paragraph}\n${attribution}`;
+  return `${founding!.paragraph}\n${foundingAttribution(status)}`;
+}
+
+/**
+ * The attribution line: who signed, or why nobody did. Each defect states the
+ * journal fact it actually rests on — an ambiguous signature HAS acts (they
+ * disagree), and reporting it as "none recorded" would be both untrue and a
+ * pointer at the wrong repair.
+ */
+function foundingAttribution(status: FoundingSignatureStatus): string {
+  const named = (entry: { event: string; actor: Actor }): string =>
+    `${entry.actor.kind}:${entry.actor.id} (act ${entry.event})`;
+  if (status.signed) return `signed by: ${named(status.recordedBy!)}`;
+
+  const cause =
+    status.defect === "ambiguous"
+      ? `${(status.tied ?? []).length} same-second acts disagree: ${(status.tied ?? [])
+          .map(named)
+          .join(", ")}`
+      : status.recordedBy === undefined
+        ? "no journaled act records it"
+        : `recorded by ${named(status.recordedBy)}`;
+  return `UNSIGNED — ${cause}; it authorizes nothing until a human re-records it (nahel validate: founding.unsigned)`;
 }
 
 /** Section 2 body: configured knowledge paths plus every nahel state layer. */

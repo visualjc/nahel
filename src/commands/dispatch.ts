@@ -333,7 +333,10 @@ async function runDispatch(
       binary: invocation.binary,
       args: invocation.args,
       actorSpec: invocation.env.NAHEL_ACTOR,
-      cwd,
+      // The worker starts in the REPO being worked on, never in whatever
+      // subdirectory the dispatcher stood in: its prompt and its own `nahel`
+      // commands are root-relative (ADR-0016).
+      cwd: ctx.layout.root,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

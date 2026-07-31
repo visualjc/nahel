@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import { journalEventSchema } from "../schema/records";
-import { itemExists, readConfig, storeLayout } from "../store/layout";
+import { itemExists, openStore, readConfig } from "../store/layout";
 import { collectProgress, renderProgress, type ProgressQuery } from "../views/progress";
 import { descendantIds, loadSnapshot } from "../views/snapshot";
 import { UsageError } from "./item";
@@ -73,7 +73,7 @@ function parseFlags(argv: string[]): ProgressFlags {
 async function runProgress(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const flags = parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of rendering a misleadingly empty timeline.
     await readConfig(layout);

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstat, mkdir, rm, stat, symlink } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SkillsLockEntry } from "../schema/records";
 import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
@@ -30,7 +30,8 @@ const SHORTHAND_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
  * Normalize a manifest `repo` spec into something git can clone / ls-remote.
  * Pure — no I/O — so it is unit-tested without the network:
  *   - an explicit URL (`scheme://…` or scp-style `git@host:…`) passes through;
- *   - a local filesystem path (absolute or `./`, `../`) passes through;
+ *   - a local filesystem path (absolute or `./`, `../`) passes through, and a
+ *     relative one is anchored at the store root by the git runs below;
  *   - `owner/name` shorthand expands to a GitHub HTTPS URL;
  *   - anything else is a config mistake and throws.
  */
@@ -66,12 +67,19 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Run git IN `cwd` — always the store root. A manifest may name a local repo
+ * relatively (`./vendor/skill`, `../shared-skills`), which can only mean
+ * "relative to the repo the manifest is committed in"; inheriting the process
+ * cwd would resolve it from wherever the command happened to be launched.
+ */
 async function runGit(
+  cwd: string,
   args: readonly string[],
   maxOutputBytes: number = MAX_OUTPUT_BYTES,
 ): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", [...args], { maxBuffer: maxOutputBytes });
+    const { stdout } = await execFileAsync("git", [...args], { cwd, maxBuffer: maxOutputBytes });
     return stdout;
   } catch (error) {
     if (isOutputCapExceeded(error)) {
@@ -90,18 +98,20 @@ async function runGit(
 
 /**
  * Resolve a manifest `ref` (branch/tag) to an exact 40-hex commit SHA via
- * `git ls-remote`. A ref that is already a pinned SHA passes through untouched
- * (no round-trip). Network I/O by nature; isolated here so `nahel skills lock`
- * stays a thin verb over the returned SHA.
+ * `git ls-remote`, run at the store root so a relative `repo` spec means what
+ * the manifest says. A ref that is already a pinned SHA passes through
+ * untouched (no round-trip). Network I/O by nature; isolated here so
+ * `nahel skills lock` stays a thin verb over the returned SHA.
  */
 export async function resolveRef(
+  layout: StoreLayout,
   repo: string,
   ref: string,
   maxOutputBytes: number = MAX_OUTPUT_BYTES,
 ): Promise<string> {
   if (SHA_PATTERN.test(ref)) return ref;
   const url = repoToUrl(repo);
-  const output = await runGit(["ls-remote", url, ref], maxOutputBytes);
+  const output = await runGit(layout.root, ["ls-remote", url, ref], maxOutputBytes);
   const line = output.split("\n").find((entry) => entry.trim() !== "");
   const sha = line?.split("\t")[0]?.trim();
   if (sha === undefined || !SHA_PATTERN.test(sha)) {
@@ -117,16 +127,17 @@ export async function resolveRef(
  * later restores), checking out the exact commit. `--no-checkout` avoids a
  * throwaway checkout of the default branch before we move to the pinned one.
  */
-async function ensureClone(cacheDir: string, url: string, sha: string): Promise<string> {
+async function ensureClone(layout: StoreLayout, url: string, sha: string): Promise<string> {
+  const cacheDir = skillsCacheDir(layout);
   const dest = join(cacheDir, sha);
   if (await pathExists(join(dest, ".git"))) {
-    await runGit(["-C", dest, "checkout", "--quiet", sha]);
+    await runGit(layout.root, ["-C", dest, "checkout", "--quiet", sha]);
     return dest;
   }
   await mkdir(cacheDir, { recursive: true });
   await rm(dest, { recursive: true, force: true });
-  await runGit(["clone", "--no-checkout", "--quiet", url, dest]);
-  await runGit(["-C", dest, "checkout", "--quiet", sha]);
+  await runGit(layout.root, ["clone", "--no-checkout", "--quiet", url, dest]);
+  await runGit(layout.root, ["-C", dest, "checkout", "--quiet", sha]);
   return dest;
 }
 
@@ -178,7 +189,7 @@ export async function restoreViaClone(
   entry: SkillsLockEntry,
 ): Promise<string[]> {
   const url = repoToUrl(entry.repo);
-  const cloneDir = await ensureClone(skillsCacheDir(layout), url, entry.sha);
+  const cloneDir = await ensureClone(layout, url, entry.sha);
   const placed: string[] = [];
   for (const name of entry.skills) {
     const dir = await locateSkill(cloneDir, name);
@@ -194,26 +205,49 @@ export async function restoreViaClone(
   return placed;
 }
 
-/** True when the external `skills` CLI is on PATH (delegate to it when so). */
-export async function skillsCliAvailable(): Promise<boolean> {
+/**
+ * The external `skills` CLI as an ABSOLUTE path, or null when it is not on
+ * PATH (then the clone fallback runs). Resolved FROM THE STORE ROOT — the
+ * directory the CLI is then run in — and returned as a path rather than a
+ * yes/no, because those are two different resolutions otherwise: a relative
+ * PATH entry (`./tools/bin`) is resolved by the shell against ITS cwd but by
+ * the spawn against the PARENT process's, so a boolean probe and the later
+ * execution can disagree in both directions (a detected CLI that then fails
+ * to spawn, or a missed one that silently falls back to cloning). Answering
+ * once with the resolved path removes the second resolution entirely.
+ */
+export async function skillsCliPath(layout: StoreLayout): Promise<string | null> {
   try {
-    await execFileAsync("/bin/sh", ["-c", "command -v skills"], { maxBuffer: MAX_OUTPUT_BYTES });
-    return true;
+    const { stdout } = await execFileAsync("/bin/sh", ["-c", "command -v skills"], {
+      cwd: layout.root,
+      maxBuffer: MAX_OUTPUT_BYTES,
+    });
+    const found = stdout.trim();
+    if (found === "") return null;
+    return isAbsolute(found) ? found : resolve(layout.root, found);
   } catch {
-    return false;
+    return null;
   }
 }
 
 /**
  * Delegate placement to the external `skills` CLI (ADR-0009: use the existing
  * ecosystem where possible): `skills add <url>@<sha> <name…>`. Returns the
- * names handed to the CLI. The CLI owns placement into .claude/skills/.
+ * names handed to the CLI. The CLI owns placement into .claude/skills/ —
+ * relative to ITS cwd, so it is run in the store root exactly as the clone
+ * fallback writes there: which tool is installed must not change where skills
+ * land. Takes the layout for that reason, mirroring restoreViaClone, and the
+ * `cli` path skillsCliPath already resolved from that same root.
  */
-export async function restoreViaSkillsCli(entry: SkillsLockEntry): Promise<string[]> {
+export async function restoreViaSkillsCli(
+  layout: StoreLayout,
+  entry: SkillsLockEntry,
+  cli: string,
+): Promise<string[]> {
   const url = repoToUrl(entry.repo);
   const args = ["add", `${url}@${entry.sha}`, ...entry.skills];
   try {
-    await execFileAsync("skills", args, { maxBuffer: MAX_OUTPUT_BYTES });
+    await execFileAsync(cli, args, { cwd: layout.root, maxBuffer: MAX_OUTPUT_BYTES });
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr;
     const detail =

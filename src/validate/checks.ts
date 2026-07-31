@@ -1,7 +1,12 @@
 import YAML from "yaml";
 import type { z } from "zod";
 import { resolveReviewSlots } from "../dispatch/invocation";
-import { mergeAuthorityStatus, type MergeAuthorityStatus } from "../governance/authority";
+import {
+  foundingSignatureStatus,
+  mergeAuthorityStatus,
+  type FoundingSignatureStatus,
+  type MergeAuthorityStatus,
+} from "../governance/authority";
 import {
   configSchema,
   distilledSchema,
@@ -562,6 +567,20 @@ function checkRefs(state: ParsedState): Finding[] {
         });
       }
     }
+    // An observation's `item` names the work it is a fact ABOUT. Items are
+    // never deleted (`dropped` is a status, not a removal), so a ref with no
+    // record behind it is a lost write or a hand deletion — an error, like
+    // every other record-to-record ref here, not the WARNING knowledge
+    // documents get (those legitimately arrive by a later merge).
+    if (record.item !== undefined && !state.itemFiles.has(record.item)) {
+      findings.push({
+        severity: "error",
+        check: "refs.observation-item",
+        path,
+        message: `observation ${record.id} is about item ${record.item}, which does not exist`,
+        fix: "if the item's record write crashed, `nahel validate --repair` materializes it from the journal; otherwise fix or remove the observation's item field",
+      });
+    }
   }
   return findings;
 }
@@ -670,6 +689,49 @@ function checkPrdApproval(state: ParsedState): Finding[] {
 }
 
 /**
+ * Parent/child status rollup: `done` on a parent claims the work beneath it
+ * is finished, and nothing else notices when a child disagrees — the state a
+ * parent closed by itself leaves behind, or a merge that reopened a child
+ * under an already-closed parent.
+ *
+ * Settled means done OR dropped, the finished/live split checkPrdApproval
+ * uses: a deliberately cut child is a decision, not pending work.
+ *
+ * A WARNING, never an error: both records are individually valid and either
+ * one may be the correct one — which side to move is a human's call.
+ */
+function checkChildrenRollup(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  // Unfinished children per parent id. state.items is keyed in the collector's
+  // sorted-id order, so each listing is deterministic without re-sorting.
+  const unfinished = new Map<string, string[]>();
+  for (const { record } of state.items.values()) {
+    if (record.parent === undefined) continue;
+    if (record.status === "done" || record.status === "dropped") continue;
+    const listing = unfinished.get(record.parent) ?? [];
+    listing.push(`${record.id} (${record.status})`);
+    unfinished.set(record.parent, listing);
+  }
+
+  for (const { record, path } of state.items.values()) {
+    if (record.status !== "done") continue;
+    const open = unfinished.get(record.id);
+    if (open === undefined) continue;
+    findings.push({
+      severity: "warning",
+      check: "item.children-unfinished",
+      path,
+      message:
+        `item ${record.id} is done but ${open.length} child item(s) are not ` +
+        `done or dropped: ${open.join(", ")}`,
+      fix: `finish or drop the child items, or reopen the parent (\`nahel item update ${record.id} --status in-progress\`)`,
+    });
+  }
+  return findings;
+}
+
+/**
  * Merge-authority provenance (PRD F3.4): `merge: on-approve` is legitimate
  * under hard constraint 6 / ADR-0011 (as amended 2026-07-25) only as the
  * HUMAN's standing authorization — the committed config flip IS the
@@ -730,6 +792,101 @@ function checkMergeAuthority(state: ParsedState): Finding[] {
         "a HUMAN must re-run `nahel config set merge --data authority=on-approve` " +
         `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
         "IS the standing authorization. Otherwise drop the section and stay on merge: human",
+    },
+  ];
+}
+
+/**
+ * Founding signature provenance (PRD F9.5, nahel/workflows/inception.md): the
+ * merge.unauthorized analogue for the founding act. Under a hands-off founding
+ * the paragraph IS the constitution's only human-signed content, and
+ * inception.md states the rule twice — "the human-attributed `config.updated`
+ * act that wrote the `founding` section IS the paragraph's signature. An
+ * agent-run founding act signs nothing." Nothing surfaced a bad founding
+ * mechanically: the workflow and the autonomy gate both state the rule, and
+ * both rely on a reader checking the journal by hand.
+ *
+ * Only a founding carrying a PARAGRAPH is judged — a `guided` founding records
+ * which door the project came through and nothing more, so an agent may write
+ * it (inception.md: "only its act's actor is load-bearing" about the hands-off
+ * paragraph).
+ *
+ * A WARNING, never an error: an unsigned founding is a gate refusal, not
+ * corrupt state — the paragraph stays exactly as recorded, it just authorizes
+ * nothing. But it is never silent (hard constraint 6).
+ */
+function foundingSignatureCause(status: FoundingSignatureStatus): string {
+  if (status.defect === "agent-recorded") {
+    return (
+      `the config mutation that recorded it (event ${status.recordedBy!.event}) was made by ` +
+      `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id} — an agent-run founding ` +
+      `act signs nothing`
+    );
+  }
+  if (status.defect === "paragraph-mismatch") {
+    // Only a HUMAN act ever signed anything, so only there can the text have
+    // moved out from under a signature. Saying that of an agent act would
+    // assert a signature F9.5 never granted it.
+    const consequence =
+      status.recordedBy!.actor.kind === "human"
+        ? "the text moved after it was signed, and an act signs only the bytes it recorded"
+        : "and an agent-run founding act signs nothing anyway, so this paragraph was never signed";
+    return (
+      `the latest founding act (event ${status.recordedBy!.event}, by ` +
+      `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id}) records different ` +
+      `paragraph bytes than nahel/config holds — ${consequence}`
+    );
+  }
+  if (status.defect === "ambiguous") {
+    const tied = (status.tied ?? [])
+      .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
+      .join(", ");
+    // The tie's OWN disagreement — same-second acts may differ on who acted,
+    // on the paragraph they recorded, or on both, and naming a mode that does
+    // not apply would misdescribe the journal.
+    const how =
+      status.disagreement === "paragraph"
+        ? "recording different paragraphs"
+        : status.disagreement === "both"
+          ? "under different actor kinds AND recording different paragraphs"
+          : "under different actor kinds";
+    return (
+      `${(status.tied ?? []).length} config mutations recorded it in the same second (${tied}) ` +
+      `${how} — same-second acts from different sessions carry no ordering, ` +
+      `so which one signed is undecidable`
+    );
+  }
+  return "no journaled config mutation records it, so the paragraph's human provenance cannot be proven";
+}
+
+function checkFoundingSignature(state: ParsedState): Finding[] {
+  const status = foundingSignatureStatus(state.config?.founding, state.events);
+  if (status === undefined || status.signed) return [];
+
+  // Ambiguity needs one extra word in the fix: the fresh act must be LATER,
+  // not merely newer in the file (mergeAuthorityCause's rule, same reason).
+  const timing =
+    status.defect === "ambiguous"
+      ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
+      : "";
+  return [
+    {
+      severity: "warning",
+      check: "founding.unsigned",
+      path: state.input.configPath,
+      message:
+        `nahel/config records a founding paragraph, but ${foundingSignatureCause(status)} — ` +
+        `the constitution is unsigned and the autonomy gate refuses to treat it as founded`,
+      // The JSON --data form, never `--data paragraph=…`: the key=value
+      // dialect trims the whole entry (parseDataEntries), so the value loses
+      // its trailing whitespace and the human would re-sign bytes that differ
+      // from the ones on disk (nahel/workflows/inception.md). JSON passes the
+      // text through untouched — and verbatim is the whole promise (F9.5).
+      fix:
+        "a HUMAN must re-run `nahel config set founding " +
+        `--data '{"mode": "hands-off", "paragraph": "<the paragraph, verbatim>"}'\` ` +
+        `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
+        "IS the paragraph's signature (nahel/workflows/inception.md)",
     },
   ];
 }
@@ -1627,7 +1784,9 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),
+    ...checkChildrenRollup(state),
     ...checkMergeAuthority(state),
+    ...checkFoundingSignature(state),
     ...checkReviewSlots(state),
     ...checkCycles(state),
     ...checkClaims(state),

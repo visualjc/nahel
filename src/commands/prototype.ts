@@ -281,9 +281,14 @@ async function prototypeStart(
   const ctx = await commandContext(cwd, env, actorOverride);
   const { frontmatter: parent } = await requirePrototypeItem(ctx.layout, itemId);
   const slug = parent.name;
+  // Repo-derived paths hang off the RESOLVED store root, so `prototype start`
+  // from a subdirectory still places variant worktrees beside the repo. A
+  // user-supplied --worktree-dir stays relative to the user's own cwd, which
+  // is where they typed it.
+  const repoRoot = ctx.layout.root;
   const worktreeRoot =
     values["worktree-dir"] === undefined
-      ? dirname(cwd)
+      ? dirname(repoRoot)
       : isAbsolute(values["worktree-dir"])
         ? values["worktree-dir"]
         : resolve(cwd, values["worktree-dir"]);
@@ -294,7 +299,7 @@ async function prototypeStart(
       variant,
       item: generateId(env),
       branch: prototypeBranch(slug, variant),
-      worktree: join(worktreeRoot, `${basename(cwd)}-prototype-${slug}-variant-${variant}`),
+      worktree: join(worktreeRoot, `${basename(repoRoot)}-prototype-${slug}-variant-${variant}`),
       prd: prototypeMiniPrdPath(slug, variant),
       approach: approaches[variant - 1],
     });
@@ -308,7 +313,7 @@ async function prototypeStart(
   // variant with no branch is simply absent from the ref scan. HEAD is read
   // ONCE, so the record is honest about what it says: these variants really are
   // siblings off one commit.
-  const base = await headCommit(cwd);
+  const base = await headCommit(repoRoot);
   await appendEvent(ctx.layout, ctx.env, {
     type: PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
     actor: ctx.actor,
@@ -349,7 +354,7 @@ async function prototypeStart(
       frontmatter,
       body: variantBody(variant, parent),
     });
-    await seedVariant(cwd, {
+    await seedVariant(repoRoot, {
       branch: variant.branch,
       worktree: variant.worktree,
       prd: variant.prd,
@@ -498,7 +503,7 @@ async function prototypeDispose(
 
   // The risky step first: a refused removal (uncommitted work, no --force)
   // must leave the item alive and nothing journaled.
-  await removeVariantWorktree(cwd, record.worktree, values.force === true);
+  await removeVariantWorktree(ctx.layout.root, record.worktree, values.force === true);
 
   await appendEvent(ctx.layout, ctx.env, {
     type: PROTOTYPE_DISPOSED_EVENT_TYPE,

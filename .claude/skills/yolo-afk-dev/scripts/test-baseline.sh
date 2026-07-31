@@ -4,6 +4,9 @@
 # Usage: test-baseline.sh <state-dir> <prd-name> <base-ref> <test-cmd>
 # Writes: <state-dir>/prds/<prd-name>/test-baseline.json
 #
+# Requires jq: the output JSON is assembled with it, so any test cmd or
+# failure line (double quotes, backslashes, control chars) encodes safely.
+#
 # Detects pnpm/npm/yarn from <repo>/package.json + lockfile.
 # Test cmd is project-specific; orchestrator passes it (e.g. "pnpm --filter
 # @flip/frontend test --coverage=false").
@@ -66,22 +69,24 @@ set -e
 # `|| true` guards grep's exit-1-on-no-match: under `set -euo pipefail` a
 # fully green test run (nothing to match) must not abort before the JSON
 # is written (bug 0k83q678).
-FAILURES=$({ grep -E '^\s*(●|FAIL |✗|❯ FAIL )' "$RAW" 2>/dev/null || true; } \
-             | sed 's/"/\\"/g' \
-             | awk '{printf "    \"%s\",\n", $0}' \
-             | sed '$ s/,$//')
+FAILURES=$({ grep -E '^\s*(●|FAIL |✗|❯ FAIL )' "$RAW" 2>/dev/null || true; })
 
-cat > "$OUT" <<JSON
-{
-  "base_ref": "$BASE_REF",
-  "test_cmd": "$TEST_CMD",
-  "test_exit_code": $TEST_EXIT,
-  "captured_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "raw_log": "$RAW",
-  "failures": [
-$FAILURES
-  ]
-}
-JSON
+# jq does the encoding — hand-rolled sed escaping only handled `"` and broke
+# on backslashes, and $TEST_CMD was interpolated raw (bug b5e07bmt).
+jq -n \
+  --arg base_ref "$BASE_REF" \
+  --arg test_cmd "$TEST_CMD" \
+  --argjson test_exit_code "$TEST_EXIT" \
+  --arg captured_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+  --arg raw_log "$RAW" \
+  --arg failures "$FAILURES" \
+  '{
+     base_ref: $base_ref,
+     test_cmd: $test_cmd,
+     test_exit_code: $test_exit_code,
+     captured_at: $captured_at,
+     raw_log: $raw_log,
+     failures: ($failures | split("\n") | map(select(length > 0)))
+   }' > "$OUT"
 
 echo "$OUT"

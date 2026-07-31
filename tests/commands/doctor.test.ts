@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { CommandContext } from "../../src/cli";
 import { doctorCommand } from "../../src/commands/doctor";
 import type { Contract } from "../../src/schema/records";
@@ -121,6 +123,33 @@ describe("nahel doctor — env complete", () => {
     expect(result.code).toBe(4); // same exit branch as a failed healthcheck
     expect(result.stdout).toContain("timed out after 1s"); // but a distinct message
     expect(result.stdout).not.toContain("healthcheck failed (exit"); // not the plain-failure line
+  });
+});
+
+describe("nahel doctor — run from a subdirectory (store root walk-up)", () => {
+  test("the healthcheck child runs in the STORE ROOT, so a root-relative check passes", async () => {
+    // The contract's healthcheck is written against the repo root ("is the
+    // compose file there", "does the suite run"). Once doctor resolves its
+    // config from an ancestor, running the check in the subdirectory the user
+    // happened to stand in would fail a perfectly healthy repo.
+    const root = await makeTempDir("nahel-doctor-subdir-");
+    tempDirs.push(root);
+    // A git repo: the store-root walk is bounded by the worktree boundary.
+    expect(spawnSync("git", ["init", "-q"], { cwd: root }).status).toBe(0);
+    const layout = await ensureLayout(root);
+    await writeConfig(
+      layout,
+      makeConfig({
+        contract: { launch: "l", seed: "s", test: "t", healthcheck: "test -f repo-marker" },
+      }),
+    );
+    await writeFile(join(root, "repo-marker"), "at the root\n", "utf8");
+    const sub = join(root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    const result = await runDoctorAt(sub, [], []);
+    expect(result.stdout).toContain("contract OK");
+    expect(result.code).toBe(0);
   });
 });
 

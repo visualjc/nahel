@@ -5,9 +5,10 @@ import { readJournal } from "../store/journal";
 import type { StoreLayout } from "../store/layout";
 
 /**
- * Governance posture and merge authority, resolved (PRD F2.2 config
- * semantics, F3.4). The ONE place the codebase answers two questions, so no
- * caller invents its own default or its own idea of what authorizes a merge:
+ * Governance posture, merge authority, and founding signature, resolved (PRD
+ * F2.2 config semantics, F3.4, F9.5). The ONE place the codebase answers three
+ * questions, so no caller invents its own default or its own idea of what
+ * authorizes a merge or signs a constitution:
  *
  *   1. Who owns legislation here? A project with NO governance config behaves
  *      as `delegated` on product — pushing forward is the default unless told
@@ -20,6 +21,12 @@ import type { StoreLayout } from "../store/layout";
  *      because the committed flip is the human's standing authorization — so
  *      an agent-set flag authorizes nothing: it resolves back to
  *      `merge: human` and `nahel validate` warns.
+ *
+ *   3. Is the hands-off founding paragraph SIGNED? Only when the journal
+ *      proves a HUMAN actor made the config mutation that recorded it — the
+ *      same provenance rule, applied to the one piece of constitutional text
+ *      an agent never authors (F9.5, nahel/workflows/inception.md). An
+ *      agent-run founding act signs nothing.
  *
  * Deterministic throughout: committed config plus journal events in, an
  * answer out. No clock, no network, no judgment.
@@ -106,11 +113,45 @@ export interface MergeAuthorityStatus {
   defect?: MergeAuthorityDefect;
 }
 
-/** Payload shape `config set` journals; read defensively — events are data. */
-function settledAuthority(event: JournalEvent): unknown {
+/** One field of the section payload `config set` journals; events are data. */
+function settledField(event: JournalEvent, field: string): unknown {
   const value = event.payload["value"];
   if (typeof value !== "object" || value === null) return undefined;
-  return (value as Record<string, unknown>)["authority"];
+  return (value as Record<string, unknown>)[field];
+}
+
+/** Payload shape `config set` journals; read defensively — events are data. */
+function settledAuthority(event: JournalEvent): unknown {
+  return settledField(event, "authority");
+}
+
+/** The paragraph a founding act RECORDED — the bytes that act actually signs. */
+function settledParagraph(event: JournalEvent): unknown {
+  return settledField(event, "paragraph");
+}
+
+/**
+ * Every `config.updated` act on `section` carrying the maximal timestamp —
+ * the candidates for "the act that governs". More than one means a same-second
+ * tie, which the callers resolve by their own rule. Mutations are identified
+ * by event TYPE, never by payload shape: a `note` carrying a config-shaped
+ * payload is inert data, not an act.
+ */
+function latestSectionActs(section: string, events: Iterable<JournalEvent>): JournalEvent[] {
+  let finalists: JournalEvent[] = [];
+  for (const event of events) {
+    if (event.type !== CONFIG_UPDATED_EVENT_TYPE) continue;
+    if (event.payload["section"] !== section) continue;
+    const maxTs = finalists[0]?.ts;
+    if (maxTs === undefined || event.ts > maxTs) finalists = [event];
+    else if (event.ts === maxTs) finalists.push(event);
+  }
+  return finalists;
+}
+
+/** The actor attribution of an act, as the status shapes report it. */
+function attribution(event: JournalEvent): { event: string; actor: Actor } {
+  return { event: event.id, actor: event.actor };
 }
 
 /**
@@ -144,16 +185,7 @@ export function mergeAuthorityStatus(
   const defaulted = merge?.authority === undefined;
   if (configured !== "on-approve") return { configured, defaulted, effective: configured };
 
-  // Every merge-section config mutation carrying the maximal timestamp.
-  let finalists: JournalEvent[] = [];
-  for (const event of events) {
-    if (event.type !== CONFIG_UPDATED_EVENT_TYPE) continue;
-    if (event.payload["section"] !== "merge") continue;
-    const maxTs = finalists[0]?.ts;
-    if (maxTs === undefined || event.ts > maxTs) finalists = [event];
-    else if (event.ts === maxTs) finalists.push(event);
-  }
-
+  const finalists = latestSectionActs("merge", events);
   const latest = finalists[finalists.length - 1];
   if (
     finalists.length > 1 &&
@@ -167,7 +199,7 @@ export function mergeAuthorityStatus(
       configured,
       defaulted,
       effective: "human",
-      tied: finalists.map((event) => ({ event: event.id, actor: event.actor })),
+      tied: finalists.map(attribution),
       defect: "ambiguous",
     };
   }
@@ -175,11 +207,115 @@ export function mergeAuthorityStatus(
   if (latest === undefined || settledAuthority(latest) !== "on-approve") {
     return { configured, defaulted, effective: "human", defect: "unrecorded" };
   }
-  const setBy = { event: latest.id, actor: latest.actor };
+  const setBy = attribution(latest);
   if (latest.actor.kind !== "human") {
     return { configured, defaulted, effective: "human", setBy, defect: "agent-set" };
   }
   return { configured, defaulted, effective: "on-approve", setBy };
+}
+
+/** Why a recorded founding paragraph carries no human signature. */
+export type FoundingSignatureDefect =
+  /** The config mutation that recorded it was made by an agent actor. */
+  | "agent-recorded"
+  /**
+   * The latest founding act records DIFFERENT paragraph bytes than config
+   * holds — the text moved after it was signed. Distinct from `unrecorded`:
+   * the act exists and `recordedBy` names it, so callers must say "this act
+   * records other bytes", never "no act exists".
+   */
+  | "paragraph-mismatch"
+  /** No journaled config mutation records it at all — nothing to point at. */
+  | "unrecorded"
+  /** Same-second acts that disagree on actor kind or bytes; ordering cannot decide. */
+  | "ambiguous";
+
+/** Whether the founding paragraph is human-signed, and the act that decided it. */
+export interface FoundingSignatureStatus {
+  /** True ONLY when a human-attributed act wrote the `founding` section. */
+  signed: boolean;
+  /** The journal act that last recorded `config.founding`, when findable. */
+  recordedBy?: { event: string; actor: Actor };
+  /** The same-second recorders that could not be ordered ("ambiguous" only). */
+  tied?: { event: string; actor: Actor }[];
+  /**
+   * What the tied acts disagree ABOUT ("ambiguous" only) — who acted, the
+   * paragraph they recorded, or both. Callers state the disagreement at hand
+   * rather than asserting one mode for every tie.
+   */
+  disagreement?: "actor" | "paragraph" | "both";
+  /** Present exactly when `signed` is false. */
+  defect?: FoundingSignatureDefect;
+}
+
+/**
+ * Resolve the founding paragraph's signature against the journal (PRD F9.5,
+ * nahel/workflows/inception.md): "the human-attributed `config.updated` act
+ * that wrote the `founding` section IS the paragraph's signature. An agent-run
+ * founding act signs nothing."
+ *
+ * Undefined when there is nothing to sign — no founding section, or a founding
+ * recorded with no paragraph (a `guided` founding records which door the
+ * project came through and nothing more; only the paragraph carries
+ * authority). A hands-off founding always has one: the schema refuses the mode
+ * without it.
+ *
+ * The provenance rule is merge authority's, act for act (`events` must arrive
+ * in the journal's total order, oldest → newest): the LAST act on the section
+ * governs, "last" is decided by TIMESTAMP alone, and a same-second tie between
+ * acts that DISAGREE — on actor kind or on the paragraph recorded — is not
+ * decided at all; a lottery must never decide whether a constitution is
+ * signed. Ties that agree on both carry no ambiguity: there is nothing for the
+ * order to change.
+ *
+ * An act signs the bytes ITS OWN payload records, compared verbatim against
+ * the committed paragraph — nothing trims, reflows, or case-folds, exactly as
+ * F9.5 stores it. Without that comparison an old human act would launder any
+ * later hand-edit of the text, which is precisely what the signature exists to
+ * prevent.
+ */
+export function foundingSignatureStatus(
+  founding: Config["founding"],
+  events: Iterable<JournalEvent>,
+): FoundingSignatureStatus | undefined {
+  if (founding?.paragraph === undefined) return undefined;
+
+  const finalists = latestSectionActs("founding", events);
+  const latest = finalists[finalists.length - 1];
+  if (finalists.length > 1) {
+    // Both halves of the fail-safe, tracked separately so the caller can name
+    // the disagreement at hand instead of asserting one mode for every tie.
+    const actorDiffers = finalists.some((event) => event.actor.kind !== latest!.actor.kind);
+    const paragraphDiffers = finalists.some(
+      (event) => settledParagraph(event) !== settledParagraph(latest!),
+    );
+    if (actorDiffers || paragraphDiffers) {
+      return {
+        signed: false,
+        tied: finalists.map(attribution),
+        disagreement:
+          actorDiffers && paragraphDiffers ? "both" : actorDiffers ? "actor" : "paragraph",
+        defect: "ambiguous",
+      };
+    }
+  }
+
+  if (latest === undefined) return { signed: false, defect: "unrecorded" };
+
+  // The act signs the bytes ITS OWN payload carries. A latest act recording
+  // some OTHER text does not sign what config holds now — the paragraph moved
+  // out from under the signature (a hand edit, a lost act). The act is kept in
+  // the status: it exists, and callers must name it rather than claim none
+  // does. Mismatch outranks actor kind — an act recording other bytes says
+  // nothing about THIS paragraph, whoever made it.
+  const recordedBy = attribution(latest);
+  if (settledParagraph(latest) !== founding.paragraph) {
+    return { signed: false, recordedBy, defect: "paragraph-mismatch" };
+  }
+  if (latest.actor.kind !== "human") {
+    return { signed: false, recordedBy, defect: "agent-recorded" };
+  }
+  return { signed: true, recordedBy };
 }
 
 /**

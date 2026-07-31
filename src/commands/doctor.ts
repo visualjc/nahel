@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import { DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS, runHealthcheck } from "../store/healthcheck";
-import { readConfig, storeLayout } from "../store/layout";
+import { openStore, readConfig } from "../store/layout";
 import { UsageError } from "./item";
 
 /**
@@ -52,7 +52,7 @@ function parseFlags(argv: string[]): void {
 async function runDoctor(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing/malformed config errors with the
     // `nahel init` pointer (exit 1) rather than a confusing contract verdict.
     const config = await readConfig(layout);
@@ -81,7 +81,7 @@ async function runDoctor(argv: string[], ctx: CommandContext): Promise<number> {
     if (contract.healthcheck !== undefined) {
       const timeoutSeconds =
         contract.healthcheck_timeout_seconds ?? DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS;
-      const result = await runHealthcheck(contract.healthcheck, timeoutSeconds);
+      const result = await runHealthcheck(contract.healthcheck, layout.root, timeoutSeconds);
       if (result.timedOut) {
         // Distinct from a plain failure: the check hung past its deadline and
         // was killed, so a wedged healthcheck can never block doctor forever.

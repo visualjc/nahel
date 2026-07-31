@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { readConfig, storeLayout } from "../store/layout";
+import { openStore, readConfig } from "../store/layout";
 import { loadSnapshot } from "../views/snapshot";
 import { renderStatus } from "../views/status";
 import { UsageError } from "./item";
@@ -37,7 +37,7 @@ function parseFlags(argv: string[]): { json: boolean } {
 async function runStatus(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const flags = parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of rendering a misleadingly empty tree.
     await readConfig(layout);

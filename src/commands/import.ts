@@ -671,9 +671,14 @@ async function runImport(
       "import requires --from-ccpm — ccpm is the only supported source format",
     );
   }
-  const sourceRoot = resolve(cwd, values.source ?? ".");
-
   const ctx = await commandContext(cwd, env, actorOverride);
+  // The DEFAULT source is the resolved store root: this command is run IN the
+  // ccpm repo being migrated, so it must read THAT repo's `.claude/` however
+  // deep in it the user was standing. An EXPLICIT relative --source stays
+  // relative to the launch cwd — a path the user typed means what it means
+  // where they typed it (prototype's --worktree-dir keeps the same rule).
+  const sourceRoot =
+    values.source === undefined ? ctx.layout.root : resolve(cwd, values.source);
   const source = await readCcpmSource(sourceRoot);
   const existing = await loadExistingItems(ctx);
   const counts: ImportCounts = {

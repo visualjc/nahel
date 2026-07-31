@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import type { ObservationRecord } from "../store/layout";
-import { listObservations, readConfig, readObservation, storeLayout } from "../store/layout";
+import { listObservations, openStore, readConfig, readObservation } from "../store/layout";
 import { UsageError } from "./item";
 
 /**
@@ -75,7 +75,7 @@ function renderMatch(match: RecallMatch): string[] {
 async function runRecall(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const terms = parseTerms(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of searching a repo that has no state.
     await readConfig(layout);

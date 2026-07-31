@@ -687,6 +687,41 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     const fixture = await setupFixture(dirs);
     expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
   });
+
+  test("a paragraph edited by hand AFTER the human act warns — the act signs its own bytes, not later text", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+
+    // The journal still holds the human act; only the committed text moved.
+    // Laundering a hand-edit through an old signature is the one thing the
+    // signature exists to prevent (F9.5).
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: "Something the human never signed." },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, text swapped under the signature]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+  });
+
+  test("a whitespace-bearing paragraph recorded through the JSON --data form stays silent end to end", async () => {
+    // The byte comparison must survive the real write path — JSON payload,
+    // YAML config, and back — or every honest hands-off founding would warn.
+    // The JSON --data form is the one that preserves outer whitespace, which
+    // is exactly why the finding's fix prescribes it.
+    const fixture = await setupFixture(dirs);
+    const paragraph = "  Ship it deterministically.\n\n  Never guess.  ";
+    await setFounding(fixture, [JSON.stringify({ mode: "hands-off", paragraph })], "human:jim");
+
+    const config = await readConfig(fixture.layout);
+    console.log("[founding, verbatim round trip]", JSON.stringify(config.founding));
+    expect(config.founding?.paragraph).toBe(paragraph);
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
 });
 
 describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {

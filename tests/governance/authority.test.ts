@@ -291,18 +291,25 @@ describe("merge authority provenance — on-approve counts only when a human set
  * records which door was used and nothing more, so it needs no signature.
  */
 describe("founding signature provenance — the paragraph is signed by the act that recorded it", () => {
-  /** One `config.updated` event for the `founding` section, by the given actor. */
-  function foundingConfigEvent(id: string, actor: Actor, seq: number): JournalEvent {
+  /**
+   * One `config.updated` event for the `founding` section, by the given actor.
+   * `paragraph` defaults to the one HANDS_OFF carries — an act signs the bytes
+   * its OWN payload records, so a test that means "signed" must pass the same
+   * text the config holds.
+   */
+  function foundingConfigEvent(
+    id: string,
+    actor: Actor,
+    seq: number,
+    paragraph: string = HANDS_OFF.paragraph,
+  ): JournalEvent {
     return {
       id,
       ts: `2026-07-25T12:00:0${seq}Z`,
       seq,
       type: CONFIG_UPDATED_EVENT_TYPE,
       actor,
-      payload: {
-        section: "founding",
-        value: { mode: "hands-off", paragraph: HANDS_OFF.paragraph },
-      },
+      payload: { section: "founding", value: { mode: "hands-off", paragraph } },
     };
   }
 
@@ -369,6 +376,53 @@ describe("founding signature provenance — the paragraph is signed by the act t
       payload: { section: "founding", value: HANDS_OFF },
     };
     const status = foundingSignatureStatus(HANDS_OFF, [forged]);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("unrecorded");
+  });
+
+  /**
+   * An act signs the bytes ITS OWN payload carries — never whatever the config
+   * happens to hold later. Without that comparison a human act signing an old
+   * paragraph would launder any later hand-edit of the text, which is the one
+   * thing F9.5's signature exists to prevent.
+   */
+  test("a human act that recorded an EARLIER paragraph does not sign a later hand-edit", () => {
+    const signedOld = foundingConfigEvent("fffffff9", HUMAN, 1, "The paragraph the human actually signed.");
+    const status = foundingSignatureStatus(
+      { mode: "hands-off", paragraph: "A different paragraph, edited in by hand afterwards." },
+      [signedOld],
+    );
+    console.log("[founding, paragraph swapped under the signature]", status);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("unrecorded");
+  });
+
+  test("same-second HUMAN acts recording DIFFERENT paragraphs are ambiguous — the fail-safe is about the value too", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, [
+      foundingConfigEvent("fffffffa", HUMAN, 0),
+      foundingConfigEvent("fffffffb", HUMAN, 0, "A rival paragraph recorded in the same second."),
+    ]);
+    console.log("[founding, same-second disagreeing humans]", status);
+    expect(status?.signed).toBe(false);
+    expect(status?.defect).toBe("ambiguous");
+    expect(status?.tied).toHaveLength(2);
+  });
+
+  test("same-second human acts recording the SAME paragraph carry no ambiguity — nothing to decide", () => {
+    const status = foundingSignatureStatus(HANDS_OFF, [
+      foundingConfigEvent("fffffffc", HUMAN, 0),
+      foundingConfigEvent("fffffffd", HUMAN, 0),
+    ]);
+    expect(status?.signed).toBe(true);
+    expect(status?.defect).toBeUndefined();
+  });
+
+  test("byte equality, not similarity: whitespace-only drift breaks the signature", () => {
+    // F9.5 stores the paragraph verbatim and compares it verbatim — nothing
+    // trims, reflows, or case-folds. A trailing space IS a different paragraph.
+    const status = foundingSignatureStatus({ mode: "hands-off", paragraph: `${HANDS_OFF.paragraph} ` }, [
+      foundingConfigEvent("fffffffe", HUMAN, 1),
+    ]);
     expect(status?.signed).toBe(false);
     expect(status?.defect).toBe("unrecorded");
   });

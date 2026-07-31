@@ -108,21 +108,58 @@ function parseNumstatLine(line: string): DiffStat {
   });
 }
 
-/**
- * Is this a real repo whose HEAD is unborn — `git init` with no commit yet?
- * Asked only after `rev-parse HEAD` has already failed: the repo probe
- * succeeds inside a work tree, and HEAD being a symbolic ref that resolves to
- * nothing is exactly the unborn case (a missing repo fails the first probe,
- * a detached-but-broken HEAD fails the second).
- */
-async function hasUnbornHead(root: string, maxOutputBytes: number): Promise<boolean> {
+/** Run a diagnostic git call for its ANSWER; undefined when it fails. */
+async function probeGit(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number,
+): Promise<string | undefined> {
   try {
-    await git(root, ["rev-parse", "--is-inside-work-tree"], maxOutputBytes);
-    await git(root, ["symbolic-ref", "--quiet", "HEAD"], maxOutputBytes);
-    return true;
+    return (await git(root, args, maxOutputBytes)).trim();
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/** A bare repo has no working tree, so no claim can ever be based on it. */
+function bareRepoRefusal(root: string): string {
+  return (
+    `the git repo at ${root} is bare — a claim baseline is a snapshot of a working tree ` +
+    "(HEAD plus git status), and a bare repo has none; claim from a normal checkout instead"
+  );
+}
+
+/** Is this a bare repo? The ANSWER, never the exit code: both are exit 0. */
+async function isBareRepo(root: string, maxOutputBytes: number): Promise<boolean> {
+  return (await probeGit(root, ["rev-parse", "--is-bare-repository"], maxOutputBytes)) === "true";
+}
+
+/**
+ * Why this repo can never yield a baseline — bare, or an unborn HEAD (`git
+ * init` with no commit yet) — or undefined when neither applies and git's own
+ * failure is the honest answer.
+ *
+ * Both probes are read for their OUTPUT: `--is-bare-repository` and
+ * `--is-inside-work-tree` print "true"/"false" and exit 0 either way, so an
+ * exit-code-only reading calls a bare repo an unborn worktree and tells the
+ * operator to commit — advice that can never make a claim work there.
+ */
+async function unusableRepoReason(
+  root: string,
+  maxOutputBytes: number,
+): Promise<string | undefined> {
+  if (await isBareRepo(root, maxOutputBytes)) return bareRepoRefusal(root);
+  if ((await probeGit(root, ["rev-parse", "--is-inside-work-tree"], maxOutputBytes)) !== "true") {
+    return undefined;
+  }
+  // HEAD is a symbolic ref (a branch) that resolves to no commit: unborn.
+  if ((await probeGit(root, ["symbolic-ref", "--quiet", "HEAD"], maxOutputBytes)) === undefined) {
+    return undefined;
+  }
+  return (
+    `the git repo at ${root} has no commits yet — a claim records the HEAD commit as its ` +
+    "baseline, so make an initial commit before claiming"
+  );
 }
 
 /** Capture the claim baseline: HEAD SHA + porcelain working-tree snapshot. */
@@ -135,16 +172,33 @@ export async function captureBaseline(
     head = (await git(root, ["rev-parse", "HEAD"], maxOutputBytes)).trim();
   } catch (error) {
     // git's own answer here is "ambiguous argument 'HEAD'", which says nothing
-    // about the actual situation: there is no commit to record as a baseline.
-    if (!(error instanceof GitOutputCapError) && (await hasUnbornHead(root, maxOutputBytes))) {
-      throw new GitError(
-        `the git repo at ${root} has no commits yet — a claim records the HEAD commit as its ` +
-          "baseline, so make an initial commit before claiming",
-      );
+    // about the actual situation. An overflow is never a verdict about the
+    // repo, so it is never re-diagnosed as one.
+    if (error instanceof GitOutputCapError) throw error;
+    const reason = await unusableRepoReason(root, maxOutputBytes);
+    if (reason !== undefined) throw new GitError(reason);
+    throw error;
+  }
+  // `rev-parse HEAD` carries no --verify, so an unresolvable HEAD is ECHOED
+  // back and exits 0 — an empty bare repo answers the literal "HEAD". The
+  // shape, not the exit code, is what says the revision resolved.
+  if (!commitShaField.safeParse(head).success) {
+    throw new GitError(
+      (await unusableRepoReason(root, maxOutputBytes)) ??
+        `git rev-parse HEAD in ${root} did not resolve to a commit (got ${JSON.stringify(head)})`,
+    );
+  }
+  let dirty: string[];
+  try {
+    dirty = outputLines(await git(root, ["status", "--porcelain"], maxOutputBytes));
+  } catch (error) {
+    // A bare repo WITH commits resolves HEAD and only fails here, with git's
+    // "must be run in a work tree" — name the reason a claim cannot work.
+    if (!(error instanceof GitOutputCapError) && (await isBareRepo(root, maxOutputBytes))) {
+      throw new GitError(bareRepoRefusal(root));
     }
     throw error;
   }
-  const dirty = outputLines(await git(root, ["status", "--porcelain"], maxOutputBytes));
   return gitBaselineSchema.parse({ head, dirty });
 }
 

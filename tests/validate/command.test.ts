@@ -131,6 +131,30 @@ describe("nahel validate — the command", () => {
     expect(result.code).toBe(1);
   });
 
+  /**
+   * The subtlest shape: a fault that stops git running at all fails the ref
+   * listing AND the "is there a repo here?" probe. Inferring absence from that
+   * second failure files a real repo under "nothing to verify" — absence
+   * counts only when git itself answers "not a git repository".
+   */
+  test("a repo whose config will not parse is reported, not written off as absent", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    git(fixture.root, "init", "-q", "--initial-branch=main");
+    git(fixture.root, "config", "user.email", "test@example.com");
+    git(fixture.root, "config", "user.name", "Test User");
+    await writeFile(join(fixture.root, "app.txt"), "one\n");
+    git(fixture.root, "add", "app.txt");
+    git(fixture.root, "commit", "-q", "-m", "initial");
+    await writeFile(join(fixture.root, ".git", "config"), "[core\nthis is not a config\n");
+
+    const result = await runValidate([], fixture.root);
+    const output = result.stdout.join("\n");
+    expect(output).toContain("prototype.scan-failed");
+    expect(output).toContain("bad config");
+    expect(result.code).toBe(1);
+  });
+
   test("stays clean (exit 0, no findings) after log-driven rotation archives segments", async () => {
     const fixture = await setupFixture(dirs);
     await createItem(fixture);

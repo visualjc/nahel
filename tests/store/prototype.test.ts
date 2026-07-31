@@ -463,6 +463,21 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
   });
 
   /**
+   * Absence must be PROVEN, never inferred from a second failure. A fault that
+   * stops git running at all — here a malformed config — fails the ref listing
+   * AND the repo probe, and reading that as "there is no repo here" files a
+   * real repo, prototype refs and all, under "nothing to verify".
+   */
+  test("a fault that breaks BOTH probes is an abort — absence is only git's own answer", async () => {
+    const root = await makeRepo();
+    await writeFile(join(root, ".git", "config"), "[core\nthis is not a config\n");
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.error).toContain("bad config");
+  });
+
+  /**
    * The nastiest shape: git EXITS 0 and answers anyway, having quietly left
    * something out. `for-each-ref` warns "ignoring broken ref" on stderr and
    * returns a SHORT list — so a prototype branch can be missing from a scan

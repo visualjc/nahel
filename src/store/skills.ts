@@ -3,7 +3,7 @@ import { lstat, mkdir, rm, stat, symlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SkillsLockEntry } from "../schema/records";
-import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
+import { gitSpawnEnv, isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 import type { StoreLayout } from "./layout";
 
 /**
@@ -79,7 +79,13 @@ async function runGit(
   maxOutputBytes: number = MAX_OUTPUT_BYTES,
 ): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", [...args], { cwd, maxBuffer: maxOutputBytes });
+    const { stdout } = await execFileAsync("git", [...args], {
+      cwd,
+      maxBuffer: maxOutputBytes,
+      // `cwd` alone does not pin the repository: an inherited GIT_DIR would
+      // redirect the clone/checkout to another one.
+      env: gitSpawnEnv(),
+    });
     return stdout;
   } catch (error) {
     if (isOutputCapExceeded(error)) {

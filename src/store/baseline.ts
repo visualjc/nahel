@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
+import { gitSpawnEnv, isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 
 /**
  * Git baseline capture and handback evidence (PRD F9). Spawning `git` is
@@ -33,6 +33,10 @@ async function git(
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
       maxBuffer: maxOutputBytes,
+      // `-C root` only sets the directory git starts from; an inherited
+      // GIT_DIR still sends it to another repository — and a baseline for the
+      // wrong repo is journaled without a murmur (exit 0, plausible SHA).
+      env: gitSpawnEnv(),
     });
     return stdout;
   } catch (error) {

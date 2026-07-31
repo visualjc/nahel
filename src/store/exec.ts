@@ -34,6 +34,50 @@ export function isOutputCapExceeded(error: unknown): boolean {
   );
 }
 
+/**
+ * Git's repository-SELECTION environment: every one of these overrides the
+ * directory git was handed.
+ *
+ *   - GIT_DIR / GIT_COMMON_DIR name another repository outright;
+ *   - GIT_WORK_TREE / GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY /
+ *     GIT_ALTERNATE_OBJECT_DIRECTORIES swap out pieces of the one it finds;
+ *   - GIT_CEILING_DIRECTORIES can stop discovery before it reaches the root.
+ *
+ * Hooks, CI runners, `git rebase --exec`, and any shell that exported one and
+ * moved on all set these, so inheriting them is the ordinary case rather than
+ * an exotic one. Every question nahel asks git is about "the repo AT this
+ * root", so an inherited value can only produce an answer about the wrong
+ * repository: a ref scan reporting "not a git repository" about a path nobody
+ * asked about, or — silently, at exit 0 — a claim baseline recording another
+ * repo's HEAD. Neither failure announces itself, which is why these are
+ * stripped rather than detected.
+ */
+const GIT_REPOSITORY_SELECTION_VARS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CEILING_DIRECTORIES",
+] as const;
+
+/**
+ * The environment for a git spawn: everything inherited — PATH, HOME, proxy
+ * and credential settings git legitimately needs — MINUS the variables above.
+ *
+ * This is the ONLY place the store reads the ambient environment, and that is
+ * the point (HC1): the spawn seam owns it, so no caller has to reason about
+ * ambient git state and there is exactly one place to audit. Sanitizing beats
+ * detecting because the question never varies — nahel always means the repo at
+ * the root it was given, so an override is never information, only noise.
+ */
+export function gitSpawnEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const name of GIT_REPOSITORY_SELECTION_VARS) delete env[name];
+  return env;
+}
+
 /** The failure detail for a spawn whose output outran `cap` bytes. */
 export function outputCapDetail(cap: number): string {
   return (

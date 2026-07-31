@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
+import { gitSpawnEnv, isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 
 /**
  * The prototype lane's git plumbing (PRD F5). Spawning `git` is store-layer
@@ -59,6 +59,10 @@ async function tryGit(
   try {
     const { stdout, stderr } = await execFileAsync("git", ["-C", root, ...args], {
       maxBuffer: maxOutputBytes,
+      // Without this an inherited GIT_DIR answers every probe about ANOTHER
+      // repository — "not a git repository" included, which would read as
+      // proof that this root has nothing to verify.
+      env: gitSpawnEnv(),
     });
     return { code: 0, stdout, stderr };
   } catch (error) {

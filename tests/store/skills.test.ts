@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SkillsLock } from "../../src/schema/records";
 import {
@@ -246,17 +246,24 @@ describe("skills CLI delegation", () => {
     }
   });
 
-  test("restoreViaSkillsCli invokes `skills add <url>@<sha> <names…>` and returns the names", async () => {
-    const argsFile = join(await tempDir("nahel-args-"), "argv");
-    const restore = await withFakeSkills(`#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\nexit 0\n`);
+  test("restoreViaSkillsCli invokes `skills add <url>@<sha> <names…>` in the store root and returns the names", async () => {
+    const argsDir = await tempDir("nahel-args-");
+    const argsFile = join(argsDir, "argv");
+    const cwdFile = join(argsDir, "cwd");
+    const restore = await withFakeSkills(
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\npwd > "${cwdFile}"\nexit 0\n`,
+    );
     try {
+      const layout = await initTargetRepo();
       const entry = {
         repo: "PromptDrivenDev/skills",
         ref: "main",
         sha: "b".repeat(40),
         skills: ["tdd", "grilling"],
       };
-      const placed = await restoreViaSkillsCli(entry);
+      const placed = await restoreViaSkillsCli(layout, entry);
+      // The delegated CLI places relative to its own cwd: it must be the root.
+      expect((await readFile(cwdFile, "utf8")).trim()).toBe(await realpath(layout.root));
       expect(placed).toEqual(["tdd", "grilling"]);
       const argv = (await readFile(argsFile, "utf8")).split("\n").filter((l) => l !== "");
       expect(argv).toEqual([
@@ -273,7 +280,7 @@ describe("skills CLI delegation", () => {
   test("restoreViaSkillsCli surfaces a non-zero CLI exit as SkillsError", async () => {
     const restore = await withFakeSkills("#!/bin/sh\necho boom 1>&2\nexit 3\n");
     try {
-      const attempt = restoreViaSkillsCli({
+      const attempt = restoreViaSkillsCli(await initTargetRepo(), {
         repo: "a/b",
         ref: "main",
         sha: "c".repeat(40),

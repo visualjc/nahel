@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandContext } from "../../src/cli";
@@ -133,6 +134,8 @@ describe("nahel doctor — run from a subdirectory (store root walk-up)", () => 
     // happened to stand in would fail a perfectly healthy repo.
     const root = await makeTempDir("nahel-doctor-subdir-");
     tempDirs.push(root);
+    // A git repo: the store-root walk is bounded by the worktree boundary.
+    expect(spawnSync("git", ["init", "-q"], { cwd: root }).status).toBe(0);
     const layout = await ensureLayout(root);
     await writeConfig(
       layout,

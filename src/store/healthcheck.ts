@@ -33,9 +33,13 @@ export interface HealthcheckResult {
 }
 
 /**
- * Run the contract's healthcheck command through a shell; success is exit 0.
- * The command string comes from committed config (no secrets); it is never
- * echoed with its output — only the exit status is returned.
+ * Run the contract's healthcheck command through a shell IN `cwd`; success is
+ * exit 0. The directory is explicit rather than inherited: the healthcheck is
+ * written against the repo root (`test -f docker-compose.yml`, `bun test`), so
+ * doctor hands it the resolved store root and a run from any subdirectory
+ * checks the same thing. The command string comes from committed config (no
+ * secrets); it is never echoed with its output — only the exit status is
+ * returned.
  *
  * A command that outruns `timeoutSeconds` is killed (execFile's `timeout`
  * option, which Bun honors: the child is sent SIGTERM at the deadline) and
@@ -44,10 +48,12 @@ export interface HealthcheckResult {
  */
 export async function runHealthcheck(
   command: string,
+  cwd: string,
   timeoutSeconds: number = DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS,
 ): Promise<HealthcheckResult> {
   try {
     await execFileAsync("/bin/sh", ["-c", command], {
+      cwd,
       maxBuffer: MAX_OUTPUT_BYTES,
       timeout: timeoutSeconds * 1000,
     });

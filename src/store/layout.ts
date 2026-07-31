@@ -113,10 +113,17 @@ async function findGitBoundary(from: string): Promise<string | null> {
  * to the filesystem root would let any command run anywhere under `$HOME`
  * silently adopt an unrelated store.
  *
+ * The given cwd is CANONICALIZED before the walk (see canonicalize), so the
+ * resolution — and the root every command then derives its paths and its
+ * child processes' cwd from — is about the real filesystem location, not the
+ * path's spelling: a shell may hand in a symlink pointing into the repo, and
+ * walking its lexical parents would leave the repo through the link's own
+ * parent and miss the store entirely.
+ *
  * `nahel init` deliberately does NOT use this — it creates the store at cwd.
  */
 export async function resolveStoreRoot(cwd: string): Promise<string> {
-  const start = resolve(cwd);
+  const start = await canonicalize(resolve(cwd));
   const { root, boundary } = await searchStoreRoot(start);
   if (root !== null) return root;
   throw new Error(
@@ -155,7 +162,7 @@ export async function openStore(cwd: string): Promise<StoreLayout> {
  * skills.yaml / skills.lock, which stand on their own (PRD F7).
  */
 export async function openStoreTolerant(cwd: string): Promise<StoreLayout> {
-  const start = resolve(cwd);
+  const start = await canonicalize(resolve(cwd));
   const { root } = await searchStoreRoot(start);
   return storeLayout(root ?? start);
 }

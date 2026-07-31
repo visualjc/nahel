@@ -199,13 +199,19 @@ export async function skillsCliAvailable(): Promise<boolean> {
 /**
  * Delegate placement to the external `skills` CLI (ADR-0009: use the existing
  * ecosystem where possible): `skills add <url>@<sha> <name…>`. Returns the
- * names handed to the CLI. The CLI owns placement into .claude/skills/.
+ * names handed to the CLI. The CLI owns placement into .claude/skills/ —
+ * relative to ITS cwd, so it is run in the store root exactly as the clone
+ * fallback writes there: which tool is installed must not change where skills
+ * land. Takes the layout for that reason, mirroring restoreViaClone.
  */
-export async function restoreViaSkillsCli(entry: SkillsLockEntry): Promise<string[]> {
+export async function restoreViaSkillsCli(
+  layout: StoreLayout,
+  entry: SkillsLockEntry,
+): Promise<string[]> {
   const url = repoToUrl(entry.repo);
   const args = ["add", `${url}@${entry.sha}`, ...entry.skills];
   try {
-    await execFileAsync("skills", args, { maxBuffer: MAX_OUTPUT_BYTES });
+    await execFileAsync("skills", args, { cwd: layout.root, maxBuffer: MAX_OUTPUT_BYTES });
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr;
     const detail =

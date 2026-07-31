@@ -83,7 +83,7 @@ async function restore(layout: StoreLayout, ctx: CommandContext): Promise<number
   const useCli = await skillsCliAvailable();
   for (const entry of locked.entries) {
     const placed = useCli
-      ? await restoreViaSkillsCli(entry)
+      ? await restoreViaSkillsCli(layout, entry)
       : await restoreViaClone(layout, entry);
     ctx.stdout(`restored ${entry.repo}@${entry.sha}: ${placed.join(", ")}`);
   }

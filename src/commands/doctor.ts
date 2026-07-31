@@ -81,7 +81,7 @@ async function runDoctor(argv: string[], ctx: CommandContext): Promise<number> {
     if (contract.healthcheck !== undefined) {
       const timeoutSeconds =
         contract.healthcheck_timeout_seconds ?? DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS;
-      const result = await runHealthcheck(contract.healthcheck, timeoutSeconds);
+      const result = await runHealthcheck(contract.healthcheck, layout.root, timeoutSeconds);
       if (result.timedOut) {
         // Distinct from a plain failure: the check hung past its deadline and
         // was killed, so a wedged healthcheck can never block doctor forever.

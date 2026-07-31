@@ -307,8 +307,17 @@ export interface PrototypeRefScan {
   branches: PrototypeBranchScan[];
   /** Every remote-tracking prototype ref, short form (`origin/prototype/…`). */
   remoteRefs: string[];
-  /** Git unavailable, or not a repo — the checks stay silent rather than guess. */
+  /** Why the scan produced nothing: git unavailable, not a repo, or an abort. */
   error?: string;
+  /**
+   * The scan ABORTED inside a repo that demonstrably exists — nahel's output
+   * cap, or git plumbing failing on a real checkout. Distinct from `error`
+   * alone, which also covers "there is no repo here": with no repo there are
+   * no prototype refs and nothing to judge, whereas an abort leaves refs that
+   * MAY violate never-merge unjudged. Validate reports this; it cannot report
+   * silence (PRODUCT.md HC6, ADR-0011).
+   */
+  scanFailed?: true;
 }
 
 /**
@@ -401,7 +410,8 @@ export async function scanPrototypeRefs(
     return await collectPrototypeRefs(root, maxOutputBytes);
   } catch (error) {
     if (error instanceof PrototypeOutputCapError) {
-      return { branches: [], remoteRefs: [], error: error.message };
+      // nahel refused to read the answer, so this IS an abort, not "no repo".
+      return { branches: [], remoteRefs: [], error: error.message, scanFailed: true };
     }
     throw error;
   }
@@ -417,7 +427,15 @@ async function collectPrototypeRefs(
     maxOutputBytes,
   );
   if (heads.code !== 0) {
-    return { branches: [], remoteRefs: [], error: heads.stderr.trim() };
+    // Is there a repo here at all? A missing one has no prototype refs to
+    // judge; a real one whose ref listing failed has refs nobody could read.
+    const insideRepo = (await tryGit(root, ["rev-parse", "--git-dir"], maxOutputBytes)).code === 0;
+    return {
+      branches: [],
+      remoteRefs: [],
+      error: heads.stderr.trim(),
+      ...(insideRepo ? { scanFailed: true as const } : {}),
+    };
   }
 
   const defaultBranch = await resolveDefaultBranch(root, maxOutputBytes);

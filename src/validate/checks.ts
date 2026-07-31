@@ -1487,10 +1487,35 @@ function prototypeBases(state: ParsedState): Map<string, string> {
  *   creation record for. Without the base, "sitting at its creation point" and
  *   "merged into the default branch" are the same git observation, so the
  *   honest report is that the branch cannot be judged — not a verdict.
+ * - `prototype.scan-failed` (error): the scan ABORTED inside a real repo, so
+ *   none of the above ran. ERROR, not warning, on the exit contract: warnings
+ *   exit 0, and an unverified constitutional invariant reported as exit 0 is
+ *   indistinguishable from a verified-clean repo — the invisible failure
+ *   PRODUCT.md HC6 / ADR-0011 forbid. It sits with validate's other
+ *   could-not-READ findings (a record that will not parse, an unreplayable
+ *   payload), all errors; the warnings are cases where the data WAS read and
+ *   only the verdict is unreachable (`prototype.unrecorded`, same-second
+ *   ambiguity). No repo at all stays silent: nothing exists to be judged.
  */
 function checkPrototypeRefs(state: ParsedState): Finding[] {
   const scan = state.input.prototypeRefs;
-  if (scan === undefined || scan.error !== undefined) return [];
+  if (scan === undefined) return [];
+  if (scan.scanFailed === true) {
+    return [
+      {
+        severity: "error",
+        check: "prototype.scan-failed",
+        message:
+          `the prototype ref scan could not complete: ${scan.error ?? "no reason reported"} — ` +
+          "never-merge enforcement (F5.2) did not run, so prototype code that reached the " +
+          "default branch would go unreported",
+        fix:
+          "fix the git failure above and re-run `nahel validate` — never-merge is a hard " +
+          "constraint, so an unread repo is reported, never assumed clean",
+      },
+    ];
+  }
+  if (scan.error !== undefined) return [];
 
   const findings: Finding[] = [];
   const bases = prototypeBases(state);

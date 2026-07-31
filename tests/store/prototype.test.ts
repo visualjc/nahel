@@ -447,6 +447,19 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     expect(scan.error).toBeDefined();
     expect(scan.branches).toEqual([]);
     expect(scan.remoteRefs).toEqual([]);
+    // No repo, no prototype refs: nothing was left unverified, so validate
+    // stays silent rather than reporting an unjudged invariant.
+    expect(scan.scanFailed).toBeUndefined();
+  });
+
+  test("a real repo whose ref listing fails is an ABORT, not an absent repo", async () => {
+    const root = await makeRepo();
+    await writeFile(join(root, ".git", "packed-refs"), "not a refs database\n");
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.error).toContain("packed-refs");
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.branches).toEqual([]);
   });
 
   /**
@@ -490,6 +503,9 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     const capped = await scanPrototypeRefs(root, 200);
     expect(capped.error).toBeDefined();
     expect(capped.error).toContain("200-byte capture cap");
+    // An abort inside a real repo: refs exist and went unjudged, which
+    // validate has to report rather than pass over (HC6).
+    expect(capped.scanFailed).toBe(true);
     // No half-answer: an empty branch list WITHOUT an error would read as
     // "scanned, nothing wrong".
     expect(capped.branches).toEqual([]);

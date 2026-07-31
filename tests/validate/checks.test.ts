@@ -722,6 +722,40 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     expect(config.founding?.paragraph).toBe(paragraph);
     expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
   });
+
+  test("the prescribed fix is the byte-preserving JSON form — key=value would re-sign DIFFERENT bytes", async () => {
+    const fixture = await setupFixture(dirs);
+    const paragraph = "  Outer whitespace is load-bearing in this paragraph.  ";
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph },
+    });
+
+    const finding = findingsFor(await validateStore(fixture.layout), "founding.unsigned")[0]!;
+    console.log("[founding, prescribed fix]", finding.fix);
+    // The `--data key=value` dialect trims each entry's outer whitespace
+    // (nahel/workflows/inception.md), so prescribing it would have the human
+    // re-sign a paragraph that is not the one on disk. Only the JSON form
+    // passes the text through untouched.
+    expect(finding.fix).toContain('--data \'{"mode": "hands-off"');
+    expect(finding.fix).toContain('"paragraph"');
+    expect(finding.fix).not.toContain("--data paragraph=");
+    expect(finding.fix).not.toContain("--data mode=hands-off");
+
+    // Why it matters, demonstrated: the trimming form silently rewrites the
+    // very bytes under signature.
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${paragraph}`], "human:jim");
+    const trimmed = (await readConfig(fixture.layout)).founding?.paragraph;
+    console.log("[founding, key=value re-sign]", JSON.stringify(trimmed));
+    expect(trimmed).not.toBe(paragraph);
+    expect(trimmed).toBe(paragraph.trim());
+
+    // The JSON form the fix prescribes signs the paragraph as written.
+    await setFounding(fixture, [JSON.stringify({ mode: "hands-off", paragraph })], "human:jim");
+    expect((await readConfig(fixture.layout)).founding?.paragraph).toBe(paragraph);
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
 });
 
 describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {

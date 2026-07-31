@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { rm, writeFile } from "node:fs/promises";
+import { configCommand } from "../../src/commands/config";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
@@ -142,6 +143,7 @@ function sweepPayload(overrides: Record<string, unknown> = {}): Record<string, u
 }
 
 const QA_HEADER = "== qa (open items, latest sweep) ==";
+const FOUNDING_HEADER = "== signed founding paragraph (nahel/config) ==";
 
 const SECTION_HEADERS = [
   "== constitution (PRODUCT.md) ==",
@@ -244,6 +246,189 @@ describe("renderBrief — verbatim constitution extraction", () => {
     const brief = renderBrief(makeInputs({ productText: noGoal }));
     expect(brief).toContain(`finding: PRODUCT.md has no "${GOAL_HEADING}" section`);
     expect(brief).toContain(`${HARD_CONSTRAINTS_HEADING}\n\n${CONSTRAINTS_TEXT}`);
+  });
+});
+
+/**
+ * The signed founding paragraph (PRD F9.5, item h6fqaav0): under a hands-off
+ * founding the paragraph is the constitution's only signed content, and it is
+ * checked before EVERY implementation dispatch. Surfacing it here is what lets
+ * a dispatch runner do that check from the brief instead of reading
+ * nahel/config raw.
+ */
+describe("renderBrief — the signed founding paragraph (F9.5)", () => {
+  const PARAGRAPH = "Build a deterministic CLI for durable project state, and never guess.";
+
+  /** One `config.updated` act on the founding section, by the given actor. */
+  function foundingAct(kind: "human" | "agent", id: string): JournalEvent {
+    return {
+      id: "f0f0f0f0",
+      ts: "2026-07-25T12:00:00Z",
+      seq: 0,
+      type: "config.updated",
+      actor: { kind, id },
+      payload: {
+        section: "founding",
+        value: { mode: "hands-off", paragraph: PARAGRAPH },
+      },
+    };
+  }
+
+  test("a human-recorded paragraph is surfaced VERBATIM with its signing attribution", () => {
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: PARAGRAPH },
+        events: [foundingAct("human", "jim")],
+      }),
+    );
+    console.log("[brief, signed founding]\n", brief);
+    expect(brief).toContain(FOUNDING_HEADER);
+    expect(brief).toContain(PARAGRAPH);
+    expect(brief).toContain("signed by: human:jim");
+    // It sits with the constitution it IS, ahead of the knowledge pointers.
+    const constitution = brief.indexOf("== constitution (PRODUCT.md) ==");
+    const founding = brief.indexOf(FOUNDING_HEADER);
+    const knowledge = brief.indexOf("== knowledge & canonical truth ==");
+    expect(founding).toBeGreaterThan(constitution);
+    expect(knowledge).toBeGreaterThan(founding);
+  });
+
+  test("an agent-recorded paragraph is surfaced too, marked UNSIGNED with the recording actor", () => {
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: PARAGRAPH },
+        events: [foundingAct("agent", "claude-code")],
+      }),
+    );
+    console.log("[brief, unsigned founding]\n", brief);
+    expect(brief).toContain(PARAGRAPH);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).toContain("agent:claude-code");
+    // The brief names the check that explains it, so the reader can act.
+    expect(brief).toContain("founding.unsigned");
+  });
+
+  test("a paragraph no journaled act accounts for is marked UNSIGNED as well", () => {
+    const brief = renderBrief(
+      makeInputs({ founding: { mode: "hands-off", paragraph: PARAGRAPH } }),
+    );
+    expect(brief).toContain(PARAGRAPH);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).toContain("no journaled act records it");
+  });
+
+  test("a MISMATCHING act is named, not erased — the no-act wording is for an empty journal only", () => {
+    // The act exists and its provenance is knowable; it simply records other
+    // bytes. Saying "no journaled act records it" here is false and sends the
+    // reader looking for a missing act instead of the edit that moved the text.
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: "The paragraph as it stands on disk today." },
+        events: [
+          {
+            ...foundingAct("human", "jim"),
+            id: "f0f0f0f3",
+            payload: {
+              section: "founding",
+              value: { mode: "hands-off", paragraph: "The paragraph the human actually signed." },
+            },
+          },
+        ],
+      }),
+    );
+    console.log("[brief, mismatching founding act]\n", brief);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).not.toContain("no journaled act records it");
+    // Actor and event id both named, plus what is actually wrong.
+    expect(brief).toContain("human:jim");
+    expect(brief).toContain("f0f0f0f3");
+    expect(brief).toContain("records different paragraph bytes");
+    // A human act DID sign its own bytes, so signed-then-moved is the truth here.
+    expect(brief).toContain("after it was signed");
+  });
+
+  test("an AGENT mismatch never claims the text moved after signing — nothing was ever signed", () => {
+    // An agent-run founding act signs nothing (F9.5). Saying the text "moved
+    // after it was signed" asserts a signature that never existed, which reads
+    // as though a human's intent had been overwritten.
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: "The paragraph as it stands on disk today." },
+        events: [
+          {
+            ...foundingAct("agent", "claude-code"),
+            id: "f0f0f0f4",
+            payload: {
+              section: "founding",
+              value: { mode: "hands-off", paragraph: "Whatever the agent recorded back then." },
+            },
+          },
+        ],
+      }),
+    );
+    console.log("[brief, agent mismatch]\n", brief);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).toContain("agent:claude-code");
+    expect(brief).toContain("f0f0f0f4");
+    expect(brief).toContain("records different paragraph bytes");
+    expect(brief).not.toContain("after it was signed");
+    expect(brief).toContain("signed nothing");
+  });
+
+  test("an AMBIGUOUS signature names the tied acts — never the false claim that none exists", () => {
+    // Same-second acts that disagree leave tied acts but no single recordedBy.
+    // "no journaled act records it" would be a plain untruth about the journal
+    // here, and it points the reader at the wrong repair.
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: PARAGRAPH },
+        events: [
+          { ...foundingAct("human", "jim"), id: "f0f0f0f1" },
+          { ...foundingAct("agent", "claude-code"), id: "f0f0f0f2" },
+        ],
+      }),
+    );
+    console.log("[brief, ambiguous founding]\n", brief);
+    expect(brief).toContain(PARAGRAPH);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).not.toContain("no journaled act records it");
+    // Both tied acts are named, by event id and actor, so the reader sees
+    // exactly what needs breaking apart.
+    expect(brief).toContain("f0f0f0f1");
+    expect(brief).toContain("human:jim");
+    expect(brief).toContain("f0f0f0f2");
+    expect(brief).toContain("agent:claude-code");
+    // Stated in the brief's plain prose, not the defect's internal label.
+    expect(brief).toContain("same-second acts disagree");
+  });
+
+  test("no founding paragraph, no section — a guided project carries zero founding noise", () => {
+    expect(renderBrief(makeInputs())).not.toContain(FOUNDING_HEADER);
+    expect(renderBrief(makeInputs({ founding: { mode: "guided" } }))).not.toContain(FOUNDING_HEADER);
+  });
+
+  test("composeBrief reads the paragraph from config, so runners never read nahel/config raw", async () => {
+    const store = await populatedWithProduct();
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await configCommand.run(
+        ["set", "founding", "--data", "mode=hands-off", "--data", `paragraph=${PARAGRAPH}`],
+        store.env,
+        store.root,
+        "human:jim",
+      );
+      expect(code).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    const brief = await briefOf(store);
+    console.log("[brief, composed founding]\n", brief);
+    expect(brief).toContain(FOUNDING_HEADER);
+    expect(brief).toContain(PARAGRAPH);
+    expect(brief).toContain("signed by: human:jim");
   });
 });
 

@@ -376,6 +376,52 @@ describe("validate — referential integrity", () => {
     expect(findings[0]!.severity).toBe("error");
     expect(findings[0]!.message).toContain("zzzzzzzz");
   });
+
+  test("an observation whose item ref names a missing item is an error naming both ids", async () => {
+    const fixture = await setupFixture(dirs);
+    // A real journaled source keeps refs.observation-sources quiet, so the
+    // ONLY defect under test is the dangling item ref.
+    const source = await appendEvent(fixture.layout, fixture.env, {
+      type: "note",
+      actor: fixture.agent.actor,
+      payload: {},
+      session: fixture.agent.session,
+    });
+    const observation = makeObservation(fixture.env, [source.id], { item: "zzzzzzzz" });
+    await writeObservation(fixture.layout, observation, "a fact about a vanished item\n");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[observation-item, dangling]", findings);
+    const dangling = findingsFor(findings, "refs.observation-item");
+    expect(dangling).toHaveLength(1);
+    expect(dangling[0]!.severity).toBe("error");
+    expect(dangling[0]!.path).toBe(observationPath(fixture.layout, observation.id));
+    expect(dangling[0]!.message).toContain(observation.id);
+    expect(dangling[0]!.message).toContain("zzzzzzzz");
+    expect(dangling[0]!.fix).toBeDefined();
+    expect(findingsFor(findings, "refs.observation-sources")).toEqual([]);
+  });
+
+  test("an observation whose item ref names an existing item is silent", async () => {
+    const fixture = await setupFixture(dirs);
+    const item = await createItem(fixture, { name: "observed-item" });
+    const source = await appendEvent(fixture.layout, fixture.env, {
+      type: "note",
+      actor: fixture.agent.actor,
+      item: item.id,
+      payload: {},
+      session: fixture.agent.session,
+    });
+    await writeObservation(
+      fixture.layout,
+      makeObservation(fixture.env, [source.id], { item: item.id }),
+      "a fact about a live item\n",
+    );
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[observation-item, resolvable]", findings);
+    expect(findings).toEqual([]);
+  });
 });
 
 describe("validate — prd references (item.prd-missing, F1/ADR-0013)", () => {
@@ -542,6 +588,317 @@ describe("validate — merge-authority provenance (merge.unauthorized, F3.4)", (
 
     await setMergeAuthority(fixture, "human", "agent:opus-implementer");
     expect(findingsFor(await validateStore(fixture.layout), "merge.unauthorized")).toEqual([]);
+  });
+});
+
+/**
+ * Founding signature provenance (PRD F9.5, nahel/workflows/inception.md): the
+ * merge.unauthorized analogue for the founding act. "Only the hands-off
+ * paragraph carries authority, so only its act's actor is load-bearing: the
+ * human-attributed `config.updated` act that wrote the `founding` section IS
+ * the paragraph's signature. An agent-run founding act signs nothing."
+ */
+describe("validate — founding signature provenance (founding.unsigned, F9.5)", () => {
+  const PARAGRAPH = "Ship a deterministic CLI for durable project state.";
+
+  /** Drive the real `nahel config set founding` as the given actor. */
+  async function setFounding(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    data: string[],
+    actorSpec: string,
+  ): Promise<void> {
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const args = ["set", "founding"];
+      for (const entry of data) args.push("--data", entry);
+      const code = await configCommand.run(args, fixture.env, fixture.root, actorSpec);
+      if (code !== 0) throw new Error(`config set founding failed (${actorSpec})`);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  }
+
+  test("a hands-off founding recorded by a HUMAN is silent — that act IS the signature", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "human:jim");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[founding, human-recorded]", findings);
+    expect(findingsFor(findings, "founding.unsigned")).toEqual([]);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a hands-off founding recorded by an AGENT warns that the paragraph is unsigned", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "agent:claude-code");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[founding, agent-recorded]", findings);
+    const unsigned = findingsFor(findings, "founding.unsigned");
+    expect(unsigned).toHaveLength(1);
+    expect(unsigned[0]!.severity).toBe("warning");
+    expect(unsigned[0]!.path).toBe(fixture.layout.configPath);
+    expect(unsigned[0]!.message).toContain("claude-code");
+    expect(unsigned[0]!.message).toContain("unsigned");
+    // The fix names the ONE act that repairs it: a HUMAN re-running the set.
+    expect(unsigned[0]!.fix).toContain("human");
+    expect(unsigned[0]!.fix).toContain("nahel config set founding");
+    // Never an error: an unsigned founding is a gate refusal, not corruption.
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a hand-edited founding with no journaled act warns — unprovable is not signed", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: PARAGRAPH },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, unrecorded]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.fix).toContain("nahel config set founding");
+  });
+
+  test("a GUIDED founding recorded by an agent is silent — only the paragraph carries authority", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=guided"], "agent:claude-code");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[founding, guided]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a human re-record after an agent's clears the warning — the prescribed fix works end to end", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "agent:claude-code");
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toHaveLength(1);
+
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
+
+  test("a project with no founding section at all never warns — nothing was founded hands-off", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
+
+  test("a paragraph edited by hand AFTER the human act warns — the act signs its own bytes, not later text", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+
+    // The journal still holds the human act; only the committed text moved.
+    // Laundering a hand-edit through an old signature is the one thing the
+    // signature exists to prevent (F9.5).
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: "Something the human never signed." },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, text swapped under the signature]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    // The act exists: name it, and say what is actually wrong with it. The
+    // no-act wording belongs to a genuinely empty journal, and pointing the
+    // reader at a missing act would send them hunting for the wrong thing.
+    expect(findings[0]!.message).not.toContain("no journaled config mutation records it");
+    expect(findings[0]!.message).toContain("human:jim");
+    expect(findings[0]!.message).toContain("records different paragraph bytes");
+    // A human act DID sign its own bytes, so signed-then-moved is the truth here.
+    expect(findings[0]!.message).toContain("after it was signed");
+  });
+
+  test("an AGENT mismatch never says the text moved 'after it was signed' — an agent act signs nothing", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "agent:claude-code");
+
+    // Same shape as the human case, but the act was agent-run. Mismatch still
+    // outranks actor kind — what changes is what may be CLAIMED about it: the
+    // agent act signed nothing (F9.5), so there is no signature for the text
+    // to have moved out from under.
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: "Text nobody ever signed." },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, agent mismatch]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("agent:claude-code");
+    expect(findings[0]!.message).toContain("records different paragraph bytes");
+    // The false claim: asserting a signature that never existed.
+    expect(findings[0]!.message).not.toContain("after it was signed");
+    // What is true instead — the act was agent-run, so it signed nothing.
+    expect(findings[0]!.message).toContain("agent-run");
+    expect(findings[0]!.message).toContain("signs nothing");
+  });
+
+  test("a genuinely empty journal keeps the no-act wording — the two states stay distinguishable", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: PARAGRAPH },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, no act at all]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("no journaled config mutation records it");
+    expect(findings[0]!.message).not.toContain("records different paragraph bytes");
+  });
+
+  /**
+   * Ambiguity has TWO disagreement modes since the paragraph bytes joined the
+   * fail-safe: same-second acts can differ on who acted, on what they
+   * recorded, or on both. The warning must describe the tie at hand rather
+   * than assert one mode for all of them.
+   */
+  describe("same-second ties name the disagreement that actually applies", () => {
+    /** Two same-second founding acts, straight into the journal. */
+    async function tie(
+      fixture: Awaited<ReturnType<typeof setupFixture>>,
+      acts: { actor: { kind: "human" | "agent"; id: string }; paragraph: string }[],
+    ): Promise<void> {
+      const frozen = { now: () => "2026-07-25T12:00:00Z", random: fixture.env.random };
+      for (const act of acts) {
+        await appendEvent(fixture.layout, frozen, {
+          type: "config.updated",
+          actor: act.actor,
+          session: newSessionSegmentId(fixture.env),
+          payload: {
+            section: "founding",
+            value: { mode: "hands-off", paragraph: act.paragraph },
+          },
+        });
+      }
+    }
+
+    /** Commit a hands-off paragraph without journaling anything. */
+    async function commitParagraph(
+      fixture: Awaited<ReturnType<typeof setupFixture>>,
+      paragraph: string,
+    ): Promise<void> {
+      const config = await readConfig(fixture.layout);
+      await writeConfig(fixture.layout, {
+        ...config,
+        founding: { mode: "hands-off", paragraph },
+      });
+    }
+
+    test("two same-second HUMAN acts recording DIFFERENT paragraphs say so — not 'different actor kinds'", async () => {
+      const fixture = await setupFixture(dirs);
+      await commitParagraph(fixture, PARAGRAPH);
+      await tie(fixture, [
+        { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH },
+        { actor: { kind: "human", id: "dana" }, paragraph: "A rival paragraph, same second." },
+      ]);
+
+      const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+      console.log("[founding, tie on paragraph]", findings);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.severity).toBe("warning");
+      expect(findings[0]!.message).toContain("same second");
+      expect(findings[0]!.message).toContain("different paragraphs");
+      // Both humans: asserting an actor-kind disagreement here would be false.
+      expect(findings[0]!.message).not.toContain("different actor kinds");
+      expect(findings[0]!.message).toContain("human:jim");
+      expect(findings[0]!.message).toContain("human:dana");
+    });
+
+    test("a tie on ACTOR KIND alone still says actor kind", async () => {
+      const fixture = await setupFixture(dirs);
+      await commitParagraph(fixture, PARAGRAPH);
+      await tie(fixture, [
+        { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH },
+        { actor: { kind: "agent", id: "claude-code" }, paragraph: PARAGRAPH },
+      ]);
+
+      const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+      console.log("[founding, tie on actor kind]", findings);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.message).toContain("different actor kinds");
+      expect(findings[0]!.message).not.toContain("different paragraphs");
+    });
+
+    test("a tie disagreeing on BOTH names both", async () => {
+      const fixture = await setupFixture(dirs);
+      await commitParagraph(fixture, PARAGRAPH);
+      await tie(fixture, [
+        { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH },
+        {
+          actor: { kind: "agent", id: "claude-code" },
+          paragraph: "An agent's rival paragraph, same second.",
+        },
+      ]);
+
+      const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+      console.log("[founding, tie on both]", findings);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.message).toContain("different actor kinds");
+      expect(findings[0]!.message).toContain("different paragraphs");
+    });
+  });
+
+  test("a whitespace-bearing paragraph recorded through the JSON --data form stays silent end to end", async () => {
+    // The byte comparison must survive the real write path — JSON payload,
+    // YAML config, and back — or every honest hands-off founding would warn.
+    // The JSON --data form is the one that preserves outer whitespace, which
+    // is exactly why the finding's fix prescribes it.
+    const fixture = await setupFixture(dirs);
+    const paragraph = "  Ship it deterministically.\n\n  Never guess.  ";
+    await setFounding(fixture, [JSON.stringify({ mode: "hands-off", paragraph })], "human:jim");
+
+    const config = await readConfig(fixture.layout);
+    console.log("[founding, verbatim round trip]", JSON.stringify(config.founding));
+    expect(config.founding?.paragraph).toBe(paragraph);
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
+  });
+
+  test("the prescribed fix is the byte-preserving JSON form — key=value would re-sign DIFFERENT bytes", async () => {
+    const fixture = await setupFixture(dirs);
+    const paragraph = "  Outer whitespace is load-bearing in this paragraph.  ";
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph },
+    });
+
+    const finding = findingsFor(await validateStore(fixture.layout), "founding.unsigned")[0]!;
+    console.log("[founding, prescribed fix]", finding.fix);
+    // The `--data key=value` dialect trims each entry's outer whitespace
+    // (nahel/workflows/inception.md), so prescribing it would have the human
+    // re-sign a paragraph that is not the one on disk. Only the JSON form
+    // passes the text through untouched.
+    expect(finding.fix).toContain('--data \'{"mode": "hands-off"');
+    expect(finding.fix).toContain('"paragraph"');
+    expect(finding.fix).not.toContain("--data paragraph=");
+    expect(finding.fix).not.toContain("--data mode=hands-off");
+
+    // Why it matters, demonstrated: the trimming form silently rewrites the
+    // very bytes under signature. parseDataEntries trims the whole ENTRY
+    // ("paragraph=  text  "), so the value keeps its leading whitespace and
+    // loses its trailing whitespace — a different paragraph either way.
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${paragraph}`], "human:jim");
+    const trimmed = (await readConfig(fixture.layout)).founding?.paragraph;
+    console.log("[founding, key=value re-sign]", JSON.stringify(trimmed));
+    expect(trimmed).not.toBe(paragraph);
+    expect(trimmed).toBe(paragraph.trimEnd());
+
+    // The JSON form the fix prescribes signs the paragraph as written.
+    await setFounding(fixture, [JSON.stringify({ mode: "hands-off", paragraph })], "human:jim");
+    expect((await readConfig(fixture.layout)).founding?.paragraph).toBe(paragraph);
+    expect(findingsFor(await validateStore(fixture.layout), "founding.unsigned")).toEqual([]);
   });
 });
 
@@ -844,6 +1201,81 @@ describe("validate — investigation references (item.investigation-missing, F5)
     const ids = missing.map((finding) => finding.message).join("\n");
     expect(ids).toContain(a.id);
     expect(ids).toContain(b.id);
+  });
+});
+
+describe("validate — done-parent children rollup (item.children-unfinished)", () => {
+  test("a done parent with an unfinished child warns, naming the parent and every offending child", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, { name: "rollup-epic", type: "plan", status: "done" });
+    const open = await createItem(fixture, {
+      name: "rollup-open",
+      parent: epic.id,
+      status: "in-progress",
+    });
+    const backlog = await createItem(fixture, {
+      name: "rollup-backlog",
+      parent: epic.id,
+      status: "backlog",
+    });
+    const finished = await createItem(fixture, {
+      name: "rollup-finished",
+      parent: epic.id,
+      status: "done",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished]", findings);
+    const rollup = findingsFor(findings, "item.children-unfinished");
+    expect(rollup).toHaveLength(1);
+    expect(rollup[0]!.severity).toBe("warning");
+    expect(rollup[0]!.path).toBe(itemPath(fixture.layout, epic.id));
+    expect(rollup[0]!.message).toContain(epic.id);
+    expect(rollup[0]!.message).toContain(`${open.id} (in-progress)`);
+    expect(rollup[0]!.message).toContain(`${backlog.id} (backlog)`);
+    // The done child is not an offender and is never listed.
+    expect(rollup[0]!.message).not.toContain(finished.id);
+    expect(rollup[0]!.fix).toBeDefined();
+    // An inconsistent rollup is drift, never corruption: no errors at all.
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a done parent whose children are all done is silent", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, { name: "closed-epic", type: "plan", status: "done" });
+    await createItem(fixture, { name: "closed-a", parent: epic.id, status: "done" });
+    await createItem(fixture, { name: "closed-b", parent: epic.id, status: "done" });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished, all done]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a done parent whose remaining children were dropped is silent — dropped is settled, not pending", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, { name: "trimmed-epic", type: "plan", status: "done" });
+    await createItem(fixture, { name: "trimmed-shipped", parent: epic.id, status: "done" });
+    await createItem(fixture, { name: "trimmed-cut", parent: epic.id, status: "dropped" });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished, dropped child]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a parent that is NOT done never warns, however mixed its children are", async () => {
+    const fixture = await setupFixture(dirs);
+    const epic = await createItem(fixture, {
+      name: "live-epic",
+      type: "plan",
+      status: "in-progress",
+    });
+    await createItem(fixture, { name: "live-a", parent: epic.id, status: "done" });
+    await createItem(fixture, { name: "live-b", parent: epic.id, status: "blocked" });
+    await createItem(fixture, { name: "live-c", parent: epic.id, status: "backlog" });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[children-unfinished, live parent]", findings);
+    expect(findings).toEqual([]);
   });
 });
 

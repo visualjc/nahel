@@ -1,9 +1,12 @@
 import {
+  foundingSignatureStatus,
   readMergeAuthority,
   resolveGovernance,
+  type FoundingSignatureStatus,
   type MergeAuthorityStatus,
 } from "../governance/authority";
 import type {
+  Actor,
   Config,
   JournalEvent,
   ObservationFrontmatter,
@@ -24,7 +27,9 @@ import { renderStatus } from "./status";
 /**
  * `nahel brief` view (PRD F7): the deterministic onboarding pack. Required
  * sections in FIXED order — constitution extract (verbatim by the frozen
- * heading convention, never summarized), knowledge & canonical-truth
+ * heading convention, never summarized), the signed founding paragraph when
+ * one exists (F9.5, so the per-dispatch signed-core check reads the brief
+ * rather than nahel/config raw), knowledge & canonical-truth
  * pointers, governance & merge authority (the operative policy, Phase 2
  * F2.2/F3.4), item statuses (renderStatus composed), recent activity
  * (renderProgress composed), pending human decisions, QA state (open `qa`
@@ -62,6 +67,11 @@ export interface BriefInputs {
   productPath: string;
   contextPath: string;
   adrPath: string;
+  /**
+   * Founding section from config, or undefined. Only a founding carrying a
+   * PARAGRAPH renders a section — its signature is resolved from `events`.
+   */
+  founding?: Config["founding"];
   /** Governance section from config, or undefined — resolved for display. */
   governance?: Config["governance"];
   /** Merge authority in force, with its journal provenance (F3.4). */
@@ -145,6 +155,66 @@ function constitutionBody(inputs: BriefInputs): string {
     );
   }
   return parts.join("\n\n");
+}
+
+/**
+ * Optional signed-founding body (PRD F9.5): under a hands-off founding the
+ * paragraph is the constitution's only human-signed content, and it is checked
+ * before EVERY implementation dispatch — so it belongs in the brief, verbatim,
+ * rather than making each runner read nahel/config raw. Rendered whenever a
+ * paragraph exists; null otherwise, so a guided project carries zero founding
+ * noise (the routing-section precedent).
+ *
+ * The attribution line is the whole point of the second line: an UNSIGNED
+ * paragraph authorizes nothing (validate's `founding.unsigned`), and shown
+ * without that mark it would read as signed constitutional text.
+ *
+ * No truncation rung touches this section. The paragraph is stored verbatim
+ * and compared against verbatim (F9.5) — a clipped signature is not a
+ * signature, and one paragraph costs the budget far less than the PRODUCT.md
+ * extract the ladder already clips.
+ */
+function foundingBody(
+  founding: Config["founding"],
+  events: readonly JournalEvent[],
+): string | null {
+  const status = foundingSignatureStatus(founding, events);
+  if (status === undefined) return null;
+  return `${founding!.paragraph}\n${foundingAttribution(status)}`;
+}
+
+/**
+ * The attribution line: who signed, or why nobody did. Each defect states the
+ * journal fact it actually rests on — an ambiguous signature HAS acts (they
+ * disagree) and a mismatching one HAS an act (it records other bytes), so
+ * reporting either as "none recorded" would be both untrue and a pointer at
+ * the wrong repair. The no-act wording is reserved for an empty journal.
+ *
+ * A mismatch's wording turns on WHO acted: only a human act ever signed
+ * anything (F9.5), so only there can the text have moved out from under a
+ * signature — claiming that of an agent act would assert a signature it never
+ * had, and read as though a human's intent had been overwritten.
+ */
+function foundingAttribution(status: FoundingSignatureStatus): string {
+  const named = (entry: { event: string; actor: Actor }): string =>
+    `${entry.actor.kind}:${entry.actor.id} (act ${entry.event})`;
+  if (status.signed) return `signed by: ${named(status.recordedBy!)}`;
+
+  const cause =
+    status.defect === "ambiguous"
+      ? `${(status.tied ?? []).length} same-second acts disagree: ${(status.tied ?? [])
+          .map(named)
+          .join(", ")}`
+      : status.defect === "paragraph-mismatch"
+        ? `${named(status.recordedBy!)} records different paragraph bytes${
+            status.recordedBy!.actor.kind === "human"
+              ? " — the text moved after it was signed"
+              : " and, being agent-run, signed nothing anyway"
+          }`
+        : status.recordedBy === undefined
+          ? "no journaled act records it"
+          : `recorded by ${named(status.recordedBy)}`;
+  return `UNSIGNED — ${cause}; it authorizes nothing until a human re-records it (nahel validate: founding.unsigned)`;
 }
 
 /** Section 2 body: configured knowledge paths plus every nahel state layer. */
@@ -374,9 +444,14 @@ function assemble(
   const sections = [
     "nahel brief",
     `== constitution (${inputs.productPath}) ==\n${constitution}`,
+  ];
+  // Optional, with the constitution it IS: the signed founding paragraph (F9.5).
+  const founding = foundingBody(inputs.founding, inputs.events);
+  if (founding !== null) sections.push(`== signed founding paragraph (nahel/config) ==\n${founding}`);
+  sections.push(
     `== knowledge & canonical truth ==\n${knowledgeBody(inputs)}`,
     `== governance & merge authority ==\n${governanceBody(inputs)}`,
-  ];
+  );
   // Optional, right after governance: advisory routing map when configured.
   const routing = routingBody(inputs.routing);
   if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
@@ -476,6 +551,7 @@ export async function composeBrief(
     productPath: config.knowledge.product,
     contextPath: config.knowledge.context,
     adrPath: config.knowledge.adr,
+    founding: config.founding,
     governance: config.governance,
     merge: await readMergeAuthority(layout, config),
     routing: config.routing,

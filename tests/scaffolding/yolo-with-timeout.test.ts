@@ -46,10 +46,14 @@ interface RunResult {
 }
 
 /** Run a bash snippet that has sourced the shim, under an exact PATH. */
-async function runWithPath(snippet: string, path: string, stdin?: string): Promise<RunResult> {
+async function runWithPath(
+  snippet: string,
+  path: string,
+  opts: { stdin?: string; env?: Record<string, string> } = {},
+): Promise<RunResult> {
   const proc = Bun.spawn(["bash", "-c", `source ${JSON.stringify(LIB)}\n${snippet}`], {
-    env: { PATH: path },
-    stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
+    env: { PATH: path, ...opts.env },
+    stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -63,6 +67,56 @@ async function runWithPath(snippet: string, path: string, stdin?: string): Promi
 
 /** Tools the fallback watchdog and these snippets need. */
 const FALLBACK_TOOLS = ["bash", "perl", "sleep", "cat", "printf"];
+
+/** TERM→KILL grace the shim promises, identical on both paths. */
+const KILL_AFTER_SECONDS = 2;
+
+/** Pids that must not survive a test; killed in afterEach so a red run leaks nothing. */
+const strayPids: number[] = [];
+
+afterEach(() => {
+  for (const pid of strayPids.splice(0)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone — that is the outcome the tests want anyway
+    }
+  }
+});
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Poll until `pid` is gone; signals are async, so a bare check would flake. */
+async function died(pid: number, withinMs = 4000): Promise<boolean> {
+  const deadline = Date.now() + withinMs;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return true;
+    await Bun.sleep(25);
+  }
+  return false;
+}
+
+async function readPid(file: string): Promise<number> {
+  const pid = Number.parseInt((await Bun.file(file).text()).trim(), 10);
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`no pid recorded in ${file}`);
+  strayPids.push(pid);
+  return pid;
+}
+
+/**
+ * A child that ignores SIGTERM outright, so only the hard KILL can stop it.
+ * Records its own pid so the test can prove it actually died. Single-quoted
+ * for bash and free of apostrophes so the perl body survives verbatim.
+ */
+const TERM_IGNORING_CHILD =
+  `perl -e '$SIG{TERM} = "IGNORE"; open my $f, ">", $ENV{PIDFILE} or die; print $f $$; close $f; sleep 60;'`;
 
 describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
   test("returns the command's own exit status when it finishes in time", async () => {
@@ -90,12 +144,14 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
     expect(result.stdout.trim()).toBe("rc=124");
     // Must not have waited out the full 30s sleep; must have waited ~1s.
     expect(elapsed).toBeGreaterThanOrEqual(900);
-    expect(elapsed).toBeLessThan(15000);
+    // `sleep` dies on TERM, so the KILL grace must not be charged to it —
+    // blind-sleeping the grace would put this at 1s + KILL_AFTER_SECONDS.
+    expect(elapsed).toBeLessThan((1 + KILL_AFTER_SECONDS) * 1000 - 500);
   });
 
   test("passes stdin through to the command", async () => {
     const bin = await sandboxBin(FALLBACK_TOOLS);
-    const result = await runWithPath(`with_timeout 10 cat`, bin, "piped payload\n");
+    const result = await runWithPath(`with_timeout 10 cat`, bin, { stdin: "piped payload\n" });
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("piped payload\n");
@@ -112,31 +168,159 @@ describe("with-timeout.sh — no `timeout` on PATH (stock macOS)", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe(`[a b]["c"][$HOME]`);
   });
+
+  test("escalates to KILL, so a child that ignores TERM still dies at the hard cap", async () => {
+    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const scratch = await makeTempDir("nahel-yolo-pid-");
+    tempDirs.push(scratch);
+    const pidFile = join(scratch, "child.pid");
+
+    const started = Date.now();
+    const result = await runWithPath(`with_timeout 1 ${TERM_IGNORING_CHILD}; echo "rc=$?"`, bin, {
+      env: { PIDFILE: pidFile },
+    });
+    const elapsed = Date.now() - started;
+
+    expect(result.stdout.trim()).toBe("rc=124");
+    expect(await died(await readPid(pidFile))).toBe(true);
+    // 1s cap + the grace, not the child's 60s sleep.
+    expect(elapsed).toBeLessThan((1 + KILL_AFTER_SECONDS + 6) * 1000);
+  }, 30000);
+
+  test("kills the whole process tree, so descendants do not outlive the timeout", async () => {
+    const bin = await sandboxBin(FALLBACK_TOOLS);
+    const scratch = await makeTempDir("nahel-yolo-desc-");
+    tempDirs.push(scratch);
+    const descFile = join(scratch, "descendant.pid");
+
+    // The direct child is bash; `sleep` is its grandchild. Signalling only the
+    // direct pid reaps bash and orphans the sleep.
+    const result = await runWithPath(
+      `with_timeout 1 bash -c 'sleep 60 & echo $! > "$DESCFILE"; wait'; echo "rc=$?"`,
+      bin,
+      { env: { DESCFILE: descFile } },
+    );
+
+    expect(result.stdout.trim()).toBe("rc=124");
+    expect(await died(await readPid(descFile))).toBe(true);
+  }, 30000);
 });
 
+/**
+ * Stand-in for the GNU `timeout(1)` binary this host does not have. It is
+ * poll-based on purpose — a different mechanism from the shim's alarm-based
+ * watchdog, so these tests are not the implementation checking itself. It
+ * records its argv, honours an optional `-k GRACE`, and returns 124 on expiry
+ * as coreutils documents. Given NO `-k` it never escalates past TERM and bails
+ * out with 199, leaving the child alive: exactly the defect under test.
+ */
+async function fakeTimeoutBin(argvRecord: string): Promise<string> {
+  const bin = await sandboxBin(FALLBACK_TOOLS);
+  const perl = Bun.which("perl");
+  if (!perl) throw new Error("test prerequisite missing from host PATH: perl");
+  const src = `#!${perl}
+use strict;
+use warnings;
+use POSIX ();
+
+open my $rec, ">", $ENV{FAKE_TIMEOUT_ARGV} or die "record argv: $!";
+print $rec join("\\n", @ARGV), "\\n";
+close $rec;
+
+my @a = @ARGV;
+my $grace;
+if (@a >= 2 and $a[0] eq "-k") { shift @a; $grace = shift @a; }
+my $secs = shift @a;
+
+my $pid = fork();
+die "fork: $!" unless defined $pid;
+if ($pid == 0) { POSIX::setpgid(0, 0); exec { $a[0] } @a; exit 127; }
+POSIX::setpgid($pid, $pid);
+
+my $phase = 0;
+my $next = time + $secs;
+while (1) {
+  my $r = waitpid($pid, POSIX::WNOHANG());
+  if ($r == $pid) {
+    my $st = $?;
+    exit($phase ? 124 : ($st & 127 ? 128 + ($st & 127) : $st >> 8));
+  }
+  my $now = time;
+  if ($phase == 0 and $now >= $next) {
+    kill "TERM", -$pid;
+    $phase = 1;
+    $next = $now + (defined $grace ? $grace : 6);
+  } elsif ($phase == 1 and $now >= $next) {
+    exit 199 unless defined $grace;
+    kill "KILL", -$pid;
+    $phase = 2;
+    $next = $now + 5;
+  } elsif ($phase == 2 and $now >= $next) {
+    exit 198;
+  }
+  select undef, undef, undef, 0.05;
+}
+`;
+  await writeFile(join(bin, "timeout"), src, { mode: 0o755 });
+  return bin;
+}
+
 describe("with-timeout.sh — `timeout` present on PATH", () => {
-  /** A `timeout` stand-in that records it was called, then drops the duration. */
-  async function binWithFakeTimeout(sentinel: string): Promise<string> {
-    const bin = await sandboxBin([...FALLBACK_TOOLS, "touch"]);
-    const shim = join(bin, "timeout");
-    await writeFile(shim, `#!/bin/bash\ntouch ${JSON.stringify(sentinel)}\nshift\nexec "$@"\n`, {
-      mode: 0o755,
-    });
-    return bin;
+  async function setup(): Promise<{ bin: string; argvRecord: string }> {
+    const scratch = await makeTempDir("nahel-yolo-argv-");
+    tempDirs.push(scratch);
+    const argvRecord = join(scratch, "timeout.argv");
+    return { bin: await fakeTimeoutBin(argvRecord), argvRecord };
+  }
+
+  async function recordedArgv(file: string): Promise<string[]> {
+    return (await Bun.file(file).text()).split("\n").slice(0, -1);
   }
 
   test("delegates to the real `timeout` when it is installed", async () => {
-    const scratch = await makeTempDir("nahel-yolo-sentinel-");
-    tempDirs.push(scratch);
-    const sentinel = join(scratch, "timeout-was-called");
-    const bin = await binWithFakeTimeout(sentinel);
-
-    const result = await runWithPath(`with_timeout 10 printf 'delegated\\n'`, bin);
+    const { bin, argvRecord } = await setup();
+    const result = await runWithPath(`with_timeout 10 printf 'delegated\\n'`, bin, {
+      env: { FAKE_TIMEOUT_ARGV: argvRecord },
+    });
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("delegated\n");
-    expect(await Bun.file(sentinel).exists()).toBe(true);
+    // The last argv entry is printf's literal two-char `\n` format, not a newline.
+    expect(await recordedArgv(argvRecord)).toEqual([
+      "-k",
+      String(KILL_AFTER_SECONDS),
+      "10",
+      "printf",
+      String.raw`delegated\n`,
+    ]);
   });
+
+  test("asks `timeout` for a KILL deadline, with the same grace as the fallback", async () => {
+    const { bin, argvRecord } = await setup();
+    await runWithPath(`with_timeout 10 printf 'x'`, bin, { env: { FAKE_TIMEOUT_ARGV: argvRecord } });
+
+    // Without -k, a TERM-ignoring child runs forever under GNU timeout — the
+    // two paths would then promise different things.
+    expect((await recordedArgv(argvRecord)).slice(0, 3)).toEqual([
+      "-k",
+      String(KILL_AFTER_SECONDS),
+      "10",
+    ]);
+  });
+
+  test("a TERM-ignoring child dies at the hard cap, and 124 survives delegation", async () => {
+    const { bin, argvRecord } = await setup();
+    const scratch = await makeTempDir("nahel-yolo-pid-");
+    tempDirs.push(scratch);
+    const pidFile = join(scratch, "child.pid");
+
+    const result = await runWithPath(`with_timeout 1 ${TERM_IGNORING_CHILD}; echo "rc=$?"`, bin, {
+      env: { FAKE_TIMEOUT_ARGV: argvRecord, PIDFILE: pidFile },
+    });
+
+    expect(result.stdout.trim()).toBe("rc=124");
+    expect(await died(await readPid(pidFile))).toBe(true);
+  }, 30000);
 });
 
 describe("test-current.sh under a PATH without `timeout`", () => {

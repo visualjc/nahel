@@ -712,6 +712,35 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     expect(findings[0]!.message).not.toContain("no journaled config mutation records it");
     expect(findings[0]!.message).toContain("human:jim");
     expect(findings[0]!.message).toContain("records different paragraph bytes");
+    // A human act DID sign its own bytes, so signed-then-moved is the truth here.
+    expect(findings[0]!.message).toContain("after it was signed");
+  });
+
+  test("an AGENT mismatch never says the text moved 'after it was signed' — an agent act signs nothing", async () => {
+    const fixture = await setupFixture(dirs);
+    await setFounding(fixture, ["mode=hands-off", `paragraph=${PARAGRAPH}`], "agent:claude-code");
+
+    // Same shape as the human case, but the act was agent-run. Mismatch still
+    // outranks actor kind — what changes is what may be CLAIMED about it: the
+    // agent act signed nothing (F9.5), so there is no signature for the text
+    // to have moved out from under.
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: "Text nobody ever signed." },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, agent mismatch]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("agent:claude-code");
+    expect(findings[0]!.message).toContain("records different paragraph bytes");
+    // The false claim: asserting a signature that never existed.
+    expect(findings[0]!.message).not.toContain("after it was signed");
+    // What is true instead — the act was agent-run, so it signed nothing.
+    expect(findings[0]!.message).toContain("agent-run");
+    expect(findings[0]!.message).toContain("signs nothing");
   });
 
   test("a genuinely empty journal keeps the no-act wording — the two states stay distinguishable", async () => {

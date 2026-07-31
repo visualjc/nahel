@@ -343,6 +343,36 @@ describe("renderBrief — the signed founding paragraph (F9.5)", () => {
     expect(brief).toContain("human:jim");
     expect(brief).toContain("f0f0f0f3");
     expect(brief).toContain("records different paragraph bytes");
+    // A human act DID sign its own bytes, so signed-then-moved is the truth here.
+    expect(brief).toContain("after it was signed");
+  });
+
+  test("an AGENT mismatch never claims the text moved after signing — nothing was ever signed", () => {
+    // An agent-run founding act signs nothing (F9.5). Saying the text "moved
+    // after it was signed" asserts a signature that never existed, which reads
+    // as though a human's intent had been overwritten.
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: "The paragraph as it stands on disk today." },
+        events: [
+          {
+            ...foundingAct("agent", "claude-code"),
+            id: "f0f0f0f4",
+            payload: {
+              section: "founding",
+              value: { mode: "hands-off", paragraph: "Whatever the agent recorded back then." },
+            },
+          },
+        ],
+      }),
+    );
+    console.log("[brief, agent mismatch]\n", brief);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).toContain("agent:claude-code");
+    expect(brief).toContain("f0f0f0f4");
+    expect(brief).toContain("records different paragraph bytes");
+    expect(brief).not.toContain("after it was signed");
+    expect(brief).toContain("signed nothing");
   });
 
   test("an AMBIGUOUS signature names the tied acts — never the false claim that none exists", () => {

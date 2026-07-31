@@ -218,9 +218,16 @@ export function mergeAuthorityStatus(
 export type FoundingSignatureDefect =
   /** The config mutation that recorded it was made by an agent actor. */
   | "agent-recorded"
-  /** No journaled config mutation records it — provenance is unprovable. */
+  /**
+   * The latest founding act records DIFFERENT paragraph bytes than config
+   * holds — the text moved after it was signed. Distinct from `unrecorded`:
+   * the act exists and `recordedBy` names it, so callers must say "this act
+   * records other bytes", never "no act exists".
+   */
+  | "paragraph-mismatch"
+  /** No journaled config mutation records it at all — nothing to point at. */
   | "unrecorded"
-  /** Same-second recorders of different actor kinds; ordering cannot decide. */
+  /** Same-second acts that disagree on actor kind or bytes; ordering cannot decide. */
   | "ambiguous";
 
 /** Whether the founding paragraph is human-signed, and the act that decided it. */
@@ -280,14 +287,18 @@ export function foundingSignatureStatus(
     return { signed: false, tied: finalists.map(attribution), defect: "ambiguous" };
   }
 
+  if (latest === undefined) return { signed: false, defect: "unrecorded" };
+
   // The act signs the bytes ITS OWN payload carries. A latest act recording
   // some OTHER text does not sign what config holds now — the paragraph moved
-  // out from under the signature (a hand edit, a lost act), and unprovable is
-  // not signed.
-  if (latest === undefined || settledParagraph(latest) !== founding.paragraph) {
-    return { signed: false, defect: "unrecorded" };
-  }
+  // out from under the signature (a hand edit, a lost act). The act is kept in
+  // the status: it exists, and callers must name it rather than claim none
+  // does. Mismatch outranks actor kind — an act recording other bytes says
+  // nothing about THIS paragraph, whoever made it.
   const recordedBy = attribution(latest);
+  if (settledParagraph(latest) !== founding.paragraph) {
+    return { signed: false, recordedBy, defect: "paragraph-mismatch" };
+  }
   if (latest.actor.kind !== "human") {
     return { signed: false, recordedBy, defect: "agent-recorded" };
   }

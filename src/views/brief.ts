@@ -186,8 +186,9 @@ function foundingBody(
 /**
  * The attribution line: who signed, or why nobody did. Each defect states the
  * journal fact it actually rests on — an ambiguous signature HAS acts (they
- * disagree), and reporting it as "none recorded" would be both untrue and a
- * pointer at the wrong repair.
+ * disagree) and a mismatching one HAS an act (it records other bytes), so
+ * reporting either as "none recorded" would be both untrue and a pointer at
+ * the wrong repair. The no-act wording is reserved for an empty journal.
  */
 function foundingAttribution(status: FoundingSignatureStatus): string {
   const named = (entry: { event: string; actor: Actor }): string =>
@@ -199,9 +200,11 @@ function foundingAttribution(status: FoundingSignatureStatus): string {
       ? `${(status.tied ?? []).length} same-second acts disagree: ${(status.tied ?? [])
           .map(named)
           .join(", ")}`
-      : status.recordedBy === undefined
-        ? "no journaled act records it"
-        : `recorded by ${named(status.recordedBy)}`;
+      : status.defect === "paragraph-mismatch"
+        ? `${named(status.recordedBy!)} records different paragraph bytes — the text moved after it was signed`
+        : status.recordedBy === undefined
+          ? "no journaled act records it"
+          : `recorded by ${named(status.recordedBy)}`;
   return `UNSIGNED — ${cause}; it authorizes nothing until a human re-records it (nahel validate: founding.unsigned)`;
 }
 

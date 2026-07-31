@@ -823,6 +823,14 @@ function foundingSignatureCause(status: FoundingSignatureStatus): string {
       `act signs nothing`
     );
   }
+  if (status.defect === "paragraph-mismatch") {
+    return (
+      `the latest founding act (event ${status.recordedBy!.event}, by ` +
+      `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id}) records different ` +
+      "paragraph bytes than nahel/config holds — the text moved after it was signed, and an " +
+      "act signs only the bytes it recorded"
+    );
+  }
   if (status.defect === "ambiguous") {
     const tied = (status.tied ?? [])
       .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)

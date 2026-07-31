@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { importCommand } from "../../src/commands/import";
@@ -66,8 +67,8 @@ async function destStore(): Promise<{ root: string; layout: StoreLayout }> {
  * A ccpm source tree that mirrors the real speed-count-game shape and adds the
  * edge cases the acceptance criteria demand.
  */
-async function ccpmSource(): Promise<string> {
-  const root = await tmp("nahel-import-src-");
+async function ccpmSource(at?: string): Promise<string> {
+  const root = at ?? (await tmp("nahel-import-src-"));
   const epicDir = join(root, ".claude", "epics", "speed-count-cards-from-seed");
   await writeDoc(
     join(epicDir, "epic.md"),
@@ -165,6 +166,56 @@ async function itemsDirBytes(layout: StoreLayout): Promise<Record<string, string
 async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
   return Array.fromAsync(readJournal(layout));
 }
+
+describe("nahel import --from-ccpm — run from a store subdirectory (store root walk-up)", () => {
+  /** A store that is also a git repo, so the store-root walk has its boundary. */
+  async function gitStore(): Promise<{ root: string; layout: StoreLayout }> {
+    const dest = await destStore();
+    expect(spawnSync("git", ["init", "-q"], { cwd: dest.root }).status).toBe(0);
+    return dest;
+  }
+
+  test("the DEFAULT source is the store root: importing in place works from a subdirectory", async () => {
+    // The real migration is run IN the ccpm repo — no --source at all. Once
+    // the store resolves from an ancestor, reading `.claude/` out of whatever
+    // subdirectory the user stood in finds nothing and imports SILENTLY zero.
+    const { root, layout } = await gitStore();
+    await ccpmSource(root);
+    const sub = join(root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    const code = await importCommand.run(["--from-ccpm"], seededEnv(), sub);
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+
+    const names = [...(await allItems(layout)).values()].map((item) => item.name).sort();
+    expect(names).toEqual([
+      "add-seeded-game-flow-to-gameviewmodel",
+      "add-url-seed-parameter-handling",
+      "investigate-flaky-shuffle-under-penetration-reshuffle",
+      "speed-count-cards-from-seed",
+    ]);
+    expect(logs.join("\n")).toContain("4 item(s) created");
+  });
+
+  test("an EXPLICIT relative --source still resolves against the launch cwd", async () => {
+    // User-supplied relative paths mean what the user typed where they typed
+    // it — the same convention prototype's --worktree-dir follows.
+    const { root, layout } = await gitStore();
+    const sub = join(root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+    await ccpmSource(join(sub, "ccpm-tree"));
+
+    const code = await importCommand.run(
+      ["--from-ccpm", "--source", "./ccpm-tree"],
+      seededEnv(),
+      sub,
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect([...(await allItems(layout)).values()]).toHaveLength(4);
+  });
+});
 
 describe("nahel import --from-ccpm — the speed-count-game migration (PRD F8)", () => {
   test("counts reconcile: one epic + three tasks become one parent feature and three parented children", async () => {

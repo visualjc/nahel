@@ -113,11 +113,21 @@ export interface MergeAuthorityStatus {
   defect?: MergeAuthorityDefect;
 }
 
-/** Payload shape `config set` journals; read defensively — events are data. */
-function settledAuthority(event: JournalEvent): unknown {
+/** One field of the section payload `config set` journals; events are data. */
+function settledField(event: JournalEvent, field: string): unknown {
   const value = event.payload["value"];
   if (typeof value !== "object" || value === null) return undefined;
-  return (value as Record<string, unknown>)["authority"];
+  return (value as Record<string, unknown>)[field];
+}
+
+/** Payload shape `config set` journals; read defensively — events are data. */
+function settledAuthority(event: JournalEvent): unknown {
+  return settledField(event, "authority");
+}
+
+/** The paragraph a founding act RECORDED — the bytes that act actually signs. */
+function settledParagraph(event: JournalEvent): unknown {
+  return settledField(event, "paragraph");
 }
 
 /**
@@ -240,9 +250,16 @@ export interface FoundingSignatureStatus {
  * The provenance rule is merge authority's, act for act (`events` must arrive
  * in the journal's total order, oldest → newest): the LAST act on the section
  * governs, "last" is decided by TIMESTAMP alone, and a same-second tie between
- * recorders of DIFFERENT actor kinds is not decided at all — a lottery must
- * never decide whether a constitution is signed. Same-kind ties carry no
- * ambiguity: there is nothing for the order to change.
+ * acts that DISAGREE — on actor kind or on the paragraph recorded — is not
+ * decided at all; a lottery must never decide whether a constitution is
+ * signed. Ties that agree on both carry no ambiguity: there is nothing for the
+ * order to change.
+ *
+ * An act signs the bytes ITS OWN payload records, compared verbatim against
+ * the committed paragraph — nothing trims, reflows, or case-folds, exactly as
+ * F9.5 stores it. Without that comparison an old human act would launder any
+ * later hand-edit of the text, which is precisely what the signature exists to
+ * prevent.
  */
 export function foundingSignatureStatus(
   founding: Config["founding"],
@@ -252,9 +269,23 @@ export function foundingSignatureStatus(
 
   const finalists = latestSectionActs("founding", events);
   const latest = finalists[finalists.length - 1];
-  if (latest === undefined) return { signed: false, defect: "unrecorded" };
-  if (finalists.some((event) => event.actor.kind !== latest.actor.kind)) {
+  if (
+    finalists.length > 1 &&
+    finalists.some(
+      (event) =>
+        event.actor.kind !== latest!.actor.kind ||
+        settledParagraph(event) !== settledParagraph(latest!),
+    )
+  ) {
     return { signed: false, tied: finalists.map(attribution), defect: "ambiguous" };
+  }
+
+  // The act signs the bytes ITS OWN payload carries. A latest act recording
+  // some OTHER text does not sign what config holds now — the paragraph moved
+  // out from under the signature (a hand edit, a lost act), and unprovable is
+  // not signed.
+  if (latest === undefined || settledParagraph(latest) !== founding.paragraph) {
+    return { signed: false, defect: "unrecorded" };
   }
   const recordedBy = attribution(latest);
   if (latest.actor.kind !== "human") {

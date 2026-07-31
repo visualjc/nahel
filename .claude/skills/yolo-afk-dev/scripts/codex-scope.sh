@@ -31,6 +31,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/with-timeout.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/with-timeout.sh"
+
 STATE_DIR="${1:-}"
 ROUND="${2:-1}"
 
@@ -58,7 +61,7 @@ PROMPT="$(cat)"
 printf '%s\n' "$PROMPT" > "$PROMPT_FILE"
 rm -f "$OUT" "$LOG" "$STATUS"
 
-if timeout 600 codex exec \
+if with_timeout 600 codex exec \
      -m gpt-5.5 \
      -c model_reasoning_effort=high \
      --json \

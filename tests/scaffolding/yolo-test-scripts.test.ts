@@ -11,12 +11,10 @@ import { makeTempDir } from "../store/helpers";
  * output JSON was written. The failing-tests path always worked; these
  * tests pin both paths.
  *
- * Real processes against real temp git repos — no mocks. `timeout(1)` is
- * absent on stock macOS (separate item y7vzx3be), and test-current.sh
- * wraps its test command in it — so these tests prepend a PATH shim whose
- * `timeout` simply drops the duration and execs the command. The shim is a
- * host dependency stand-in, not part of the system under test; timeout
- * *enforcement* is deliberately not covered here.
+ * Real processes against real temp git repos — no mocks. test-current.sh's
+ * 5-minute cap now goes through `with_timeout` (item y7vzx3be), which works
+ * with or without GNU `timeout` installed; that shim has its own coverage in
+ * yolo-with-timeout.test.ts, so these tests just run under the host PATH.
  */
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -38,7 +36,6 @@ interface ScriptResult {
 async function runScript(script: string, args: string[], cwd: string): Promise<ScriptResult> {
   const proc = Bun.spawn(["bash", script, ...args], {
     cwd,
-    env: { ...process.env, PATH: `${await timeoutShimDir()}:${process.env.PATH ?? ""}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -48,17 +45,6 @@ async function runScript(script: string, args: string[], cwd: string): Promise<S
     proc.exited,
   ]);
   return { code, stdout, stderr };
-}
-
-/** PATH dir holding a `timeout` that drops the duration and execs the command. */
-async function timeoutShimDir(): Promise<string> {
-  const dir = await makeTempDir("nahel-yolo-timeout-shim-");
-  tempDirs.push(dir);
-  const shim = join(dir, "timeout");
-  await writeFile(shim, '#!/bin/bash\nshift\nexec "$@"\n');
-  const proc = Bun.spawn(["chmod", "+x", shim], { stdout: "ignore", stderr: "ignore" });
-  await proc.exited;
-  return dir;
 }
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
@@ -110,10 +96,8 @@ describe("test-baseline.sh", () => {
     const stateDir = join(repo, ".yolo-state");
     const result = await runScript(
       BASELINE_SH,
-      // Single-quoted + `&& false` on purpose: `exit` inside the script's
-      // eval would kill the whole script, and a double quote in the test cmd
-      // trips a separate unescaped-JSON defect (item
-      // test-baseline-json-unescaped-test-cmd) — out of scope here.
+      // `&& false` rather than `exit 1`: the script `eval`s the test cmd in
+      // its own shell, so `exit` would kill the script itself.
       [stateDir, "demo-prd", "HEAD", "printf 'FAIL tests/foo.test.ts\\n' && false"],
       repo,
     );
@@ -126,6 +110,27 @@ describe("test-baseline.sh", () => {
     };
     expect(baseline.test_exit_code).toBe(1);
     expect(baseline.failures).toEqual(["FAIL tests/foo.test.ts"]);
+  });
+
+  test("test cmd containing double quotes and backslashes round-trips through valid JSON", async () => {
+    const repo = await makeFixtureRepo();
+    const stateDir = join(repo, ".yolo-state");
+    // Actual TEST_CMD string (post-TS-unescaping):
+    //   printf 'FAIL tests/say "hi" and\\ back.test.ts\n'; false
+    // …which prints:  FAIL tests/say "hi" and\ back.test.ts
+    const testCmd = `printf 'FAIL tests/say "hi" and\\\\ back.test.ts\\n'; false`;
+    const result = await runScript(BASELINE_SH, [stateDir, "demo-prd", "HEAD", testCmd], repo);
+
+    expect(result.code).toBe(0);
+    const out = join(stateDir, "prds", "demo-prd", "test-baseline.json");
+    const baseline = JSON.parse(await Bun.file(out).text()) as {
+      test_cmd: string;
+      test_exit_code: number;
+      failures: string[];
+    };
+    expect(baseline.test_cmd).toBe(testCmd);
+    expect(baseline.test_exit_code).toBe(1);
+    expect(baseline.failures).toEqual([`FAIL tests/say "hi" and\\ back.test.ts`]);
   });
 });
 
@@ -190,5 +195,26 @@ describe("test-current.sh", () => {
     expect(current.current_failures).toEqual(["FAIL tests/new.test.ts", "FAIL tests/old.test.ts"]);
     expect(current.net_new).toEqual(["FAIL tests/new.test.ts"]);
     expect(current.baseline_intersection).toEqual(["FAIL tests/old.test.ts"]);
+  });
+
+  test("test cmd containing double quotes and backslashes round-trips through valid JSON", async () => {
+    const repo = await makeFixtureRepo();
+    const stateDir = join(repo, ".yolo-state");
+    await seedBaseline(stateDir, "demo-prd", []);
+    const testCmd = `printf 'FAIL tests/say "hi" and\\\\ back.test.ts\\n'; exit 1`;
+    const result = await runScript(CURRENT_SH, [stateDir, "demo-prd", "issue-1", repo, testCmd], repo);
+
+    expect(result.code).toBe(0);
+    const out = join(stateDir, "prds", "demo-prd", "issues", "issue-1", "test-current.json");
+    const current = JSON.parse(await Bun.file(out).text()) as {
+      test_cmd: string;
+      test_exit_code: number;
+      current_failures: string[];
+      net_new: string[];
+    };
+    expect(current.test_cmd).toBe(testCmd);
+    expect(current.test_exit_code).toBe(1);
+    expect(current.current_failures).toEqual([`FAIL tests/say "hi" and\\ back.test.ts`]);
+    expect(current.net_new).toEqual([`FAIL tests/say "hi" and\\ back.test.ts`]);
   });
 });

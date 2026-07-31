@@ -300,6 +300,88 @@ describe("nahel skills — run from a subdirectory (store root walk-up)", () => 
   });
 });
 
+describe("nahel skills — CLI detection and execution agree on the directory", () => {
+  /** An initialized store in a git repo, the walk's precondition. */
+  async function storeRepo(): Promise<string> {
+    const root = await tempDir("nahel-skills-probe-");
+    git(root, "init", "-q");
+    await writeConfig(await ensureLayout(root), makeConfig());
+    return root;
+  }
+
+  /** A fake `skills` executable at `dir`, recording the directory it ran in. */
+  async function fakeSkillsAt(dir: string): Promise<string> {
+    await mkdir(dir, { recursive: true });
+    const record = join(dir, "cwd.txt");
+    await writeFile(join(dir, "skills"), `#!/bin/sh\npwd > ${JSON.stringify(record)}\n`, "utf8");
+    await chmod(join(dir, "skills"), 0o755);
+    return record;
+  }
+
+  /** A committed lock naming an absolute local repo — the spec is not the point here. */
+  async function lockAt(root: string, repo: string, sha: string): Promise<void> {
+    await writeFile(
+      join(root, "skills.lock"),
+      `${JSON.stringify({ entries: [{ repo, ref: "HEAD", sha, skills: ["tdd"] }] }, null, 2)}\n`,
+    );
+  }
+
+  test("a RELATIVE PATH entry reachable from the store root is both detected AND used", async () => {
+    const { repo, sha } = await makeSkillsRepo(["tdd"]);
+    const root = await storeRepo();
+    await lockAt(root, repo, sha);
+    const record = await fakeSkillsAt(join(root, "tools", "bin"));
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `./tools/bin:${originalPath ?? ""}`;
+    try {
+      const result = await runSkills(sub, ["restore"]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      // Detection said yes because the CLI really is on PATH *from the root* —
+      // the same directory the CLI is then run in.
+      expect(result.stdout).toContain("via skills CLI");
+      expect((await readFile(record, "utf8")).trim()).toBe(await realpath(root));
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  test("a RELATIVE PATH entry reachable only from the LAUNCH cwd is not mistaken for an available CLI", async () => {
+    // The probe must not answer for a directory the CLI will never be run in:
+    // saying yes here means execution fails from the root (a broken restore).
+    const { repo, sha } = await makeSkillsRepo(["tdd"]);
+    const root = await storeRepo();
+    await lockAt(root, repo, sha);
+    const decoy = await tempDir("nahel-skills-decoy-");
+    const decoyRecord = await fakeSkillsAt(join(decoy, "tools", "bin"));
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+
+    const originalPath = process.env.PATH;
+    const originalCwd = process.cwd();
+    process.env.PATH = `./tools/bin:${originalPath ?? ""}`;
+    process.chdir(decoy);
+    try {
+      const result = await runSkills(sub, ["restore"]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      // No CLI from the root, so the proven clone fallback runs — and the
+      // decoy binary is never invoked.
+      expect(result.stdout).not.toContain("via skills CLI");
+      expect(await readFile(decoyRecord, "utf8").catch(() => null)).toBeNull();
+      expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+        "# tdd\n",
+      );
+    } finally {
+      process.chdir(originalCwd);
+      process.env.PATH = originalPath;
+    }
+  });
+});
+
 describe("nahel skills — usage", () => {
   test("missing subcommand is a usage error, exit 1", async () => {
     const root = await makeTarget();

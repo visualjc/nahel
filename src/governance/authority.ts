@@ -238,6 +238,12 @@ export interface FoundingSignatureStatus {
   recordedBy?: { event: string; actor: Actor };
   /** The same-second recorders that could not be ordered ("ambiguous" only). */
   tied?: { event: string; actor: Actor }[];
+  /**
+   * What the tied acts disagree ABOUT ("ambiguous" only) — who acted, the
+   * paragraph they recorded, or both. Callers state the disagreement at hand
+   * rather than asserting one mode for every tie.
+   */
+  disagreement?: "actor" | "paragraph" | "both";
   /** Present exactly when `signed` is false. */
   defect?: FoundingSignatureDefect;
 }
@@ -276,15 +282,22 @@ export function foundingSignatureStatus(
 
   const finalists = latestSectionActs("founding", events);
   const latest = finalists[finalists.length - 1];
-  if (
-    finalists.length > 1 &&
-    finalists.some(
-      (event) =>
-        event.actor.kind !== latest!.actor.kind ||
-        settledParagraph(event) !== settledParagraph(latest!),
-    )
-  ) {
-    return { signed: false, tied: finalists.map(attribution), defect: "ambiguous" };
+  if (finalists.length > 1) {
+    // Both halves of the fail-safe, tracked separately so the caller can name
+    // the disagreement at hand instead of asserting one mode for every tie.
+    const actorDiffers = finalists.some((event) => event.actor.kind !== latest!.actor.kind);
+    const paragraphDiffers = finalists.some(
+      (event) => settledParagraph(event) !== settledParagraph(latest!),
+    );
+    if (actorDiffers || paragraphDiffers) {
+      return {
+        signed: false,
+        tied: finalists.map(attribution),
+        disagreement:
+          actorDiffers && paragraphDiffers ? "both" : actorDiffers ? "actor" : "paragraph",
+        defect: "ambiguous",
+      };
+    }
   }
 
   if (latest === undefined) return { signed: false, defect: "unrecorded" };

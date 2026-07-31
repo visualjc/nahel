@@ -835,9 +835,18 @@ function foundingSignatureCause(status: FoundingSignatureStatus): string {
     const tied = (status.tied ?? [])
       .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
       .join(", ");
+    // The tie's OWN disagreement — same-second acts may differ on who acted,
+    // on the paragraph they recorded, or on both, and naming a mode that does
+    // not apply would misdescribe the journal.
+    const how =
+      status.disagreement === "paragraph"
+        ? "recording different paragraphs"
+        : status.disagreement === "both"
+          ? "under different actor kinds AND recording different paragraphs"
+          : "under different actor kinds";
     return (
       `${(status.tied ?? []).length} config mutations recorded it in the same second (${tied}) ` +
-      `under different actor kinds — same-second acts from different sessions carry no ordering, ` +
+      `${how} — same-second acts from different sessions carry no ordering, ` +
       `so which one signed is undecidable`
     );
   }

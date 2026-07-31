@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandContext } from "../../src/cli";
 import { skillsCommand } from "../../src/commands/skills";
-import { ensureLayout, readSkillsLock, storeLayout } from "../../src/store/layout";
+import { ensureLayout, readSkillsLock, storeLayout, writeConfig } from "../../src/store/layout";
 import { claudeSkillsDir } from "../../src/store/skills";
-import { makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
  * `nahel skills` (PRD F7, ADR-0009): `lock` resolves skills.yaml refs to exact
@@ -34,9 +34,16 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-/** A local git repo with the named skills, returning its path + HEAD SHA. */
-async function makeSkillsRepo(skills: string[]): Promise<{ repo: string; sha: string }> {
-  const repo = await tempDir("nahel-skillsrepo-");
+/**
+ * A local git repo with the named skills, returning its path + HEAD SHA. `at`
+ * places it at a known path (a manifest naming it RELATIVELY needs that).
+ */
+async function makeSkillsRepo(
+  skills: string[],
+  at?: string,
+): Promise<{ repo: string; sha: string }> {
+  const repo = at ?? (await tempDir("nahel-skillsrepo-"));
+  await mkdir(repo, { recursive: true });
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test User");
@@ -180,6 +187,198 @@ describe("nahel skills restore", () => {
     const result = await runSkills(root, ["restore"]);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("nothing to restore");
+  });
+});
+
+describe("nahel skills — run from a subdirectory (store root walk-up)", () => {
+  /** An initialized store in a git repo — the walk needs both. */
+  async function makeStoreRepo(): Promise<string> {
+    const root = await tempDir("nahel-skills-subdir-");
+    git(root, "init", "-q");
+    await writeConfig(await ensureLayout(root), makeConfig());
+    return root;
+  }
+
+  test("clone-and-symlink restore from a subdirectory places skills at the store root", async () => {
+    const { repo } = await makeSkillsRepo(["tdd"]);
+    const root = await makeStoreRepo();
+    await writeFile(
+      join(root, "skills.yaml"),
+      `skills:\n  - repo: ${repo}\n    ref: HEAD\n    use: [tdd]\n`,
+    );
+    const sub = join(root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    expect((await runSkills(sub, ["lock"])).code).toBe(0);
+    expect((await runSkills(sub, ["restore"])).code).toBe(0);
+    expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+      "# tdd\n",
+    );
+  });
+
+  test("a RELATIVE repo spec is resolved from the STORE ROOT: lock + restore from a subdirectory", async () => {
+    // `./vendor/…` in skills.yaml means "relative to the repo the manifest is
+    // committed in" — the only reading that survives being run from anywhere.
+    // Resolved from the process's own cwd it names a different directory
+    // entirely: a missing path, or worse, a same-named sibling repo.
+    const root = await makeStoreRepo();
+    const { sha } = await makeSkillsRepo(["tdd"], join(root, "vendor", "skills-src"));
+    await writeFile(
+      join(root, "skills.yaml"),
+      "skills:\n  - repo: ./vendor/skills-src\n    ref: HEAD\n    use: [tdd]\n",
+    );
+    const sub = join(root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    const locked = await runSkills(sub, ["lock"]);
+    expect(locked.stderr).toBe("");
+    expect(locked.code).toBe(0);
+    expect((await readSkillsLock(storeLayout(root)))!.entries[0]!.sha).toBe(sha);
+
+    const restored = await runSkills(sub, ["restore"]);
+    expect(restored.stderr).toBe("");
+    expect(restored.code).toBe(0);
+    expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+      "# tdd\n",
+    );
+  });
+
+  test("restore alone clones a RELATIVE spec from the store root — a committed lock is enough", async () => {
+    // The clone path on its own: skills.lock is committed, so a fresh checkout
+    // restores in ONE command, from wherever the user happens to stand.
+    const root = await makeStoreRepo();
+    const { sha } = await makeSkillsRepo(["tdd"], join(root, "vendor", "skills-src"));
+    await writeFile(
+      join(root, "skills.lock"),
+      `${JSON.stringify(
+        { entries: [{ repo: "./vendor/skills-src", ref: "HEAD", sha, skills: ["tdd"] }] },
+        null,
+        2,
+      )}\n`,
+    );
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+
+    const result = await runSkills(sub, ["restore"]);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+      "# tdd\n",
+    );
+  });
+
+  test("the external skills CLI is run in the STORE ROOT, so both restore paths agree", async () => {
+    // Which tool is installed must not change WHERE skills land: the git
+    // fallback writes under layout.root, so the delegated CLI — which places
+    // into .claude/skills/ relative to its own cwd — must run there too.
+    const { repo } = await makeSkillsRepo(["tdd"]);
+    const root = await makeStoreRepo();
+    await writeFile(
+      join(root, "skills.yaml"),
+      `skills:\n  - repo: ${repo}\n    ref: HEAD\n    use: [tdd]\n`,
+    );
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+    expect((await runSkills(sub, ["lock"])).code).toBe(0);
+
+    // A real `skills` executable on PATH that records the directory it ran in.
+    const binDir = await tempDir("nahel-skills-bin-");
+    const record = join(binDir, "cwd.txt");
+    await writeFile(join(binDir, "skills"), `#!/bin/sh\npwd > ${JSON.stringify(record)}\n`, "utf8");
+    await chmod(join(binDir, "skills"), 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    try {
+      const result = await runSkills(sub, ["restore"]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("via skills CLI");
+      expect((await readFile(record, "utf8")).trim()).toBe(await realpath(root));
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+});
+
+describe("nahel skills — CLI detection and execution agree on the directory", () => {
+  /** An initialized store in a git repo, the walk's precondition. */
+  async function storeRepo(): Promise<string> {
+    const root = await tempDir("nahel-skills-probe-");
+    git(root, "init", "-q");
+    await writeConfig(await ensureLayout(root), makeConfig());
+    return root;
+  }
+
+  /** A fake `skills` executable at `dir`, recording the directory it ran in. */
+  async function fakeSkillsAt(dir: string): Promise<string> {
+    await mkdir(dir, { recursive: true });
+    const record = join(dir, "cwd.txt");
+    await writeFile(join(dir, "skills"), `#!/bin/sh\npwd > ${JSON.stringify(record)}\n`, "utf8");
+    await chmod(join(dir, "skills"), 0o755);
+    return record;
+  }
+
+  /** A committed lock naming an absolute local repo — the spec is not the point here. */
+  async function lockAt(root: string, repo: string, sha: string): Promise<void> {
+    await writeFile(
+      join(root, "skills.lock"),
+      `${JSON.stringify({ entries: [{ repo, ref: "HEAD", sha, skills: ["tdd"] }] }, null, 2)}\n`,
+    );
+  }
+
+  test("a RELATIVE PATH entry reachable from the store root is both detected AND used", async () => {
+    const { repo, sha } = await makeSkillsRepo(["tdd"]);
+    const root = await storeRepo();
+    await lockAt(root, repo, sha);
+    const record = await fakeSkillsAt(join(root, "tools", "bin"));
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+
+    const originalPath = process.env.PATH;
+    process.env.PATH = `./tools/bin:${originalPath ?? ""}`;
+    try {
+      const result = await runSkills(sub, ["restore"]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      // Detection said yes because the CLI really is on PATH *from the root* —
+      // the same directory the CLI is then run in.
+      expect(result.stdout).toContain("via skills CLI");
+      expect((await readFile(record, "utf8")).trim()).toBe(await realpath(root));
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  test("a RELATIVE PATH entry reachable only from the LAUNCH cwd is not mistaken for an available CLI", async () => {
+    // The probe must not answer for a directory the CLI will never be run in:
+    // saying yes here means execution fails from the root (a broken restore).
+    const { repo, sha } = await makeSkillsRepo(["tdd"]);
+    const root = await storeRepo();
+    await lockAt(root, repo, sha);
+    const decoy = await tempDir("nahel-skills-decoy-");
+    const decoyRecord = await fakeSkillsAt(join(decoy, "tools", "bin"));
+    const sub = join(root, "nahel", "items");
+    await mkdir(sub, { recursive: true });
+
+    const originalPath = process.env.PATH;
+    const originalCwd = process.cwd();
+    process.env.PATH = `./tools/bin:${originalPath ?? ""}`;
+    process.chdir(decoy);
+    try {
+      const result = await runSkills(sub, ["restore"]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      // No CLI from the root, so the proven clone fallback runs — and the
+      // decoy binary is never invoked.
+      expect(result.stdout).not.toContain("via skills CLI");
+      expect(await readFile(decoyRecord, "utf8").catch(() => null)).toBeNull();
+      expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+        "# tdd\n",
+      );
+    } finally {
+      process.chdir(originalCwd);
+      process.env.PATH = originalPath;
+    }
   });
 });
 

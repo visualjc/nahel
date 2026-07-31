@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { readConfig, storeLayout } from "../store/layout";
+import { openStore, readConfig } from "../store/layout";
 import { validateStore } from "../validate";
 import { composeBrief, type BriefWarningsSource } from "../views/brief";
 import { UsageError } from "./item";
@@ -47,7 +47,7 @@ function parseFlags(argv: string[]): void {
 async function runBrief(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of briefing an agent on a repo that has no state.
     const config = await readConfig(layout);

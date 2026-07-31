@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { storeLayout } from "../store/layout";
+import { openStoreTolerant } from "../store/layout";
 import { replayPending, type RepairedRecord } from "../store/mutate";
 import { validateStore, type Finding } from "../validate";
 import { UsageError } from "./item";
@@ -45,7 +45,7 @@ function renderFinding(finding: Finding): string[] {
 async function runValidate(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const flags = parseFlags(argv);
-    const layout = storeLayout(ctx.cwd);
+    const layout = await openStoreTolerant(ctx.cwd);
 
     let repaired: RepairedRecord[] = [];
     if (flags.repair) {

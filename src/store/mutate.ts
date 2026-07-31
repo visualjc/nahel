@@ -24,11 +24,11 @@ import {
 } from "./journal";
 import {
   itemExists,
+  openStore,
   readConfig,
   readItem,
   readObservation,
   readRun,
-  storeLayout,
   writeItem,
   writeObservation,
   writeRun,
@@ -66,17 +66,20 @@ export interface StoreContext {
 }
 
 /**
- * Build a store context: reads nahel/config, resolves the actor (config
- * entry, overridden by the NAHEL_ACTOR value the entry point read from its
- * environment), and mints the writer-scoped session segment unless the caller
- * carries one across CLI invocations.
+ * Build a store context: resolves the store root by walking up from the
+ * directory the command was run in (openStore — the store may be an ancestor
+ * of cwd), reads nahel/config, resolves the actor (config entry, overridden by
+ * the NAHEL_ACTOR value the entry point read from its environment), and mints
+ * the writer-scoped session segment unless the caller carries one across CLI
+ * invocations. Everything downstream derives from `layout.root`, so a command
+ * run from a subdirectory acts on exactly the store one run from the root does.
  */
 export async function createStoreContext(
-  root: string,
+  cwd: string,
   env: Env,
   options: { actorOverride?: string; session?: string } = {},
 ): Promise<StoreContext> {
-  const layout = storeLayout(root);
+  const layout = await openStore(cwd);
   const config = await readConfig(layout);
   return {
     layout,

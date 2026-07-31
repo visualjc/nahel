@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, mkdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import type { SkillsLock } from "../../src/schema/records";
 import {
   ensureLayout,
@@ -17,7 +17,7 @@ import {
   restoreViaClone,
   restoreViaSkillsCli,
   skillsCacheDir,
-  skillsCliAvailable,
+  skillsCliPath,
   SkillsError,
 } from "../../src/store/skills";
 import { makeTempDir } from "./helpers";
@@ -104,7 +104,7 @@ describe("repoToUrl (pure normalization)", () => {
 describe("resolveRef (git ls-remote against a local repo)", () => {
   test("resolves a branch to the exact HEAD SHA", async () => {
     const { repo, sha } = await makeSkillsRepo({ tdd: "# tdd\n" });
-    const resolved = await resolveRef(repo, "HEAD");
+    const resolved = await resolveRef(await initTargetRepo(), repo, "HEAD");
     expect(resolved).toMatch(SHA);
     expect(resolved).toBe(sha);
   });
@@ -112,18 +112,54 @@ describe("resolveRef (git ls-remote against a local repo)", () => {
   test("resolves a tag to the tagged commit", async () => {
     const { repo, sha } = await makeSkillsRepo({ tdd: "# tdd\n" });
     git(repo, "tag", "v1.0.0");
-    expect(await resolveRef(repo, "v1.0.0")).toBe(sha);
+    expect(await resolveRef(await initTargetRepo(), repo, "v1.0.0")).toBe(sha);
   });
 
   test("a ref that is already a 40-hex SHA passes through with no round-trip", async () => {
     const pinned = "a".repeat(40);
-    expect(await resolveRef("owner/does-not-matter", pinned)).toBe(pinned);
+    expect(await resolveRef(await initTargetRepo(), "owner/does-not-matter", pinned)).toBe(pinned);
   });
 
   test("an unknown ref throws SkillsError naming the ref", async () => {
     const { repo } = await makeSkillsRepo({ tdd: "# tdd\n" });
-    await expect(resolveRef(repo, "no-such-branch")).rejects.toBeInstanceOf(SkillsError);
-    await expect(resolveRef(repo, "no-such-branch")).rejects.toThrow(/no-such-branch/);
+    const layout = await initTargetRepo();
+    await expect(resolveRef(layout, repo, "no-such-branch")).rejects.toBeInstanceOf(SkillsError);
+    await expect(resolveRef(layout, repo, "no-such-branch")).rejects.toThrow(/no-such-branch/);
+  });
+});
+
+describe("a RELATIVE repo spec is anchored at the store root (not the process cwd)", () => {
+  /** A skills repo INSIDE the target store, so `./…` in the manifest means it. */
+  async function vendoredRepo(): Promise<{ layout: ReturnType<typeof storeLayout>; sha: string }> {
+    const layout = await initTargetRepo();
+    const vendor = join(layout.root, "vendor", "skills-src");
+    await mkdir(vendor, { recursive: true });
+    git(vendor, "init", "-q");
+    git(vendor, "config", "user.email", "test@example.com");
+    git(vendor, "config", "user.name", "Test User");
+    git(vendor, "config", "commit.gpgsign", "false");
+    await mkdir(join(vendor, "tdd"), { recursive: true });
+    await writeFile(join(vendor, "tdd", "SKILL.md"), "# tdd\n");
+    git(vendor, "add", "-A");
+    git(vendor, "commit", "-q", "-m", "skills");
+    return { layout, sha: git(vendor, "rev-parse", "HEAD").trim() };
+  }
+
+  test("resolveRef reads a ./relative repo through git run at the store root", async () => {
+    const { layout, sha } = await vendoredRepo();
+    expect(await resolveRef(layout, "./vendor/skills-src", "HEAD")).toBe(sha);
+  });
+
+  test("restoreViaClone clones a ./relative repo from the store root", async () => {
+    const { layout, sha } = await vendoredRepo();
+    const placed = await restoreViaClone(layout, {
+      repo: "./vendor/skills-src",
+      ref: "HEAD",
+      sha,
+      skills: ["tdd"],
+    });
+    expect(placed).toEqual(["tdd"]);
+    expect(await readFile(join(claudeSkillsDir(layout), "tdd", "SKILL.md"), "utf8")).toBe("# tdd\n");
   });
 });
 
@@ -232,31 +268,41 @@ describe("skills CLI delegation", () => {
     };
   }
 
-  test("skillsCliAvailable is false when no skills binary is on PATH", async () => {
+  test("skillsCliPath is null when no skills binary is on PATH", async () => {
     // The test environment has no `skills` CLI installed.
-    expect(await skillsCliAvailable()).toBe(false);
+    expect(await skillsCliPath(await initTargetRepo())).toBeNull();
   });
 
-  test("skillsCliAvailable is true when a skills binary is on PATH", async () => {
+  test("skillsCliPath returns the ABSOLUTE path of a skills binary on PATH", async () => {
     const restore = await withFakeSkills("#!/bin/sh\nexit 0\n");
     try {
-      expect(await skillsCliAvailable()).toBe(true);
+      const found = await skillsCliPath(await initTargetRepo());
+      expect(found).not.toBeNull();
+      expect(isAbsolute(found!)).toBe(true);
+      expect(found!.endsWith("/skills")).toBe(true);
     } finally {
       restore();
     }
   });
 
-  test("restoreViaSkillsCli invokes `skills add <url>@<sha> <names…>` and returns the names", async () => {
-    const argsFile = join(await tempDir("nahel-args-"), "argv");
-    const restore = await withFakeSkills(`#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\nexit 0\n`);
+  test("restoreViaSkillsCli invokes `skills add <url>@<sha> <names…>` in the store root and returns the names", async () => {
+    const argsDir = await tempDir("nahel-args-");
+    const argsFile = join(argsDir, "argv");
+    const cwdFile = join(argsDir, "cwd");
+    const restore = await withFakeSkills(
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\npwd > "${cwdFile}"\nexit 0\n`,
+    );
     try {
+      const layout = await initTargetRepo();
       const entry = {
         repo: "PromptDrivenDev/skills",
         ref: "main",
         sha: "b".repeat(40),
         skills: ["tdd", "grilling"],
       };
-      const placed = await restoreViaSkillsCli(entry);
+      const placed = await restoreViaSkillsCli(layout, entry, (await skillsCliPath(layout))!);
+      // The delegated CLI places relative to its own cwd: it must be the root.
+      expect((await readFile(cwdFile, "utf8")).trim()).toBe(await realpath(layout.root));
       expect(placed).toEqual(["tdd", "grilling"]);
       const argv = (await readFile(argsFile, "utf8")).split("\n").filter((l) => l !== "");
       expect(argv).toEqual([
@@ -273,12 +319,12 @@ describe("skills CLI delegation", () => {
   test("restoreViaSkillsCli surfaces a non-zero CLI exit as SkillsError", async () => {
     const restore = await withFakeSkills("#!/bin/sh\necho boom 1>&2\nexit 3\n");
     try {
-      const attempt = restoreViaSkillsCli({
-        repo: "a/b",
-        ref: "main",
-        sha: "c".repeat(40),
-        skills: ["tdd"],
-      });
+      const layout = await initTargetRepo();
+      const attempt = restoreViaSkillsCli(
+        layout,
+        { repo: "a/b", ref: "main", sha: "c".repeat(40), skills: ["tdd"] },
+        (await skillsCliPath(layout))!,
+      );
       await expect(attempt).rejects.toBeInstanceOf(SkillsError);
     } finally {
       restore();

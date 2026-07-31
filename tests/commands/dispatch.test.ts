@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { chmod, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import YAML from "yaml";
 import { dispatchCommand } from "../../src/commands/dispatch";
@@ -675,6 +676,30 @@ describe("nahel dispatch — unknown agent kinds fail as schema errors (F1.3)", 
       expect(message).toContain(known);
     }
     expect(await events(repo.layout)).toEqual([]);
+  });
+});
+
+describe("nahel dispatch — dispatched from a subdirectory (store root walk-up)", () => {
+  test("the worker starts in the STORE ROOT, not in the directory the dispatcher stood in", async () => {
+    // The dispatch contract is that the worker starts in the repo being
+    // worked on: its prompt names repo-root-relative paths (the mini-PRD, the
+    // nahel CLI's own store) and every `nahel` command it runs must land in
+    // the same store the dispatch was recorded in.
+    const repo = await setup();
+    // A git repo: the store-root walk is bounded by the worktree boundary.
+    expect(spawnSync("git", ["init", "-q"], { cwd: repo.root }).status).toBe(0);
+    const sub = join(repo.root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    const code = await dispatchCommand.run(
+      ["implementation", "--item", repo.item.id, "--", "build it"],
+      repo.env,
+      sub,
+      "agent:host-runner",
+    );
+    console.log("[stderr]", errs.join("\n"));
+    expect(code).toBe(0);
+    expect((await invocationRecord(repo)).cwd).toBe(await realpath(repo.root));
   });
 });
 

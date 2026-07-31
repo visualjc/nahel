@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import type { JournalEvent } from "../../src/schema/records";
-import { readJournal } from "../../src/store/journal";
+import { compareEvents, listSegments, readJournal } from "../../src/store/journal";
 import { collectProgress, eventMatchesQuery, renderProgress } from "../../src/views/progress";
 import { descendantIds, loadSnapshot } from "../../src/views/snapshot";
 import { buildPopulatedStore, FIXTURE_EVENT_TYPES, type PopulatedStore } from "./helpers";
@@ -143,6 +143,40 @@ describe("collectProgress — streaming filters", () => {
       limit: 2,
     });
     expect(filtered.map((event) => event.type)).toEqual(["test.failed", "item.claimed"]);
+  });
+});
+
+describe("collectProgress — cross-session events inside one second", () => {
+  /**
+   * The store built with a FROZEN clock: every CLI invocation mints its own
+   * session segment and every event carries the same second-precision ts, so
+   * nothing but seq and event id can order the timeline. This is the case a
+   * merge leaning on ts alone (or on directory listing order) would render
+   * differently from run to run.
+   */
+  test("the timeline is the ts → seq → id total order, not segment discovery order", async () => {
+    const store = await buildPopulatedStore(tempDirs, 42, 0);
+    const segments = await listSegments(store.layout);
+    expect(segments.active.length + segments.archived.length).toBeGreaterThan(1);
+
+    const events = await collectProgress(store.layout, {});
+    // Every fixture event is present — but a frozen clock leaves cross-session
+    // events genuinely unordered by time, so the timeline is NOT the
+    // chronological fixture sequence, only a deterministic permutation of it.
+    expect(events.map((event) => event.type).sort()).toEqual([...FIXTURE_EVENT_TYPES].sort());
+    expect(new Set(events.map((event) => event.ts)).size).toBe(1); // one second, all of it
+    // Sorting the stream by the documented total order must not move anything.
+    expect(events.map((event) => event.id)).toEqual(
+      [...events].sort(compareEvents).map((event) => event.id),
+    );
+  });
+
+  test("two identically-seeded frozen-clock stores render byte-identically", async () => {
+    const a = await buildPopulatedStore(tempDirs, 7, 0);
+    const b = await buildPopulatedStore(tempDirs, 7, 0);
+    expect(renderProgress(await collectProgress(b.layout, {}))).toBe(
+      renderProgress(await collectProgress(a.layout, {})),
+    );
   });
 });
 

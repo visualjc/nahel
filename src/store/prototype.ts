@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { gitSpawnEnv, isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 
 /**
  * The prototype lane's git plumbing (PRD F5). Spawning `git` is store-layer
@@ -29,8 +30,14 @@ const execFileAsync = promisify(execFile);
 /** A prototype git operation failed, or was refused for safety. */
 export class PrototypeError extends Error {}
 
-/** Generous ceiling for ref listings on large repos. */
-const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+/**
+ * A prototype git call outran the output cap. Distinct from an ordinary git
+ * failure because it is NOT a verdict about the repo, and the probe form must
+ * never hand it back as a non-zero exit: every probe caller reads that as a
+ * clean negative ("no equivalent commits", "no remote refs"), which is exactly
+ * how a never-merge violation would vanish into a clean scan (F5.2).
+ */
+export class PrototypeOutputCapError extends PrototypeError {}
 
 interface GitResult {
   code: number;
@@ -38,14 +45,32 @@ interface GitResult {
   stderr: string;
 }
 
-/** Run git, returning its exit code instead of throwing (probe form). */
-async function tryGit(root: string, args: readonly string[]): Promise<GitResult> {
+/**
+ * Run git, returning its exit code instead of throwing (probe form). The ONE
+ * failure it still throws on is an output-cap overflow: there is no exit code
+ * that could carry "nahel refused to read this", and every code the probe
+ * callers understand would be a lie about the repo.
+ */
+async function tryGit(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<GitResult> {
   try {
     const { stdout, stderr } = await execFileAsync("git", ["-C", root, ...args], {
-      maxBuffer: MAX_OUTPUT_BYTES,
+      maxBuffer: maxOutputBytes,
+      // Without this an inherited GIT_DIR answers every probe about ANOTHER
+      // repository — "not a git repository" included, which would read as
+      // proof that this root has nothing to verify.
+      env: gitSpawnEnv(),
     });
     return { code: 0, stdout, stderr };
   } catch (error) {
+    if (isOutputCapExceeded(error)) {
+      throw new PrototypeOutputCapError(
+        `git ${args.join(" ")} failed in ${root}: ${outputCapDetail(maxOutputBytes)}`,
+      );
+    }
     const failure = error as { code?: unknown; stdout?: unknown; stderr?: unknown };
     return {
       code: typeof failure.code === "number" ? failure.code : 1,
@@ -61,8 +86,12 @@ async function tryGit(root: string, args: readonly string[]): Promise<GitResult>
 }
 
 /** Run git, throwing PrototypeError with git's own reason on failure. */
-async function git(root: string, args: readonly string[]): Promise<string> {
-  const result = await tryGit(root, args);
+async function git(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
+  const result = await tryGit(root, args, maxOutputBytes);
   if (result.code !== 0) {
     throw new PrototypeError(`git ${args.join(" ")} failed in ${root}: ${result.stderr.trim()}`);
   }
@@ -141,8 +170,11 @@ export function isPrototypeBranch(ref: string): boolean {
  * Read once, before any branch exists, so the journaled creation record can be
  * written write-ahead (see `seedVariant` on why the base is load-bearing).
  */
-export async function headCommit(root: string): Promise<string> {
-  return (await git(root, ["rev-parse", "HEAD"])).trim();
+export async function headCommit(
+  root: string,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<string> {
+  return (await git(root, ["rev-parse", "HEAD"], maxOutputBytes)).trim();
 }
 
 /** Everything one variant's workspace needs to exist. */
@@ -279,8 +311,17 @@ export interface PrototypeRefScan {
   branches: PrototypeBranchScan[];
   /** Every remote-tracking prototype ref, short form (`origin/prototype/…`). */
   remoteRefs: string[];
-  /** Git unavailable, or not a repo — the checks stay silent rather than guess. */
+  /** Why the scan produced nothing: git unavailable, not a repo, or an abort. */
   error?: string;
+  /**
+   * The scan ABORTED inside a repo that demonstrably exists — nahel's output
+   * cap, or git plumbing failing on a real checkout. Distinct from `error`
+   * alone, which also covers "there is no repo here": with no repo there are
+   * no prototype refs and nothing to judge, whereas an abort leaves refs that
+   * MAY violate never-merge unjudged. Validate reports this; it cannot report
+   * silence (PRODUCT.md HC6, ADR-0011).
+   */
+  scanFailed?: true;
 }
 
 /**
@@ -288,15 +329,32 @@ export interface PrototypeRefScan {
  * the clone recorded it, else the conventional names in order. Undefined when
  * none resolves — the merged check is skipped rather than guessed at.
  */
-async function resolveDefaultBranch(root: string): Promise<string | undefined> {
-  const symbolic = await tryGit(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
-  if (symbolic.code === 0) {
-    const short = stripFirstSegment(symbolic.stdout.trim());
+async function resolveDefaultBranch(
+  root: string,
+  maxOutputBytes: number,
+): Promise<string | undefined> {
+  // `symbolic-ref --quiet`: exit 1 is git's documented silent "not a symbolic
+  // ref" — this clone simply never recorded origin/HEAD.
+  const symbolic = await probeValue(
+    root,
+    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    maxOutputBytes,
+    [1],
+  );
+  if (symbolic !== undefined) {
+    const short = stripFirstSegment(symbolic.trim());
     if (short !== "") return short;
   }
   for (const name of ["main", "master"]) {
-    const exists = await tryGit(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]);
-    if (exists.code === 0) return name;
+    // `rev-parse --verify --quiet`: exit 1 is the documented silent "no such
+    // ref" — that branch name does not exist here.
+    const exists = await probeValue(
+      root,
+      ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`],
+      maxOutputBytes,
+      [1],
+    );
+    if (exists !== undefined) return name;
   }
   return undefined;
 }
@@ -315,20 +373,94 @@ async function copiedToDefault(
   root: string,
   branch: string,
   defaultBranch: string,
+  maxOutputBytes: number,
 ): Promise<string[]> {
-  const cherry = await tryGit(root, [
-    "cherry",
-    `refs/heads/${defaultBranch}`,
-    `refs/heads/${branch}`,
-  ]);
-  if (cherry.code !== 0) return [];
+  // A listing with no documented negative: `git cherry` answers at exit 0 even
+  // for unrelated histories, so any failure here is a scan that did not run.
+  const cherry = await probeList(
+    root,
+    ["cherry", `refs/heads/${defaultBranch}`, `refs/heads/${branch}`],
+    maxOutputBytes,
+  );
   const copies: string[] = [];
-  for (const line of outputLines(cherry.stdout)) {
+  for (const line of outputLines(cherry)) {
     if (!line.startsWith("- ")) continue;
     const sha = line.slice(2).trim();
     if (sha !== "") copies.push(sha);
   }
   return copies;
+}
+
+/**
+ * The scan hit a result git does not document as an answer. Thrown from the
+ * probe helpers and converted to `scanFailed` by scanPrototypeRefs — the one
+ * rule that makes "unverified" impossible to confuse with "verified clean".
+ */
+class ScanAbortError extends PrototypeError {}
+
+/**
+ * Run a probe whose answer is a LIST (ref listings, `git cherry`). Exit 0 is
+ * the only answer, and it must be a COMPLETE one: git exits 0 while writing
+ * "warning: ignoring broken ref …" to stderr and leaving that ref out, so any
+ * stderr on a listing means the list is short and the scan cannot be trusted.
+ */
+async function probeList(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number,
+): Promise<string> {
+  const result = await tryGit(root, args, maxOutputBytes);
+  if (result.code !== 0) {
+    throw new ScanAbortError(`git ${args.join(" ")} failed in ${root}: ${result.stderr.trim()}`);
+  }
+  if (result.stderr.trim() !== "") {
+    throw new ScanAbortError(
+      `git ${args.join(" ")} in ${root} answered with a warning — ${result.stderr.trim()} — ` +
+        "so the listing it returned is incomplete",
+    );
+  }
+  return result.stdout;
+}
+
+/**
+ * Run a probe whose answer is a VALUE or a documented "no". Exit 0 returns
+ * stdout; an exit code git documents as a clean negative returns undefined;
+ * anything else aborts. stderr is not consulted here: these probes answer with
+ * an exit code or a single revision, so a warning cannot silently shorten them.
+ */
+async function probeValue(
+  root: string,
+  args: readonly string[],
+  maxOutputBytes: number,
+  negativeCodes: readonly number[],
+): Promise<string | undefined> {
+  const result = await tryGit(root, args, maxOutputBytes);
+  if (result.code === 0) return result.stdout;
+  if (negativeCodes.includes(result.code)) return undefined;
+  throw new ScanAbortError(`git ${args.join(" ")} failed in ${root}: ${result.stderr.trim()}`);
+}
+
+/**
+ * Git's own words for "there is no repository here" — the ONLY proof of
+ * absence the scan accepts. Matched case-insensitively on the phrase, not on
+ * the whole message, whose parenthetical varies by git version.
+ */
+const NOT_A_REPOSITORY = /not a git repository/i;
+
+/**
+ * Is the absence of a repo PROVEN? Only git answering "not a git repository"
+ * proves it. A probe that failed for any other reason — a config it cannot
+ * parse, a directory it cannot read — did not answer at all, and an
+ * unanswered probe must never be read as "there is nothing here to verify".
+ *
+ * The phrase match is the fragile part, and it fails in the SAFE direction: a
+ * translated git message does not match, so absence goes unproven and the
+ * scan aborts loudly rather than falling silent.
+ */
+async function provenNoRepo(root: string, maxOutputBytes: number): Promise<boolean> {
+  const result = await tryGit(root, ["rev-parse", "--git-dir"], maxOutputBytes);
+  if (result.code === 0) return false; // a repo answered: it is right here
+  return NOT_A_REPOSITORY.test(result.stderr);
 }
 
 /** Parse `<short-name>\t<sha>` lines from for-each-ref. */
@@ -344,44 +476,85 @@ function parseRefLines(output: string): { name: string; sha: string }[] {
 
 /**
  * Scan the repo for prototype refs. Never throws: a missing git, a checkout
- * that is not a repo, or any plumbing failure comes back as `error`, and the
- * checks that read this treat "could not look" as "nothing to report" — the
- * store's tolerant-read discipline (validate must REPORT, never explode).
+ * that is not a repo, any plumbing failure, or nahel's own refusal to read
+ * past the output cap comes back as `error`, and the checks that read this
+ * treat "could not look" as "nothing to report" — the store's tolerant-read
+ * discipline (validate must REPORT, never explode).
+ *
+ * An overflow ABORTS the whole scan rather than trimming one probe's answer:
+ * a branch list carrying `copiedToDefault: []` because the probe was cut off
+ * would be indistinguishable from an honest all-clear.
  */
-export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan> {
-  const heads = await tryGit(root, [
-    "for-each-ref",
-    "--format=%(refname:short)%09%(objectname)",
-    "refs/heads",
-  ]);
-  if (heads.code !== 0) {
-    return { branches: [], remoteRefs: [], error: heads.stderr.trim() };
+export async function scanPrototypeRefs(
+  root: string,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<PrototypeRefScan> {
+  try {
+    return await collectPrototypeRefs(root, maxOutputBytes);
+  } catch (error) {
+    // Both aborts happen with a repo demonstrably in hand: nahel refusing to
+    // read past the cap, and any probe result git does not document as an
+    // answer. Neither may come back looking like a completed scan.
+    if (error instanceof PrototypeOutputCapError || error instanceof ScanAbortError) {
+      return { branches: [], remoteRefs: [], error: error.message, scanFailed: true };
+    }
+    throw error;
+  }
+}
+
+async function collectPrototypeRefs(
+  root: string,
+  maxOutputBytes: number,
+): Promise<PrototypeRefScan> {
+  // The FIRST probe is the only one that may fail without a repo behind it,
+  // so it is the one place "no repo here" is told apart from "the scan could
+  // not run". Every probe after it has a working ref listing as proof.
+  let heads: string;
+  try {
+    heads = await probeList(
+      root,
+      ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads"],
+      maxOutputBytes,
+    );
+  } catch (error) {
+    if (!(error instanceof ScanAbortError)) throw error;
+    // Silence requires absence PROVEN — never inferred from a second failure.
+    if (await provenNoRepo(root, maxOutputBytes)) {
+      // No repo means no prototype refs exist: nothing was left unjudged.
+      return { branches: [], remoteRefs: [], error: error.message };
+    }
+    throw error;
   }
 
-  const defaultBranch = await resolveDefaultBranch(root);
+  const defaultBranch = await resolveDefaultBranch(root, maxOutputBytes);
   const branches: PrototypeBranchScan[] = [];
-  for (const ref of parseRefLines(heads.stdout)) {
+  for (const ref of parseRefLines(heads)) {
     if (!isPrototypeBranch(ref.name)) continue;
     let ancestorOfDefault = false;
     let copies: string[] = [];
     if (defaultBranch !== undefined) {
-      const contained = await tryGit(root, [
-        "merge-base",
-        "--is-ancestor",
-        ref.sha,
-        `refs/heads/${defaultBranch}`,
-      ]);
-      ancestorOfDefault = contained.code === 0;
-      copies = await copiedToDefault(root, ref.name, defaultBranch);
+      // `merge-base --is-ancestor`: git documents exit 1 as "not an ancestor"
+      // and every OTHER non-zero as an error, so 1 is the only silent no.
+      const contained = await probeValue(
+        root,
+        ["merge-base", "--is-ancestor", ref.sha, `refs/heads/${defaultBranch}`],
+        maxOutputBytes,
+        [1],
+      );
+      ancestorOfDefault = contained !== undefined;
+      copies = await copiedToDefault(root, ref.name, defaultBranch, maxOutputBytes);
     }
     let mergeBase: string | undefined;
     if (defaultBranch !== undefined) {
-      const mb = await tryGit(root, [
-        "merge-base",
-        `refs/heads/${defaultBranch}`,
-        ref.sha,
-      ]);
-      mergeBase = mb.code === 0 ? mb.stdout.trim() : undefined;
+      // `merge-base`: exit 1 is the documented "no merge base" — unrelated
+      // histories, a real answer, and the reason this field is optional.
+      const mb = await probeValue(
+        root,
+        ["merge-base", `refs/heads/${defaultBranch}`, ref.sha],
+        maxOutputBytes,
+        [1],
+      );
+      mergeBase = mb?.trim();
     }
     branches.push({
       branch: ref.name,
@@ -392,17 +565,16 @@ export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan>
     });
   }
 
-  const remotes = await tryGit(root, [
-    "for-each-ref",
-    "--format=%(refname:short)%09%(objectname)",
-    "refs/remotes",
-  ]);
-  const remoteRefs =
-    remotes.code === 0
-      ? parseRefLines(remotes.stdout)
-          .map((ref) => ref.name)
-          .filter(isPrototypeBranch)
-      : [];
+  // A repo with no remotes lists nothing at exit 0 — an empty listing is the
+  // answer here, so there is no documented negative to allow.
+  const remotes = await probeList(
+    root,
+    ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/remotes"],
+    maxOutputBytes,
+  );
+  const remoteRefs = parseRefLines(remotes)
+    .map((ref) => ref.name)
+    .filter(isPrototypeBranch);
 
   return {
     ...(defaultBranch === undefined ? {} : { defaultBranch }),

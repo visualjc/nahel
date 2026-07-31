@@ -205,8 +205,15 @@ async function latestClaimBaseline(layout: StoreLayout, itemId: string): Promise
     if (event.type === CORE_EVENT_TYPES.itemClaimed && event.item === itemId) {
       const parsed = gitBaselineSchema.safeParse(event.payload["baseline"]);
       if (!parsed.success) {
+        // The payload is the ONLY record of what the repo looked like at claim
+        // time, so a malformed one cannot be recomputed — and the journal is
+        // append-only, so it cannot be edited either. Say which event carries
+        // it and what actually restores it (validate's journal.payload fix).
+        const reason = parsed.error.issues[0]?.message ?? parsed.error.message;
         throw new Error(
-          `item.claimed event ${event.id} carries no valid baseline — cannot compute handback evidence`,
+          `item ${itemId} has a malformed claim baseline: item.claimed event ${event.id} — ` +
+            `${reason} — so handback cannot compute evidence; restore the journal segment ` +
+            "from git (segments are append-only, never hand-edited)",
         );
       }
       baseline = parsed.data;

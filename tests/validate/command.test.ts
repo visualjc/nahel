@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { CommandContext } from "../../src/cli";
 import { logCommand } from "../../src/commands/log";
 import { validateCommand } from "../../src/commands/validate";
@@ -28,6 +30,11 @@ interface CommandResult {
   code: number;
   stdout: string[];
   stderr: string[];
+}
+
+/** Run a real git command in a fixture repo, returning stdout. */
+function git(root: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
 }
 
 /** Drive the registration-ready command exactly as cli.ts dispatch would. */
@@ -74,6 +81,78 @@ describe("nahel validate — the command", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toEqual([]);
     expect(result.stderr).toEqual([]);
+  });
+
+  /**
+   * A never-merge scan that cannot run is a constitutional invariant left
+   * unverified (PRODUCT.md HC6, ADR-0011): exiting 0 would report it as
+   * verified-clean. The fixture is a REAL repo whose refs database is
+   * unreadable — the scan fails where the repo plainly exists.
+   */
+  test("a prototype ref scan that cannot complete is reported loudly, exit 1", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    git(fixture.root, "init", "-q", "--initial-branch=main");
+    git(fixture.root, "config", "user.email", "test@example.com");
+    git(fixture.root, "config", "user.name", "Test User");
+    await writeFile(join(fixture.root, "app.txt"), "one\n");
+    git(fixture.root, "add", "app.txt");
+    git(fixture.root, "commit", "-q", "-m", "initial");
+    await writeFile(join(fixture.root, ".git", "packed-refs"), "not a refs database\n");
+
+    const result = await runValidate([], fixture.root);
+    const output = result.stdout.join("\n");
+    expect(output).toContain("prototype.scan-failed");
+    expect(output).toContain("packed-refs"); // git's reason reaches the operator
+    expect(output).toContain("error");
+    expect(result.code).toBe(1); // exit code matches the severity
+  });
+
+  /**
+   * The silent shape of the same failure: a broken ref makes git WARN and
+   * answer with a SHORT list at exit 0, so the scan looks entirely successful
+   * — while the unreadable branch could be the one that reached main.
+   */
+  test("a broken ref (incomplete listing at exit 0) is reported too, exit 1", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    git(fixture.root, "init", "-q", "--initial-branch=main");
+    git(fixture.root, "config", "user.email", "test@example.com");
+    git(fixture.root, "config", "user.name", "Test User");
+    await writeFile(join(fixture.root, "app.txt"), "one\n");
+    git(fixture.root, "add", "app.txt");
+    git(fixture.root, "commit", "-q", "-m", "initial");
+    await writeFile(join(fixture.root, ".git", "refs", "heads", "broken"), "garbage-not-a-sha\n");
+
+    const result = await runValidate([], fixture.root);
+    const output = result.stdout.join("\n");
+    expect(output).toContain("prototype.scan-failed");
+    expect(output).toContain("ignoring broken ref");
+    expect(result.code).toBe(1);
+  });
+
+  /**
+   * The subtlest shape: a fault that stops git running at all fails the ref
+   * listing AND the "is there a repo here?" probe. Inferring absence from that
+   * second failure files a real repo under "nothing to verify" — absence
+   * counts only when git itself answers "not a git repository".
+   */
+  test("a repo whose config will not parse is reported, not written off as absent", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture);
+    git(fixture.root, "init", "-q", "--initial-branch=main");
+    git(fixture.root, "config", "user.email", "test@example.com");
+    git(fixture.root, "config", "user.name", "Test User");
+    await writeFile(join(fixture.root, "app.txt"), "one\n");
+    git(fixture.root, "add", "app.txt");
+    git(fixture.root, "commit", "-q", "-m", "initial");
+    await writeFile(join(fixture.root, ".git", "config"), "[core\nthis is not a config\n");
+
+    const result = await runValidate([], fixture.root);
+    const output = result.stdout.join("\n");
+    expect(output).toContain("prototype.scan-failed");
+    expect(output).toContain("bad config");
+    expect(result.code).toBe(1);
   });
 
   test("stays clean (exit 0, no findings) after log-driven rotation archives segments", async () => {

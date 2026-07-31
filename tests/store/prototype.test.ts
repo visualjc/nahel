@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  headCommit,
   isPrototypeBranch,
   prototypeBranch,
   prototypeMiniPrdPath,
@@ -427,6 +428,17 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     expect(scan.branches).toEqual([]);
   });
 
+  test("git output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
+    const root = await makeRepo();
+    // A 4-byte cap that `git rev-parse HEAD` (a 41-byte SHA line) outruns —
+    // the same overflow the 16 MiB production cap would see on a huge repo.
+    const attempt = headCommit(root, 4);
+    await expect(attempt).rejects.toBeInstanceOf(PrototypeError);
+    await expect(attempt).rejects.toThrow(/rev-parse HEAD/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
+  });
+
   test("a directory that is not a git repo yields an error finding, never a throw", async () => {
     const root = await makeTempDir("nahel-proto-nogit-");
     dirs.push(root);
@@ -435,5 +447,170 @@ describe("scanPrototypeRefs — the read-only evidence never-merge enforcement j
     expect(scan.error).toBeDefined();
     expect(scan.branches).toEqual([]);
     expect(scan.remoteRefs).toEqual([]);
+    // No repo, no prototype refs: nothing was left unverified, so validate
+    // stays silent rather than reporting an unjudged invariant.
+    expect(scan.scanFailed).toBeUndefined();
+  });
+
+  test("a real repo whose ref listing fails is an ABORT, not an absent repo", async () => {
+    const root = await makeRepo();
+    await writeFile(join(root, ".git", "packed-refs"), "not a refs database\n");
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.error).toContain("packed-refs");
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.branches).toEqual([]);
+  });
+
+  /**
+   * git's repository-selection variables point it somewhere else entirely: an
+   * inherited GIT_DIR makes every probe report "not a git repository" — about
+   * the path in the ENVIRONMENT, never about the root we asked at. Read as
+   * proof of absence, it turns a repo full of prototype refs into silence.
+   */
+  test("an inherited GIT_DIR does not make a real repo look absent", async () => {
+    const root = await makeRepo();
+    git(root, "branch", prototypeBranch("ambient", 1));
+
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = "/definitely-not-a-git-dir";
+    try {
+      const scan = await scanPrototypeRefs(root);
+      expect(scan.error).toBeUndefined();
+      expect(scan.scanFailed).toBeUndefined();
+      expect(scan.branches.map((branch) => branch.branch)).toEqual([
+        prototypeBranch("ambient", 1),
+      ]);
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
+  });
+
+  /**
+   * Absence must be PROVEN, never inferred from a second failure. A fault that
+   * stops git running at all — here a malformed config — fails the ref listing
+   * AND the repo probe, and reading that as "there is no repo here" files a
+   * real repo, prototype refs and all, under "nothing to verify".
+   */
+  test("a fault that breaks BOTH probes is an abort — absence is only git's own answer", async () => {
+    const root = await makeRepo();
+    await writeFile(join(root, ".git", "config"), "[core\nthis is not a config\n");
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.error).toContain("bad config");
+  });
+
+  /**
+   * The nastiest shape: git EXITS 0 and answers anyway, having quietly left
+   * something out. `for-each-ref` warns "ignoring broken ref" on stderr and
+   * returns a SHORT list — so a prototype branch can be missing from a scan
+   * that looks entirely successful.
+   */
+  test("a broken ref leaves the listing incomplete at exit 0 — an abort, not an answer", async () => {
+    const root = await makeRepo();
+    await writeFile(join(root, ".git", "refs", "heads", "broken"), "garbage-not-a-sha\n");
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.error).toContain("ignoring broken ref");
+    expect(scan.branches).toEqual([]);
+  });
+
+  test("a prototype ref pointing at a missing object aborts the per-branch probes", async () => {
+    const root = await makeRepo();
+    await mkdir(join(root, ".git", "refs", "heads", "prototype", "ghost"), { recursive: true });
+    // A well-formed SHA for an object that does not exist: for-each-ref lists
+    // it happily and every judgment probe then fails with 128 — which used to
+    // read as "not an ancestor, no copies", an all-clear nobody could see.
+    await writeFile(
+      join(root, ".git", "refs", "heads", "prototype", "ghost", "variant-1"),
+      `${"0".repeat(39)}1\n`,
+    );
+
+    const scan = await scanPrototypeRefs(root);
+    expect(scan.scanFailed).toBe(true);
+    expect(scan.error).toMatch(/merge-base|cherry/);
+  });
+
+  describe("documented negatives stay silent — git's clean 'no' is an answer", () => {
+    test("no resolvable default branch: both lookups return git's documented exit 1", async () => {
+      const root = await makeRepo();
+      git(root, "branch", "-m", "main", "trunk"); // no main, no master, no origin/HEAD
+      git(root, "branch", prototypeBranch("quiet", 1));
+
+      const scan = await scanPrototypeRefs(root);
+      expect(scan.error).toBeUndefined();
+      expect(scan.scanFailed).toBeUndefined();
+      expect(scan.defaultBranch).toBeUndefined();
+      expect(scan.branches).toHaveLength(1);
+    });
+
+    test("unrelated histories: merge-base exits 1 for 'no merge base', which is not an error", async () => {
+      const root = await makeRepo();
+      git(root, "checkout", "-q", "--orphan", prototypeBranch("orphan", 1));
+      await writeFile(join(root, "orphan.txt"), "unrelated history\n");
+      git(root, "add", "orphan.txt");
+      git(root, "commit", "-m", "orphan root");
+      git(root, "checkout", "-q", "main");
+
+      const scan = await scanPrototypeRefs(root);
+      expect(scan.error).toBeUndefined();
+      expect(scan.scanFailed).toBeUndefined();
+      expect(scan.branches).toHaveLength(1);
+      expect(scan.branches[0]!.ancestorOfDefault).toBe(false); // is-ancestor exit 1
+      expect(scan.branches[0]!.mergeBaseWithDefault).toBeUndefined(); // merge-base exit 1
+    });
+  });
+
+  /**
+   * The PROBE path (tryGit's non-throwing form) is where an output-cap
+   * overflow does real damage: `git cherry` is how a cherry-picked prototype
+   * commit is caught, and an overflow that comes back as an ordinary non-zero
+   * exit makes copiedToDefault report ZERO copies — a never-merge violation
+   * silently downgraded to a clean bill of health. A refusal must look like a
+   * refusal, never like an answer.
+   */
+  test("an overflow inside the scan refuses instead of reporting a clean 'no copies'", async () => {
+    const root = await makeRepo();
+    const branch = prototypeBranch("capscan", 1);
+    git(root, "checkout", "-q", "-b", branch);
+    const shas: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      await writeFile(join(root, `variant-${i}.txt`), `variant work ${i}\n`);
+      git(root, "add", "-A");
+      git(root, "commit", "-m", `variant commit ${i}`);
+      shas.push(git(root, "rev-parse", "HEAD").trim());
+    }
+    git(root, "checkout", "-q", "main");
+    // main moves on first, so the copies below land as NEW commits with the
+    // variant's patch — a same-second cherry-pick straight onto the shared
+    // base would recreate the variant's own commit objects verbatim and be a
+    // fast-forward, not the copy this test is about.
+    await writeFile(join(root, "mainline.txt"), "main moved on\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-m", "mainline work");
+    // Three of the variant's commits copied onto main — the exact violation
+    // `git cherry` exists to catch.
+    for (const sha of shas.slice(0, 3)) git(root, "cherry-pick", sha);
+
+    // Control: at the production cap the scan SEES the violation.
+    const honest = await scanPrototypeRefs(root);
+    expect(honest.error).toBeUndefined();
+    expect(honest.branches[0]!.copiedToDefault).toHaveLength(3);
+
+    // A 200-byte cap: the branch listing (~114 bytes) still fits, `git cherry`
+    // (10 lines of 43 bytes) does not — so the overflow lands on the probe.
+    const capped = await scanPrototypeRefs(root, 200);
+    expect(capped.error).toBeDefined();
+    expect(capped.error).toContain("200-byte capture cap");
+    // An abort inside a real repo: refs exist and went unjudged, which
+    // validate has to report rather than pass over (HC6).
+    expect(capped.scanFailed).toBe(true);
+    // No half-answer: an empty branch list WITHOUT an error would read as
+    // "scanned, nothing wrong".
+    expect(capped.branches).toEqual([]);
+    expect(capped.remoteRefs).toEqual([]);
   });
 });

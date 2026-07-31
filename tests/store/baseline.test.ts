@@ -79,10 +79,85 @@ describe("captureBaseline", () => {
     await expect(attempt).rejects.toThrow(/rev-parse/);
   });
 
-  test("a repo with no commits yet (unborn HEAD) fails with a GitError", async () => {
+  test("a repo with no commits yet (unborn HEAD) says so instead of leaking git's 'ambiguous argument'", async () => {
     const root = await makeBareDir();
     git(root, "init", "-q");
-    await expect(captureBaseline(root)).rejects.toBeInstanceOf(GitError);
+    const attempt = captureBaseline(root);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/no commits yet/);
+    await expect(attempt).rejects.toThrow(/initial commit/);
+    await expect(attempt).rejects.not.toThrow(/ambiguous argument/);
+  });
+
+  /**
+   * A bare repo can NEVER yield a baseline: `status --porcelain` needs a work
+   * tree. Two shapes, and neither may be told to make a commit —
+   * `rev-parse --is-inside-work-tree` answers "false" with EXIT 0 in a bare
+   * repo, so a probe reading only the exit code calls it an unborn worktree
+   * and hands out advice that can never work.
+   */
+  test("an EMPTY bare repo is refused as bare, not as a repo needing an initial commit", async () => {
+    const root = await makeBareDir();
+    git(root, "init", "--bare", "-q");
+    // `rev-parse HEAD` here prints the literal "HEAD" and exits 0 — it never
+    // resolves, so the SHA must not be taken at face value either.
+    const attempt = captureBaseline(root);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/bare/);
+    await expect(attempt).rejects.not.toThrow(/no commits yet/);
+    await expect(attempt).rejects.not.toThrow(/initial commit/);
+  });
+
+  test("a bare repo WITH commits is refused as bare too", async () => {
+    const source = await makeGitRepo();
+    const bare = await makeBareDir();
+    git(source, "clone", "--bare", "--quiet", ".", bare);
+
+    const attempt = captureBaseline(bare);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/bare/);
+    await expect(attempt).rejects.not.toThrow(/initial commit/);
+  });
+
+  /**
+   * The quietest failure in this module: git's repository-selection variables
+   * REDIRECT it. With GIT_DIR naming another repo, `rev-parse HEAD` answers
+   * about THAT repo at exit 0 — so a claim would journal a baseline for a
+   * repository the human never touched, and nothing would look wrong.
+   */
+  test("an inherited GIT_DIR does not move the baseline to another repo", async () => {
+    const mine = await makeGitRepo();
+    const other = await makeGitRepo();
+    // Distinct content, or the two identical initial commits hash the same.
+    await writeFile(join(other, "elsewhere.txt"), "a different repository\n");
+    git(other, "add", "elsewhere.txt");
+    git(other, "commit", "-q", "-m", "elsewhere");
+    const myHead = git(mine, "rev-parse", "HEAD").trim();
+    expect(myHead).not.toBe(git(other, "rev-parse", "HEAD").trim());
+
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = join(other, ".git");
+    try {
+      const baseline = await captureBaseline(mine);
+      expect(baseline.head).toBe(myHead);
+      expect(baseline.dirty).toEqual([]); // the OTHER repo's index would differ
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
+  });
+
+  test("output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
+    const root = await makeGitRepo();
+    // A 4-byte cap that `git rev-parse HEAD` (a 41-byte SHA line) outruns —
+    // the same overflow the 16 MiB production cap would see on a huge repo.
+    const attempt = captureBaseline(root, 4);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/rev-parse HEAD/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
+    // The repo HAS commits: an overflow must never be read as an unborn HEAD.
+    await expect(attempt).rejects.not.toThrow(/no commits yet/);
   });
 
   test("identical repo state yields byte-identical baselines", async () => {
@@ -184,6 +259,20 @@ describe("collectHandbackEvidence", () => {
     const first = await collectHandbackEvidence(root, baseline);
     const second = await collectHandbackEvidence(root, baseline);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
+  test("output past the capture cap fails naming the command and the cap", async () => {
+    const root = await makeGitRepo();
+    const baseline = await captureBaseline(root);
+    await writeFile(join(root, "new.txt"), "one more file\n");
+    git(root, "add", "new.txt");
+    git(root, "commit", "-q", "-m", "second");
+
+    const attempt = collectHandbackEvidence(root, baseline, 4);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/rev-list/);
+    await expect(attempt).rejects.toThrow(/4-byte capture cap/);
+    await expect(attempt).rejects.not.toThrow(/maxBuffer/);
   });
 
   test("a baseline head git does not know fails with a GitError", async () => {

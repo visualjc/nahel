@@ -393,6 +393,40 @@ describe("prototype.unrecorded — honest about what it cannot judge (F5.2)", ()
   });
 });
 
+describe("prototype.scan-failed — never-merge could not be judged at all (HC6)", () => {
+  /**
+   * A scan that ABORTED inside a real repo is not "there is no repo here":
+   * prototype refs may be sitting in it, unjudged. Silence would let
+   * `nahel validate` exit 0 — indistinguishable from a verified-clean repo —
+   * which is exactly the invisible failure HC6/ADR-0011 forbids.
+   */
+  test("an aborted scan is an ERROR carrying the reason, and invents no verdicts", () => {
+    const findings = validate(
+      input({
+        prototypeRefs: {
+          branches: [],
+          remoteRefs: [],
+          error:
+            "git cherry refs/heads/main refs/heads/prototype/speed-count/variant-1 failed in " +
+            "/repo: output exceeded nahel's 200-byte capture cap",
+          scanFailed: true,
+        },
+      }),
+    );
+    const scanFailed = findingsFor(findings, "prototype.scan-failed");
+    expect(scanFailed).toHaveLength(1);
+    expect(scanFailed[0]!.severity).toBe("error");
+    // The operator learns WHY the check could not run, in git's own words.
+    expect(scanFailed[0]!.message).toContain("capture cap");
+    expect(scanFailed[0]!.message).toContain("git cherry");
+    expect(scanFailed[0]!.fix).toBeDefined();
+    // Nothing else is judged: no merged/pushed/unrecorded verdict it never saw.
+    expect(prototypeFindings(findings).map((finding) => finding.check)).toEqual([
+      "prototype.scan-failed",
+    ]);
+  });
+});
+
 describe("the prototype checks stay silent when there is nothing to judge", () => {
   test("no ref scan at all (git unavailable, or a non-repo checkout) produces no prototype findings", () => {
     expect(prototypeFindings(validate(input({})))).toEqual([]);

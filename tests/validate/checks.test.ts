@@ -706,6 +706,27 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     console.log("[founding, text swapped under the signature]", findings);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.severity).toBe("warning");
+    // The act exists: name it, and say what is actually wrong with it. The
+    // no-act wording belongs to a genuinely empty journal, and pointing the
+    // reader at a missing act would send them hunting for the wrong thing.
+    expect(findings[0]!.message).not.toContain("no journaled config mutation records it");
+    expect(findings[0]!.message).toContain("human:jim");
+    expect(findings[0]!.message).toContain("records different paragraph bytes");
+  });
+
+  test("a genuinely empty journal keeps the no-act wording — the two states stay distinguishable", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: PARAGRAPH },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+    console.log("[founding, no act at all]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("no journaled config mutation records it");
+    expect(findings[0]!.message).not.toContain("records different paragraph bytes");
   });
 
   test("a whitespace-bearing paragraph recorded through the JSON --data form stays silent end to end", async () => {

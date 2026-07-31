@@ -317,6 +317,34 @@ describe("renderBrief — the signed founding paragraph (F9.5)", () => {
     expect(brief).toContain("no journaled act records it");
   });
 
+  test("a MISMATCHING act is named, not erased — the no-act wording is for an empty journal only", () => {
+    // The act exists and its provenance is knowable; it simply records other
+    // bytes. Saying "no journaled act records it" here is false and sends the
+    // reader looking for a missing act instead of the edit that moved the text.
+    const brief = renderBrief(
+      makeInputs({
+        founding: { mode: "hands-off", paragraph: "The paragraph as it stands on disk today." },
+        events: [
+          {
+            ...foundingAct("human", "jim"),
+            id: "f0f0f0f3",
+            payload: {
+              section: "founding",
+              value: { mode: "hands-off", paragraph: "The paragraph the human actually signed." },
+            },
+          },
+        ],
+      }),
+    );
+    console.log("[brief, mismatching founding act]\n", brief);
+    expect(brief).toContain("UNSIGNED");
+    expect(brief).not.toContain("no journaled act records it");
+    // Actor and event id both named, plus what is actually wrong.
+    expect(brief).toContain("human:jim");
+    expect(brief).toContain("f0f0f0f3");
+    expect(brief).toContain("records different paragraph bytes");
+  });
+
   test("an AMBIGUOUS signature names the tied acts — never the false claim that none exists", () => {
     // Same-second acts that disagree leave tied acts but no single recordedBy.
     // "no journaled act records it" would be a plain untruth about the journal

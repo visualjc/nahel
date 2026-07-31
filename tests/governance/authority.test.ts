@@ -394,7 +394,11 @@ describe("founding signature provenance — the paragraph is signed by the act t
     );
     console.log("[founding, paragraph swapped under the signature]", status);
     expect(status?.signed).toBe(false);
-    expect(status?.defect).toBe("unrecorded");
+    // A MISMATCH, not an absence: the act exists and its provenance is
+    // knowable — it simply records other bytes. Collapsing this into
+    // "unrecorded" would make every renderer claim no act exists at all.
+    expect(status?.defect).toBe("paragraph-mismatch");
+    expect(status?.recordedBy).toEqual({ event: "fffffff9", actor: HUMAN });
   });
 
   test("same-second HUMAN acts recording DIFFERENT paragraphs are ambiguous — the fail-safe is about the value too", () => {
@@ -424,7 +428,26 @@ describe("founding signature provenance — the paragraph is signed by the act t
       foundingConfigEvent("fffffffe", HUMAN, 1),
     ]);
     expect(status?.signed).toBe(false);
-    expect(status?.defect).toBe("unrecorded");
+    expect(status?.defect).toBe("paragraph-mismatch");
+    expect(status?.recordedBy?.event).toBe("fffffffe");
+  });
+
+  test("`unrecorded` is reserved for a journal with NO founding act at all", () => {
+    // The two states are different facts and lead to different repairs, so
+    // they must never share a defect: nothing to find vs. found, but stale.
+    const empty = foundingSignatureStatus(HANDS_OFF, []);
+    expect(empty?.defect).toBe("unrecorded");
+    expect(empty?.recordedBy).toBeUndefined();
+  });
+
+  test("a MISMATCHING agent act still reports as a mismatch, naming the agent that recorded it", () => {
+    // Mismatch outranks actor kind: an act recording other bytes says nothing
+    // about THIS paragraph, whoever made it — but the actor is still named.
+    const status = foundingSignatureStatus(HANDS_OFF, [
+      foundingConfigEvent("ffffffff", AGENT, 1, "Some other paragraph entirely."),
+    ]);
+    expect(status?.defect).toBe("paragraph-mismatch");
+    expect(status?.recordedBy).toEqual({ event: "ffffffff", actor: AGENT });
   });
 });
 

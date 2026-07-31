@@ -1,0 +1,2 @@
+{"id":"mvd36xtq","ts":"2026-07-30T23:39:13Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"255cdh6r","payload":{"target":"item","record":{"id":"255cdh6r","name":"store-root-walk-up-resolution","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T15:53:00Z","updated":"2026-07-30T23:39:13Z"},"body":""}}
+{"id":"5kegk00r","ts":"2026-07-30T23:39:13Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"z214c31a","ts":"2026-07-31T01:30:12Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"edfyfz40","payload":{"target":"item","record":{"id":"edfyfz40","name":"same-second-timestamp-tie-break","type":"chore","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T16:27:27Z","updated":"2026-07-31T01:30:12Z"},"body":""}}
+{"id":"bnw4evwr","ts":"2026-07-31T01:30:12Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"bq7d3qp2","ts":"2026-07-30T23:39:13Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"y7vzx3be","payload":{"target":"item","record":{"id":"y7vzx3be","name":"macos-timeout-shim","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T16:27:28Z","updated":"2026-07-30T23:39:13Z"},"body":""}}
+{"id":"5g8hzmm0","ts":"2026-07-30T23:39:13Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

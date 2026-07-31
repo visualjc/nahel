@@ -1,0 +1,2 @@
+{"id":"4d28j4ha","ts":"2026-07-31T00:35:26Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"h6fqaav0","payload":{"target":"item","record":{"id":"h6fqaav0","name":"hands-off-provenance-surfacing","type":"chore","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T20:06:15Z","updated":"2026-07-31T00:35:26Z"},"body":""}}
+{"id":"8t7ahxq7","ts":"2026-07-31T00:35:26Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

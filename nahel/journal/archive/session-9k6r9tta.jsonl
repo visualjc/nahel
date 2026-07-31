@@ -1,0 +1,2 @@
+{"id":"4360a0pa","ts":"2026-07-30T23:39:13Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"bktdg24r","payload":{"target":"item","record":{"id":"bktdg24r","name":"epic-children-status-rollup-check","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-21T23:21:38Z","updated":"2026-07-30T23:39:13Z"},"body":""}}
+{"id":"trmtdygj","ts":"2026-07-30T23:39:13Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

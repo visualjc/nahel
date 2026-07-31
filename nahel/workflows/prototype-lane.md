@@ -101,7 +101,10 @@ this paragraph:
   remote-tracking prototype ref — pushing is the precondition for a PR, and it
   is as far as an offline, deterministic check can see. A prototype branch nahel
   has no creation record for is reported as `prototype.unrecorded` (warning):
-  unjudgeable, not innocent.
+  unjudgeable, not innocent. And when the ref scan itself cannot complete inside
+  a repo that demonstrably exists — output over the capture cap, broken refs,
+  a probe git refuses to answer — `prototype.scan-failed` (error) reports the
+  aborted scan rather than letting a skipped check read as verified-clean.
 - **Merge-base drift.** `validate` also compares each variant's merge-base
   with the default branch against its recorded creation base. An honest
   variant's divergence point never moves; it drifts only when history crosses

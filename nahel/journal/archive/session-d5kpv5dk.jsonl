@@ -1,0 +1,2 @@
+{"id":"6a9qj7f1","ts":"2026-07-30T23:39:13Z","seq":0,"type":"item.updated","actor":{"kind":"human","id":"maintainer"},"item":"b5e07bmt","payload":{"target":"item","record":{"id":"b5e07bmt","name":"test-baseline-json-unescaped-test-cmd","type":"bug","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-25T16:00:03Z","updated":"2026-07-30T23:39:13Z"},"body":""}}
+{"id":"3sj0xrmc","ts":"2026-07-30T23:39:13Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

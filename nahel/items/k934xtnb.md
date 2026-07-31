@@ -2,10 +2,10 @@
 id: k934xtnb
 name: malformed-claim-baseline-robustness
 type: chore
-status: backlog
+status: done
 lane: direct
 depends_on: []
 external_refs: []
 created: 2026-07-21T16:27:27Z
-updated: 2026-07-21T16:27:27Z
+updated: 2026-07-31T01:30:11Z
 ---

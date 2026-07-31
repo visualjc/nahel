@@ -77,7 +77,12 @@ load-bearing: the human-attributed `config.updated` act that wrote the
 `founding` section IS the paragraph's signature. An agent-run founding act
 signs nothing — record the paragraph if the human dictated it to you, then say
 plainly that the founding stays unsigned until they run the command
-themselves.
+themselves. `nahel validate` enforces this mechanically (`founding.unsigned`,
+warning): it fires when the paragraph's latest founding act is agent-run, when
+the act's recorded paragraph no longer matches the committed bytes (the text
+moved after signing — re-sign through the byte-preserving JSON `--data` form),
+or when same-second acts disagree on actor or paragraph and the signature is
+ambiguous; only a journal with no founding act at all reads as unrecorded.
 
 ## Pick the tier
 

@@ -30,13 +30,27 @@ const execFileAsync = promisify(execFile);
 /** A prototype git operation failed, or was refused for safety. */
 export class PrototypeError extends Error {}
 
+/**
+ * A prototype git call outran the output cap. Distinct from an ordinary git
+ * failure because it is NOT a verdict about the repo, and the probe form must
+ * never hand it back as a non-zero exit: every probe caller reads that as a
+ * clean negative ("no equivalent commits", "no remote refs"), which is exactly
+ * how a never-merge violation would vanish into a clean scan (F5.2).
+ */
+export class PrototypeOutputCapError extends PrototypeError {}
+
 interface GitResult {
   code: number;
   stdout: string;
   stderr: string;
 }
 
-/** Run git, returning its exit code instead of throwing (probe form). */
+/**
+ * Run git, returning its exit code instead of throwing (probe form). The ONE
+ * failure it still throws on is an output-cap overflow: there is no exit code
+ * that could carry "nahel refused to read this", and every code the probe
+ * callers understand would be a lie about the repo.
+ */
 async function tryGit(
   root: string,
   args: readonly string[],
@@ -48,11 +62,10 @@ async function tryGit(
     });
     return { code: 0, stdout, stderr };
   } catch (error) {
-    // An output overflow is not git's verdict — it is nahel's own refusal, and
-    // it says so rather than passing "stdout maxBuffer length exceeded" off as
-    // git's reason (the ref scan reports this string to the operator).
     if (isOutputCapExceeded(error)) {
-      return { code: 1, stdout: "", stderr: outputCapDetail(maxOutputBytes) };
+      throw new PrototypeOutputCapError(
+        `git ${args.join(" ")} failed in ${root}: ${outputCapDetail(maxOutputBytes)}`,
+      );
     }
     const failure = error as { code?: unknown; stdout?: unknown; stderr?: unknown };
     return {
@@ -303,14 +316,25 @@ export interface PrototypeRefScan {
  * the clone recorded it, else the conventional names in order. Undefined when
  * none resolves — the merged check is skipped rather than guessed at.
  */
-async function resolveDefaultBranch(root: string): Promise<string | undefined> {
-  const symbolic = await tryGit(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+async function resolveDefaultBranch(
+  root: string,
+  maxOutputBytes: number,
+): Promise<string | undefined> {
+  const symbolic = await tryGit(
+    root,
+    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    maxOutputBytes,
+  );
   if (symbolic.code === 0) {
     const short = stripFirstSegment(symbolic.stdout.trim());
     if (short !== "") return short;
   }
   for (const name of ["main", "master"]) {
-    const exists = await tryGit(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]);
+    const exists = await tryGit(
+      root,
+      ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`],
+      maxOutputBytes,
+    );
     if (exists.code === 0) return name;
   }
   return undefined;
@@ -330,12 +354,13 @@ async function copiedToDefault(
   root: string,
   branch: string,
   defaultBranch: string,
+  maxOutputBytes: number,
 ): Promise<string[]> {
-  const cherry = await tryGit(root, [
-    "cherry",
-    `refs/heads/${defaultBranch}`,
-    `refs/heads/${branch}`,
-  ]);
+  const cherry = await tryGit(
+    root,
+    ["cherry", `refs/heads/${defaultBranch}`, `refs/heads/${branch}`],
+    maxOutputBytes,
+  );
   if (cherry.code !== 0) return [];
   const copies: string[] = [];
   for (const line of outputLines(cherry.stdout)) {
@@ -359,43 +384,64 @@ function parseRefLines(output: string): { name: string; sha: string }[] {
 
 /**
  * Scan the repo for prototype refs. Never throws: a missing git, a checkout
- * that is not a repo, or any plumbing failure comes back as `error`, and the
- * checks that read this treat "could not look" as "nothing to report" — the
- * store's tolerant-read discipline (validate must REPORT, never explode).
+ * that is not a repo, any plumbing failure, or nahel's own refusal to read
+ * past the output cap comes back as `error`, and the checks that read this
+ * treat "could not look" as "nothing to report" — the store's tolerant-read
+ * discipline (validate must REPORT, never explode).
+ *
+ * An overflow ABORTS the whole scan rather than trimming one probe's answer:
+ * a branch list carrying `copiedToDefault: []` because the probe was cut off
+ * would be indistinguishable from an honest all-clear.
  */
-export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan> {
-  const heads = await tryGit(root, [
-    "for-each-ref",
-    "--format=%(refname:short)%09%(objectname)",
-    "refs/heads",
-  ]);
+export async function scanPrototypeRefs(
+  root: string,
+  maxOutputBytes: number = MAX_OUTPUT_BYTES,
+): Promise<PrototypeRefScan> {
+  try {
+    return await collectPrototypeRefs(root, maxOutputBytes);
+  } catch (error) {
+    if (error instanceof PrototypeOutputCapError) {
+      return { branches: [], remoteRefs: [], error: error.message };
+    }
+    throw error;
+  }
+}
+
+async function collectPrototypeRefs(
+  root: string,
+  maxOutputBytes: number,
+): Promise<PrototypeRefScan> {
+  const heads = await tryGit(
+    root,
+    ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads"],
+    maxOutputBytes,
+  );
   if (heads.code !== 0) {
     return { branches: [], remoteRefs: [], error: heads.stderr.trim() };
   }
 
-  const defaultBranch = await resolveDefaultBranch(root);
+  const defaultBranch = await resolveDefaultBranch(root, maxOutputBytes);
   const branches: PrototypeBranchScan[] = [];
   for (const ref of parseRefLines(heads.stdout)) {
     if (!isPrototypeBranch(ref.name)) continue;
     let ancestorOfDefault = false;
     let copies: string[] = [];
     if (defaultBranch !== undefined) {
-      const contained = await tryGit(root, [
-        "merge-base",
-        "--is-ancestor",
-        ref.sha,
-        `refs/heads/${defaultBranch}`,
-      ]);
+      const contained = await tryGit(
+        root,
+        ["merge-base", "--is-ancestor", ref.sha, `refs/heads/${defaultBranch}`],
+        maxOutputBytes,
+      );
       ancestorOfDefault = contained.code === 0;
-      copies = await copiedToDefault(root, ref.name, defaultBranch);
+      copies = await copiedToDefault(root, ref.name, defaultBranch, maxOutputBytes);
     }
     let mergeBase: string | undefined;
     if (defaultBranch !== undefined) {
-      const mb = await tryGit(root, [
-        "merge-base",
-        `refs/heads/${defaultBranch}`,
-        ref.sha,
-      ]);
+      const mb = await tryGit(
+        root,
+        ["merge-base", `refs/heads/${defaultBranch}`, ref.sha],
+        maxOutputBytes,
+      );
       mergeBase = mb.code === 0 ? mb.stdout.trim() : undefined;
     }
     branches.push({
@@ -407,11 +453,11 @@ export async function scanPrototypeRefs(root: string): Promise<PrototypeRefScan>
     });
   }
 
-  const remotes = await tryGit(root, [
-    "for-each-ref",
-    "--format=%(refname:short)%09%(objectname)",
-    "refs/remotes",
-  ]);
+  const remotes = await tryGit(
+    root,
+    ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/remotes"],
+    maxOutputBytes,
+  );
   const remoteRefs =
     remotes.code === 0
       ? parseRefLines(remotes.stdout)

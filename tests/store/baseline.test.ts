@@ -89,6 +89,36 @@ describe("captureBaseline", () => {
     await expect(attempt).rejects.not.toThrow(/ambiguous argument/);
   });
 
+  /**
+   * A bare repo can NEVER yield a baseline: `status --porcelain` needs a work
+   * tree. Two shapes, and neither may be told to make a commit —
+   * `rev-parse --is-inside-work-tree` answers "false" with EXIT 0 in a bare
+   * repo, so a probe reading only the exit code calls it an unborn worktree
+   * and hands out advice that can never work.
+   */
+  test("an EMPTY bare repo is refused as bare, not as a repo needing an initial commit", async () => {
+    const root = await makeBareDir();
+    git(root, "init", "--bare", "-q");
+    // `rev-parse HEAD` here prints the literal "HEAD" and exits 0 — it never
+    // resolves, so the SHA must not be taken at face value either.
+    const attempt = captureBaseline(root);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/bare/);
+    await expect(attempt).rejects.not.toThrow(/no commits yet/);
+    await expect(attempt).rejects.not.toThrow(/initial commit/);
+  });
+
+  test("a bare repo WITH commits is refused as bare too", async () => {
+    const source = await makeGitRepo();
+    const bare = await makeBareDir();
+    git(source, "clone", "--bare", "--quiet", ".", bare);
+
+    const attempt = captureBaseline(bare);
+    await expect(attempt).rejects.toBeInstanceOf(GitError);
+    await expect(attempt).rejects.toThrow(/bare/);
+    await expect(attempt).rejects.not.toThrow(/initial commit/);
+  });
+
   test("output past the capture cap fails naming the command and the cap, not node's maxBuffer text", async () => {
     const root = await makeGitRepo();
     // A 4-byte cap that `git rev-parse HEAD` (a 41-byte SHA line) outruns —

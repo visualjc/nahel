@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   addDistilled,
@@ -95,26 +95,29 @@ describe("resolveStoreRoot / openStore — find the store like git finds .git", 
 
   test("cwd IS the store root: no walking needed", async () => {
     const root = await storeRepo();
-    expect(await resolveStoreRoot(root)).toBe(root);
+    expect(await resolveStoreRoot(root)).toBe(await realpath(root));
   });
 
   test("walks up from nahel/journal/archive/ — the 2026-07-25 distill quirk", async () => {
     const root = await storeRepo();
-    expect(await resolveStoreRoot(join(root, "nahel", "journal", "archive"))).toBe(root);
+    expect(await resolveStoreRoot(join(root, "nahel", "journal", "archive"))).toBe(
+      await realpath(root),
+    );
   });
 
   test("walks up from an arbitrary deep subdirectory of the repo", async () => {
     const root = await storeRepo();
     const deep = join(root, "src", "commands", "nested");
     await mkdir(deep, { recursive: true });
-    expect(await resolveStoreRoot(deep)).toBe(root);
+    expect(await resolveStoreRoot(deep)).toBe(await realpath(root));
   });
 
   test("openStore returns a layout rooted at the RESOLVED root, not at cwd", async () => {
     const root = await storeRepo();
+    const real = await realpath(root);
     const layout = await openStore(join(root, "nahel", "items"));
-    expect(layout.root).toBe(root);
-    expect(layout.configPath).toBe(join(root, "nahel", "config"));
+    expect(layout.root).toBe(real);
+    expect(layout.configPath).toBe(join(real, "nahel", "config"));
   });
 
   test("a nested git repo bounds the walk: an inner checkout never borrows the outer store", async () => {
@@ -150,14 +153,27 @@ describe("resolveStoreRoot / openStore — find the store like git finds .git", 
     await writeConfig(await ensureLayout(root), makeConfig());
     const sub = join(root, "sub");
     await mkdir(sub);
-    expect(await resolveStoreRoot(root)).toBe(root);
+    expect(await resolveStoreRoot(root)).toBe(await realpath(root));
     await expect(resolveStoreRoot(sub)).rejects.toThrow(/nahel\/config not found/);
+  });
+
+  test("a symlinked cwd is canonicalized first: the walk starts at the REAL directory", async () => {
+    // A shell can hand cwd in as a symlink that points into the repo. Walking
+    // its lexical parents leaves the repo entirely (the link's own parent),
+    // so the store is missed; realpath is what makes the walk a statement
+    // about the filesystem rather than about the path's spelling.
+    const root = await storeRepo();
+    const outside = await tempRoot();
+    const link = join(outside, "into-the-repo");
+    await symlink(join(root, "nahel", "journal", "archive"), link);
+    expect(await resolveStoreRoot(link)).toBe(await realpath(root));
+    expect((await openStore(link)).root).toBe(await realpath(root));
   });
 
   test("openStoreTolerant walks like openStore when a store is there", async () => {
     const root = await storeRepo();
     const layout = await openStoreTolerant(join(root, "nahel", "journal", "archive"));
-    expect(layout.root).toBe(root);
+    expect(layout.root).toBe(await realpath(root));
   });
 
   test("openStoreTolerant falls back to cwd when the walk finds nothing", async () => {
@@ -165,9 +181,10 @@ describe("resolveStoreRoot / openStore — find the store like git finds .git", 
     // works off skills.yaml alone (PRD F7) — neither may die in the resolver.
     const root = await tempRoot();
     git(root, "init", "-q");
+    const real = await realpath(root);
     const layout = await openStoreTolerant(root);
-    expect(layout.root).toBe(root);
-    expect(layout.configPath).toBe(join(root, "nahel", "config"));
+    expect(layout.root).toBe(real);
+    expect(layout.configPath).toBe(join(real, "nahel", "config"));
   });
 
   test("nothing found: the error names where it looked and points at `nahel init`", async () => {
@@ -180,8 +197,8 @@ describe("resolveStoreRoot / openStore — find the store like git finds .git", 
       (thrown: unknown) => thrown as Error,
     );
     expect(error).toBeInstanceOf(Error);
-    expect(error!.message).toContain(sub);
-    expect(error!.message).toContain(root);
+    expect(error!.message).toContain(await realpath(sub));
+    expect(error!.message).toContain(await realpath(root));
     expect(error!.message).toContain("nahel init");
   });
 });

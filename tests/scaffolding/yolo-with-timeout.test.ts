@@ -115,12 +115,33 @@ async function readPid(file: string): Promise<number> {
 }
 
 /**
- * A child that ignores SIGTERM outright, so only the hard KILL can stop it.
- * Records its own pid so the test can prove it actually died. Single-quoted
- * for bash and free of apostrophes so the perl body survives verbatim.
+ * An executable that ignores SIGTERM outright, so only the hard KILL can stop
+ * it, and records its own pid so a test can prove it actually died. A file
+ * rather than a `perl -e` string so it drops into a nested `bash -c` without
+ * a quoting maze. Returns the absolute path and the pid file it will write.
  */
-const TERM_IGNORING_CHILD =
-  `perl -e '$SIG{TERM} = "IGNORE"; open my $f, ">", $ENV{PIDFILE} or die; print $f $$; close $f; sleep 60;'`;
+async function termIgnoringScript(): Promise<{ path: string; pidFile: string }> {
+  const dir = await makeTempDir("nahel-yolo-child-");
+  tempDirs.push(dir);
+  const perl = Bun.which("perl");
+  if (!perl) throw new Error("test prerequisite missing from host PATH: perl");
+  const pidFile = join(dir, "child.pid");
+  const path = join(dir, "term-ignoring");
+  await writeFile(
+    path,
+    [
+      `#!${perl}`,
+      `$SIG{TERM} = "IGNORE";`,
+      `open my $f, ">", ${JSON.stringify(pidFile)} or die "pidfile: $!";`,
+      `print $f $$;`,
+      `close $f;`,
+      `sleep 60;`,
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return { path, pidFile };
+}
 
 describe("with-timeout.sh — the watchdog", () => {
   test("returns the command's own exit status when it finishes in time", async () => {
@@ -175,20 +196,37 @@ describe("with-timeout.sh — the watchdog", () => {
 
   test("escalates to KILL, so a child that ignores TERM still dies at the hard cap", async () => {
     const bin = await sandboxBin(WATCHDOG_TOOLS);
-    const scratch = await makeTempDir("nahel-yolo-pid-");
-    tempDirs.push(scratch);
-    const pidFile = join(scratch, "child.pid");
+    const { path, pidFile } = await termIgnoringScript();
 
     const started = Date.now();
-    const result = await runWithPath(`with_timeout 1 ${TERM_IGNORING_CHILD}; echo "rc=$?"`, bin, {
-      env: { PIDFILE: pidFile },
-    });
+    const result = await runWithPath(`with_timeout 1 ${path}; echo "rc=$?"`, bin);
     const elapsed = Date.now() - started;
 
     expect(result.stdout.trim()).toBe("rc=124");
     expect(await died(await readPid(pidFile))).toBe(true);
     // 1s cap + the grace, not the child's 60s sleep.
     expect(elapsed).toBeLessThan((1 + KILL_AFTER_SECONDS + 6) * 1000);
+  }, 30000);
+
+  test("waits for the whole group to drain, not just the direct child", async () => {
+    const bin = await sandboxBin(WATCHDOG_TOOLS);
+    const { path, pidFile } = await termIgnoringScript();
+
+    // The direct child (bash) dies on TERM immediately; its descendant ignores
+    // TERM. Reaping only the direct child looks like success and returns 124
+    // while the descendant is still running. stdout is redirected so a
+    // surviving descendant fails the assertion instead of wedging the pipe.
+    const started = Date.now();
+    const result = await runWithPath(
+      `with_timeout 1 bash -c '${path} >/dev/null 2>&1 & wait'; echo "rc=$?"`,
+      bin,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(result.stdout.trim()).toBe("rc=124");
+    expect(await died(await readPid(pidFile))).toBe(true);
+    // The KILL escalation must have been charged: TERM alone never stops it.
+    expect(elapsed).toBeGreaterThanOrEqual((1 + KILL_AFTER_SECONDS) * 1000 - 500);
   }, 30000);
 
   test("kills the whole process tree, so descendants do not outlive the timeout", async () => {

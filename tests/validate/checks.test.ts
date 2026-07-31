@@ -744,12 +744,14 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     expect(finding.fix).not.toContain("--data mode=hands-off");
 
     // Why it matters, demonstrated: the trimming form silently rewrites the
-    // very bytes under signature.
+    // very bytes under signature. parseDataEntries trims the whole ENTRY
+    // ("paragraph=  text  "), so the value keeps its leading whitespace and
+    // loses its trailing whitespace — a different paragraph either way.
     await setFounding(fixture, ["mode=hands-off", `paragraph=${paragraph}`], "human:jim");
     const trimmed = (await readConfig(fixture.layout)).founding?.paragraph;
     console.log("[founding, key=value re-sign]", JSON.stringify(trimmed));
     expect(trimmed).not.toBe(paragraph);
-    expect(trimmed).toBe(paragraph.trim());
+    expect(trimmed).toBe(paragraph.trimEnd());
 
     // The JSON form the fix prescribes signs the paragraph as written.
     await setFounding(fixture, [JSON.stringify({ mode: "hands-off", paragraph })], "human:jim");

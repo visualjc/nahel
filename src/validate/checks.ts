@@ -854,9 +854,14 @@ function checkFoundingSignature(state: ParsedState): Finding[] {
       message:
         `nahel/config records a founding paragraph, but ${foundingSignatureCause(status)} — ` +
         `the constitution is unsigned and the autonomy gate refuses to treat it as founded`,
+      // The JSON --data form, never `--data paragraph=…`: the key=value
+      // dialect trims the whole entry (parseDataEntries), so the value loses
+      // its trailing whitespace and the human would re-sign bytes that differ
+      // from the ones on disk (nahel/workflows/inception.md). JSON passes the
+      // text through untouched — and verbatim is the whole promise (F9.5).
       fix:
-        "a HUMAN must re-run `nahel config set founding --data mode=hands-off " +
-        '--data paragraph="<the paragraph>"` ' +
+        "a HUMAN must re-run `nahel config set founding " +
+        `--data '{"mode": "hands-off", "paragraph": "<the paragraph, verbatim>"}'\` ` +
         `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
         "IS the paragraph's signature (nahel/workflows/inception.md)",
     },

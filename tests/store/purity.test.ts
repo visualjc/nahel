@@ -132,7 +132,19 @@ describe("store layer owns ALL fs I/O", () => {
     // It reads the environment for exactly one purpose — building a git child
     // env with the repository-selection variables removed.
     expect(source).toMatch(/export function gitSpawnEnv\(/);
-    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES"]) {
+    // The strip list IS the defence, so every variable is pinned by name here —
+    // including the discovery overrides that let git walk PAST the root it was
+    // handed (a ceiling, or a filesystem boundary) and answer about an outer repo.
+    for (const name of [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+      "GIT_COMMON_DIR",
+      "GIT_CEILING_DIRECTORIES",
+      "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    ]) {
       expect(source).toContain(name);
     }
   });

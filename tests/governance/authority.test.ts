@@ -548,6 +548,53 @@ describe("constitution signature verdict — both founding doors, one answer", (
     expect(status.inception.defect).toBe("unrecorded");
   });
 
+  /**
+   * The founding half's paragraph-mismatch lesson, applied here: an act signs
+   * the VALUE its own payload recorded, never whatever config holds later.
+   * Without that comparison a human act naming one signer would authenticate
+   * any later hand-edit naming another — the laundering a signature exists to
+   * prevent. Still never compared: the signer against the ACTOR's id.
+   */
+  test("a human act that recorded ANOTHER signer does not authenticate a later hand-edit", () => {
+    const status = constitutionSignatureStatus(
+      { inception: { tier: "standard", constitution_signed_by: "alice" } },
+      [inceptionConfigEvent("aaaaaaa4", HUMAN, 1)], // this act recorded "jim"
+    );
+    console.log("[constitution, signer swapped under the act]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    // A MISMATCH, not an absence: the act exists and is nameable — it simply
+    // recorded another signer. Collapsing it into `unrecorded` would send the
+    // reader hunting for an act that is right there.
+    expect(status.inception.defect).toBe("signer-mismatch");
+    expect(status.inception.recordedBy).toEqual({ event: "aaaaaaa4", actor: HUMAN });
+  });
+
+  test("a MISMATCHING agent act still reports as a mismatch, naming the agent that recorded it", () => {
+    const status = constitutionSignatureStatus(
+      { inception: { tier: "standard", constitution_signed_by: "alice" } },
+      [inceptionConfigEvent("aaaaaaa5", AGENT, 1)],
+    );
+    expect(status.inception.defect).toBe("signer-mismatch");
+    expect(status.inception.recordedBy).toEqual({ event: "aaaaaaa5", actor: AGENT });
+  });
+
+  test("the signer is compared to the ACT's value, never to the actor's id", () => {
+    // A human whose actor id differs from the name they sign under is ordinary
+    // in a legacy store (`human:jim` recording `jim.carter`). The act recorded
+    // that value, so the act signs it.
+    const status = constitutionSignatureStatus(
+      { inception: { tier: "standard", constitution_signed_by: "jim.carter" } },
+      [
+        inceptionConfigEvent("aaaaaaa6", HUMAN, 1, {
+          tier: "standard",
+          constitution_signed_by: "jim.carter",
+        }),
+      ],
+    );
+    expect(status.inception.signed).toBe(true);
+    expect(status.inception.defect).toBeUndefined();
+  });
+
   test("same-second writers of different actor kinds are ambiguous — a lottery never signs", () => {
     const status = constitutionSignatureStatus({ inception: SIGNED }, [
       inceptionConfigEvent("44444444", HUMAN, 0),
@@ -603,6 +650,24 @@ describe("constitution signature verdict — both founding doors, one answer", (
     expect(status.founding?.signed).toBe(true);
     expect(status.inception.signed).toBe(false);
     expect(status.inception.defect).toBe("unsigned");
+  });
+
+  /**
+   * The exemption belongs to the hands-off MODE, not to the mere presence of a
+   * paragraph: the schema requires a paragraph of hands-off but permits one on
+   * a GUIDED founding too, and a guided founding never spent the human's act
+   * on it — the human was present the whole way and signs the tier record
+   * themselves. Keying off the paragraph would hand any guided project a free
+   * pass by adding one optional field.
+   */
+  test("a GUIDED founding that carries a paragraph does NOT exempt the inception act", () => {
+    const status = constitutionSignatureStatus(
+      { founding: { mode: "guided", paragraph: HANDS_OFF.paragraph }, inception: SIGNED },
+      [inceptionConfigEvent("aaaaaaa7", AGENT, 2)],
+    );
+    console.log("[constitution, guided founding carrying a paragraph]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
   });
 
   test("the founding half is exactly foundingSignatureStatus — one rule, not two", () => {

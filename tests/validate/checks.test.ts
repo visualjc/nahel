@@ -1011,6 +1011,31 @@ describe("validate — inception signature provenance (inception.unsigned, F7.2)
     expect(findings[0]!.message).toContain("no journaled config mutation");
   });
 
+  test("a signer hand-edited AFTER the human act warns — the act signs what it recorded, not later text", async () => {
+    const fixture = await setupFixture(dirs);
+    await setInception(fixture, ["tier=standard", "constitution_signed_by=jim"], "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "inception.unsigned")).toEqual([]);
+
+    // The journal still holds jim's act; only the committed field moved.
+    const signed = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...signed,
+      inception: { tier: "standard", constitution_signed_by: "alice" },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, signer swapped under the act]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    // The act exists — name it, and say what is actually wrong with it. The
+    // no-act wording belongs to a journal that holds nothing.
+    expect(findings[0]!.message).not.toContain("no journaled config mutation");
+    expect(findings[0]!.message).toContain("human:jim");
+    expect(findings[0]!.message).toContain("different `constitution_signed_by`");
+    expect(findings[0]!.fix).toContain("nahel config set inception");
+    expect(findings[0]!.fix).toContain("constitution_signed_by=");
+  });
+
   test("same-second writers that disagree warn, and the fix says to re-run a second later", async () => {
     const fixture = await setupFixture(dirs);
     const config = await readConfig(fixture.layout);
@@ -1133,6 +1158,30 @@ describe("validate — inception signature provenance (inception.unsigned, F7.2)
     console.log("[inception, hands-off without the field]", findings);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.message).toContain("constitution_signed_by");
+
+    // ...and the repair is an AGENT's, not the human's. A hands-off founding
+    // is the zero-return door (F9.5): the human's one act was the paragraph,
+    // and demanding they come back to type the tier record would break the
+    // very promise the mode makes. The fix names the founding act instead, as
+    // the signature the recorded field cites.
+    const events = [];
+    for await (const event of readJournal(fixture.layout)) events.push(event);
+    const foundingAct = events.find(
+      (event) => event.type === "config.updated" && event.payload["section"] === "founding",
+    )!;
+    console.log("[inception, hands-off fix]", findings[0]!.fix);
+    expect(findings[0]!.fix).not.toContain("a HUMAN must");
+    expect(findings[0]!.fix).toContain(foundingAct.id);
+    expect(findings[0]!.fix).toContain("nahel config set inception");
+  });
+
+  test("outside a hands-off founding the fix still demands the HUMAN — nobody else can sign", async () => {
+    const fixture = await setupFixture(dirs);
+    await setInception(fixture, ["tier=standard"], "agent:claude-code");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, guided fix]", findings[0]!.fix);
+    expect(findings[0]!.fix).toContain("a HUMAN must");
   });
 });
 

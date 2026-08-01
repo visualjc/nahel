@@ -5,6 +5,9 @@ knowledge:
 actor:
   kind: human
   id: maintainer
+inception:
+  tier: standard
+  constitution_signed_by: human:jim — signed 2026-07-31
 governance:
   product: human
   architecture: human

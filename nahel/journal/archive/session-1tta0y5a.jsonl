@@ -1,0 +1,2 @@
+{"id":"6nabdyy0","ts":"2026-08-01T18:20:44Z","seq":0,"type":"config.updated","actor":{"kind":"human","id":"maintainer"},"payload":{"section":"inception","value":{"tier":"standard","constitution_signed_by":"human:jim — signed 2026-07-31"}}}
+{"id":"yheyaaqz","ts":"2026-08-01T18:20:44Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

@@ -31,6 +31,7 @@ import {
   findingsFor,
   rawEventLine,
   setupFixture,
+  signConstitution,
 } from "./helpers";
 
 let dirs: string[] = [];
@@ -43,6 +44,10 @@ afterEach(async () => {
 describe("validate — clean store", () => {
   test("a store built entirely through the write surface produces zero findings", async () => {
     const fixture = await setupFixture(dirs);
+    // A store with work in it is founded (F7.2): the human's `config set
+    // inception` is part of the write surface, and without it the store is
+    // honestly defective (`inception.unsigned`).
+    await signConstitution(fixture);
     const epic = await createItem(fixture, { name: "clean-epic", type: "plan" });
     const task = await createItem(fixture, { name: "clean-task", parent: epic.id });
     await createRun(fixture, task.id);
@@ -404,6 +409,7 @@ describe("validate — referential integrity", () => {
 
   test("an observation whose item ref names an existing item is silent", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const item = await createItem(fixture, { name: "observed-item" });
     const source = await appendEvent(fixture.layout, fixture.env, {
       type: "note",
@@ -667,6 +673,10 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
 
   test("a GUIDED founding recorded by an agent is silent — only the paragraph carries authority", async () => {
     const fixture = await setupFixture(dirs);
+    // A guided founding records the tier and the signature itself (F7.2), and
+    // THAT act's provenance is what `inception.unsigned` judges — so sign it,
+    // or this store carries the other half's defect instead of none.
+    await signConstitution(fixture);
     await setFounding(fixture, ["mode=guided"], "agent:claude-code");
 
     const findings = await validateStore(fixture.layout);
@@ -1466,6 +1476,7 @@ describe("validate — done-parent children rollup (item.children-unfinished)", 
 
   test("a done parent whose children are all done is silent", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const epic = await createItem(fixture, { name: "closed-epic", type: "plan", status: "done" });
     await createItem(fixture, { name: "closed-a", parent: epic.id, status: "done" });
     await createItem(fixture, { name: "closed-b", parent: epic.id, status: "done" });
@@ -1477,6 +1488,7 @@ describe("validate — done-parent children rollup (item.children-unfinished)", 
 
   test("a done parent whose remaining children were dropped is silent — dropped is settled, not pending", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const epic = await createItem(fixture, { name: "trimmed-epic", type: "plan", status: "done" });
     await createItem(fixture, { name: "trimmed-shipped", parent: epic.id, status: "done" });
     await createItem(fixture, { name: "trimmed-cut", parent: epic.id, status: "dropped" });
@@ -1488,6 +1500,7 @@ describe("validate — done-parent children rollup (item.children-unfinished)", 
 
   test("a parent that is NOT done never warns, however mixed its children are", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const epic = await createItem(fixture, {
       name: "live-epic",
       type: "plan",
@@ -2216,6 +2229,7 @@ describe("validate — mutation detection keys on event type, not payload shape"
 describe("validate — observation mutations flow through the choke point (PRD F6)", () => {
   test("a journaled observation validates clean; losing the record is journal.divergence and repair heals it", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const item = await createItem(fixture);
 
     // Provenance: cite the item-creation event this same store journaled.

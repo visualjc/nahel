@@ -2,9 +2,10 @@ import YAML from "yaml";
 import type { z } from "zod";
 import { resolveReviewSlots } from "../dispatch/invocation";
 import {
-  foundingSignatureStatus,
+  constitutionSignatureStatus,
   mergeAuthorityStatus,
   type FoundingSignatureStatus,
+  type InceptionSignatureStatus,
   type MergeAuthorityStatus,
 } from "../governance/authority";
 import {
@@ -769,17 +770,23 @@ function mergeAuthorityCause(status: MergeAuthorityStatus): string {
   return "no journaled config mutation sets it, so the flip's human provenance cannot be proven";
 }
 
+/**
+ * Ambiguity needs one extra word in every provenance fix: the repairing act
+ * must be LATER, not merely newer in the file — same-second acts carry no
+ * ordering, so a fresh act sharing the tied second decides nothing either.
+ */
+function resignTiming(defect: string | undefined): string {
+  return defect === "ambiguous"
+    ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
+    : "";
+}
+
 function checkMergeAuthority(state: ParsedState): Finding[] {
   if (state.config === undefined) return [];
   const status = mergeAuthorityStatus(state.config.merge, state.events);
   if (status.defect === undefined) return [];
 
-  // Ambiguity needs one extra word in the fix: the fresh act must be LATER,
-  // not merely newer in the file.
-  const timing =
-    status.defect === "ambiguous"
-      ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
-      : "";
+  const timing = resignTiming(status.defect);
   return [
     {
       severity: "warning",
@@ -859,23 +866,74 @@ function foundingSignatureCause(status: FoundingSignatureStatus): string {
   return "no journaled config mutation records it, so the paragraph's human provenance cannot be proven";
 }
 
-function checkFoundingSignature(state: ParsedState): Finding[] {
-  const status = foundingSignatureStatus(state.config?.founding, state.events);
-  if (status === undefined || status.signed) return [];
+/**
+ * Inception signature provenance (PRD F7.2, nahel/workflows/afk-run.md gate
+ * 1a): the same rule for every project that did NOT found hands-off — guided
+ * foundings and the projects founded before the field existed. With no
+ * paragraph to sign, the gate reads `inception.constitution_signed_by` and the
+ * act that recorded it: "an agent-attributed signature is not a signature".
+ * Two states were entirely unsurfaced until now — a section that never
+ * recorded a signer, and a signer an agent transcribed on a human's behalf —
+ * and both refuse the run at the gate, hours after the human left.
+ *
+ * A WARNING, never an error, exactly as founding.unsigned: an unsigned
+ * constitution is a gate refusal, not corrupt state — interactive work is
+ * ungated and stays legal. Validate simply moves the refusal from the moment
+ * the human walks away to the moment they can still act on it.
+ */
+function inceptionSignatureCause(status: InceptionSignatureStatus): string {
+  if (status.defect === "absent") {
+    return "nahel/config records no `inception` section, so nothing records who signed the constitution";
+  }
+  if (status.defect === "unsigned") {
+    return (
+      "nahel/config records an inception tier but no `constitution_signed_by`, " +
+      "so nothing records who signed the constitution"
+    );
+  }
+  if (status.defect === "agent-recorded") {
+    return (
+      "the config mutation that recorded nahel/config's `constitution_signed_by` " +
+      `(event ${status.recordedBy!.event}) was made by ` +
+      `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id} — an agent transcribing ` +
+      "a human's name is not that human's signature"
+    );
+  }
+  if (status.defect === "ambiguous") {
+    const tied = (status.tied ?? [])
+      .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
+      .join(", ");
+    return (
+      `${(status.tied ?? []).length} config mutations wrote nahel/config's \`inception\` section ` +
+      `in the same second (${tied}) and they disagree — same-second acts from different sessions ` +
+      "carry no ordering, so which one signed is undecidable"
+    );
+  }
+  return (
+    "no journaled config mutation records nahel/config's `constitution_signed_by`, " +
+    "so the signature's human provenance cannot be proven"
+  );
+}
 
-  // Ambiguity needs one extra word in the fix: the fresh act must be LATER,
-  // not merely newer in the file (mergeAuthorityCause's rule, same reason).
-  const timing =
-    status.defect === "ambiguous"
-      ? " — run it at least one second after the tied acts, so its timestamp is strictly the latest"
-      : "";
-  return [
-    {
+/**
+ * The constitution's signature, both halves from one verdict (authority.ts):
+ * `founding.unsigned` for the hands-off paragraph, `inception.unsigned` for
+ * the tier record every project needs. They fail independently — a hands-off
+ * project can have a signed paragraph and no tier record — and each names its
+ * own repair, so each is its own finding.
+ */
+function checkConstitutionSignature(state: ParsedState): Finding[] {
+  if (state.config === undefined) return [];
+  const { founding, inception } = constitutionSignatureStatus(state.config, state.events);
+  const findings: Finding[] = [];
+
+  if (founding !== undefined && !founding.signed) {
+    findings.push({
       severity: "warning",
       check: "founding.unsigned",
       path: state.input.configPath,
       message:
-        `nahel/config records a founding paragraph, but ${foundingSignatureCause(status)} — ` +
+        `nahel/config records a founding paragraph, but ${foundingSignatureCause(founding)} — ` +
         `the constitution is unsigned and the autonomy gate refuses to treat it as founded`,
       // The JSON --data form, never `--data paragraph=…`: the key=value
       // dialect trims the whole entry (parseDataEntries), so the value loses
@@ -885,10 +943,42 @@ function checkFoundingSignature(state: ParsedState): Finding[] {
       fix:
         "a HUMAN must re-run `nahel config set founding " +
         `--data '{"mode": "hands-off", "paragraph": "<the paragraph, verbatim>"}'\` ` +
-        `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${timing}; that journaled act ` +
-        "IS the paragraph's signature (nahel/workflows/inception.md)",
-    },
-  ];
+        `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${resignTiming(founding.defect)}; ` +
+        "that journaled act IS the paragraph's signature (nahel/workflows/inception.md)",
+    });
+  }
+
+  // An `inception` section a store never had is worth reporting only once the
+  // store has something the gate would refuse: work on disk, or a founding
+  // that recorded which door the project came through. A freshly scaffolded
+  // store has nothing to run AFK yet, and warning there would make `nahel
+  // init` greet every new project with a defect. Raw presence, so a
+  // malformed item still counts — work is work.
+  const hasWork =
+    state.itemFiles.size > 0 || state.runDirs.size > 0 || state.config.founding !== undefined;
+  if (!inception.signed && (inception.defect !== "absent" || hasWork)) {
+    findings.push({
+      severity: "warning",
+      check: "inception.unsigned",
+      path: state.input.configPath,
+      message:
+        `${inceptionSignatureCause(inception)} — the constitution is unsigned and the autonomy ` +
+        "gate refuses to start an AFK run",
+      // Both fields in the ONE act: `config set` replaces the whole section,
+      // so a signer-only re-run would drop the tier (and a tier-only one the
+      // signature). The tier is named when config already records one, so the
+      // command is a paste rather than a lookup.
+      fix:
+        "a HUMAN must run `nahel config set inception " +
+        `--data tier=${state.config.inception?.tier ?? "<seed|standard|full>"} ` +
+        "--data 'constitution_signed_by=<their id>'` (as a human actor — NAHEL_ACTOR unset, " +
+        `or human:<id>)${resignTiming(inception.defect)}; \`config set\` replaces the whole ` +
+        "section, so both fields must be given in that one act, and the act itself IS the " +
+        "signature (nahel/workflows/inception.md)",
+    });
+  }
+
+  return findings;
 }
 
 /**
@@ -1786,7 +1876,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdApproval(state),
     ...checkChildrenRollup(state),
     ...checkMergeAuthority(state),
-    ...checkFoundingSignature(state),
+    ...checkConstitutionSignature(state),
     ...checkReviewSlots(state),
     ...checkCycles(state),
     ...checkClaims(state),

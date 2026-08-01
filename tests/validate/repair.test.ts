@@ -14,6 +14,7 @@ import {
   rawEventLine,
   sabotageItemWrites,
   setupFixture,
+  signConstitution,
   type ValidateFixture,
 } from "./helpers";
 
@@ -27,6 +28,7 @@ afterEach(async () => {
 describe("validate — journal-ahead divergence and --repair (kill-injected crash window)", () => {
   test("detect → repair → clean: a record behind its latest mutation event is found, replayed, and revalidates silently", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const v1 = await createItem(fixture, {}, "version one\n");
 
     // Kill-inject the crash window: journal the update, lose the record write.
@@ -85,6 +87,7 @@ describe("validate — journal-ahead divergence and --repair (kill-injected cras
 
   test("repair also heals a SCHEMA-CORRUPT record whose truth the journal holds (found by driving)", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const item = await createItem(fixture, {}, "the journaled truth\n");
 
     // Hand-corrupt the on-disk record: an invalid status the schema rejects.
@@ -190,6 +193,7 @@ describe("validate/repair — same-second cross-segment mutation ties", () => {
 
   test("record matching the causally-final update is in sync even when the update's event id sorts FIRST", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     // Total order (ts, seq, id) puts updated ("11111111") BEFORE created
     // ("zzzzzzzz") — the adverse coin flip: naive latest = the created event.
     const { v2 } = await seedTiedSegments(fixture, "zzzzzzzz", "11111111");
@@ -203,6 +207,7 @@ describe("validate/repair — same-second cross-segment mutation ties", () => {
 
   test("record matching the update is in sync in the favorable id order too", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const { v2 } = await seedTiedSegments(fixture, "11111111", "zzzzzzzz");
     await writeItem(fixture.layout, v2, "");
 

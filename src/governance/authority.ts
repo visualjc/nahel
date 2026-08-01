@@ -22,11 +22,14 @@ import type { StoreLayout } from "../store/layout";
  *      an agent-set flag authorizes nothing: it resolves back to
  *      `merge: human` and `nahel validate` warns.
  *
- *   3. Is the hands-off founding paragraph SIGNED? Only when the journal
- *      proves a HUMAN actor made the config mutation that recorded it — the
- *      same provenance rule, applied to the one piece of constitutional text
- *      an agent never authors (F9.5, nahel/workflows/inception.md). An
- *      agent-run founding act signs nothing.
+ *   3. Is the constitution SIGNED? Only when the journal proves a HUMAN actor
+ *      made the config mutation that recorded the signature — the same
+ *      provenance rule, applied to the one thing an agent never authors (F7.2,
+ *      F9.5, nahel/workflows/inception.md). WHICH act carries it depends on
+ *      the door the project came through: a hands-off founding's paragraph is
+ *      signed by the act that recorded it, and every other project's signature
+ *      is the act that recorded `inception.constitution_signed_by`. An
+ *      agent-run act signs nothing either way.
  *
  * Deterministic throughout: committed config plus journal events in, an
  * answer out. No clock, no network, no judgment.
@@ -128,6 +131,11 @@ function settledAuthority(event: JournalEvent): unknown {
 /** The paragraph a founding act RECORDED — the bytes that act actually signs. */
 function settledParagraph(event: JournalEvent): unknown {
   return settledField(event, "paragraph");
+}
+
+/** The signer an inception act RECORDED — the field that act actually signs. */
+function settledSigner(event: JournalEvent): unknown {
+  return settledField(event, "constitution_signed_by");
 }
 
 /**
@@ -316,6 +324,133 @@ export function foundingSignatureStatus(
     return { signed: false, recordedBy, defect: "agent-recorded" };
   }
   return { signed: true, recordedBy };
+}
+
+/** Why the inception record carries no human constitution signature. */
+export type InceptionSignatureDefect =
+  /** No `inception` section at all — nothing records the tier, let alone a signer. */
+  | "absent"
+  /** The section is recorded, but carries no `constitution_signed_by`. */
+  | "unsigned"
+  /** The config mutation that recorded the signer was made by an agent actor. */
+  | "agent-recorded"
+  /**
+   * No journaled config mutation records the signer — either none wrote the
+   * section at all, or the latest one recorded no signer field (a hand edit,
+   * a journal that lost the act). Unprovable is not signed.
+   */
+  | "unrecorded"
+  /** Same-second acts that disagree on actor kind or signer; ordering cannot decide. */
+  | "ambiguous";
+
+/** Whether the inception record is human-signed, and the act that decided it. */
+export interface InceptionSignatureStatus {
+  /**
+   * True when the inception record satisfies everything the autonomy gate asks
+   * of IT: the section exists, it carries `constitution_signed_by`, and —
+   * outside a hands-off founding, where the human's single act was spent on
+   * the paragraph — a human-attributed act recorded that field.
+   */
+  signed: boolean;
+  /** The journal act that last wrote `config.inception`, when findable. */
+  recordedBy?: { event: string; actor: Actor };
+  /** The same-second writers that could not be ordered ("ambiguous" only). */
+  tied?: { event: string; actor: Actor }[];
+  /** Present exactly when `signed` is false. */
+  defect?: InceptionSignatureDefect;
+}
+
+/** The whole constitution-signature verdict: both halves, both founding doors. */
+export interface ConstitutionSignatureStatus {
+  /**
+   * The hands-off paragraph's signature — present exactly when config records
+   * a founding paragraph, the only content such a founding signs. Undefined
+   * under a guided or legacy founding, where there is no paragraph.
+   */
+  founding?: FoundingSignatureStatus;
+  /** The inception record's half, required under BOTH doors. */
+  inception: InceptionSignatureStatus;
+}
+
+/**
+ * Resolve the inception record's half of the signature (PRD F7.2,
+ * nahel/workflows/afk-run.md gate 1a): "its `inception` section must carry
+ * `constitution_signed_by`, and the `config.updated` act that wrote that
+ * section must be attributed to a HUMAN actor."
+ *
+ * The provenance rule is merge authority's, act for act: the LAST act on the
+ * section governs, "last" is decided by TIMESTAMP alone, and a same-second tie
+ * between acts that DISAGREE — on actor kind or on the signer recorded — is
+ * not decided at all. An act records what its OWN payload carries, so a latest
+ * act with no signer field records no signature however it was attributed:
+ * that is `unrecorded`, the same verdict merge gives a flip its latest act
+ * does not set. What is NOT compared is the signer VALUE against the actor's
+ * id — the field is who signed, the act's actor is provenance, and a legacy
+ * project may label the same human either way.
+ *
+ * `provenanceRequired` is false under a hands-off founding, where the human's
+ * single act was spent on the paragraph and the tier record may legitimately
+ * be agent-attributed (gate 1a) — the FIELD is still asked of it, because the
+ * paragraph does not record who signed.
+ */
+function inceptionSignatureStatus(
+  inception: Config["inception"],
+  events: Iterable<JournalEvent>,
+  provenanceRequired: boolean,
+): InceptionSignatureStatus {
+  if (inception === undefined) return { signed: false, defect: "absent" };
+  if (inception.constitution_signed_by === undefined) return { signed: false, defect: "unsigned" };
+  if (!provenanceRequired) return { signed: true };
+
+  const finalists = latestSectionActs("inception", events);
+  const latest = finalists[finalists.length - 1];
+  if (
+    finalists.length > 1 &&
+    finalists.some(
+      (event) =>
+        event.actor.kind !== latest!.actor.kind || settledSigner(event) !== settledSigner(latest!),
+    )
+  ) {
+    return {
+      signed: false,
+      tied: finalists.map(attribution),
+      defect: "ambiguous",
+    };
+  }
+
+  if (latest === undefined || settledSigner(latest) === undefined) {
+    return { signed: false, defect: "unrecorded" };
+  }
+  const recordedBy = attribution(latest);
+  if (latest.actor.kind !== "human") {
+    return { signed: false, recordedBy, defect: "agent-recorded" };
+  }
+  return { signed: true, recordedBy };
+}
+
+/**
+ * The COMPLETE constitution-signature verdict — the ONE place both founding
+ * doors are answered, so no caller reconstructs half the rule (PRD F7.2, F9.5,
+ * nahel/workflows/afk-run.md gate 1a).
+ *
+ * A hands-off founding spends the human's single act on the paragraph: that
+ * act is the signature, and the tier record beside it needs only to carry the
+ * signer field. Every other project — guided, or founded before the field
+ * existed — has no paragraph, so the act that recorded
+ * `inception.constitution_signed_by` is the signature instead. Both halves are
+ * reported: they fail independently and are repaired by different acts.
+ *
+ * `events` is an ARRAY, not an iterable: both halves scan it.
+ */
+export function constitutionSignatureStatus(
+  config: Pick<Config, "founding" | "inception"> | undefined,
+  events: readonly JournalEvent[],
+): ConstitutionSignatureStatus {
+  const founding = foundingSignatureStatus(config?.founding, events);
+  return {
+    founding,
+    inception: inceptionSignatureStatus(config?.inception, events, founding === undefined),
+  };
 }
 
 /**

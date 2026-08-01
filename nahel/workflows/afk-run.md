@@ -60,6 +60,14 @@ on it (step 3); never work around a claim.
       being read changes: an agent-attributed founding act is no signature
       either, and `constitution_signed_by` must still be recorded.
 
+      Legacy repos: a store founded before this gate existed (section absent,
+      or the signer transcribed by an agent from a journal note) fails exactly
+      this check — `nahel validate` surfaces it as `inception.unsigned`. The
+      migration is one command the human runs themselves, re-recording the
+      whole section (`nahel config set inception --data tier=<tier> --data
+      'constitution_signed_by=<their id>'`); journal notes never substitute
+      for the recorded act.
+
    b. **A passing run contract:**
 
           nahel doctor

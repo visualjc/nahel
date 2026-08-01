@@ -1,0 +1,2 @@
+{"id":"5dgr8xfs","ts":"2026-08-01T16:49:45Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"pxzz5agh","payload":{"target":"item","record":{"id":"pxzz5agh","name":"gate-legacy-founding-signature-migration","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-07-26T19:29:19Z","updated":"2026-08-01T16:49:45Z"},"body":""}}
+{"id":"p1rqg365","ts":"2026-08-01T16:49:45Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

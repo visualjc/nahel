@@ -81,8 +81,12 @@ themselves. `nahel validate` enforces this mechanically (`founding.unsigned`,
 warning): it fires when the paragraph's latest founding act is agent-run, when
 the act's recorded paragraph no longer matches the committed bytes (the text
 moved after signing — re-sign through the byte-preserving JSON `--data` form),
-or when same-second acts disagree on actor or paragraph and the signature is
-ambiguous; only a journal with no founding act at all reads as unrecorded.
+or when same-second acts disagree on actor, mode, or paragraph and the
+signature is ambiguous; only a journal with no founding act at all reads as
+unrecorded. The guided-mode analogue is `inception.unsigned` (also warning):
+it fires on a store whose inception section is absent despite recorded work,
+lacks `constitution_signed_by`, had the section written by an agent, or holds
+a signer or mode hand-edited after its recording act.
 
 ## Pick the tier
 

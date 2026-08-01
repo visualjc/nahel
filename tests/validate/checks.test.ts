@@ -902,6 +902,230 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
   });
 });
 
+/**
+ * Inception signature provenance (PRD F7.2, nahel/workflows/afk-run.md gate
+ * 1a): the guided/legacy half of the same rule founding.unsigned enforces for
+ * hands-off paragraphs. With no paragraph to sign, the act that wrote the
+ * `inception` section carrying `constitution_signed_by` IS the signature — an
+ * agent-transcribed one is no signature, and a missing field records nothing
+ * at all. The gate refuses AFK runs over exactly these states; validate makes
+ * that latent refusal visible before a human walks away.
+ */
+describe("validate — inception signature provenance (inception.unsigned, F7.2)", () => {
+  /** Drive the real `nahel config set inception` as the given actor. */
+  async function setInception(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    data: string[],
+    actorSpec: string,
+  ): Promise<void> {
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const args = ["set", "inception"];
+      for (const entry of data) args.push("--data", entry);
+      const code = await configCommand.run(args, fixture.env, fixture.root, actorSpec);
+      if (code !== 0) throw new Error(`config set inception failed (${actorSpec})`);
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  }
+
+  test("a tier signed by a HUMAN act is silent — that act IS the constitution's signature", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, { name: "some-work" });
+    await setInception(fixture, ["tier=standard", "constitution_signed_by=jim"], "human:jim");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[inception, human-signed]", findings);
+    expect(findings).toEqual([]);
+  });
+
+  test("a tier recorded with NO constitution_signed_by warns — nothing records who signed", async () => {
+    const fixture = await setupFixture(dirs);
+    await setInception(fixture, ["tier=standard"], "human:jim");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[inception, no signer field]", findings);
+    const unsigned = findingsFor(findings, "inception.unsigned");
+    expect(unsigned).toHaveLength(1);
+    expect(unsigned[0]!.severity).toBe("warning");
+    expect(unsigned[0]!.path).toBe(fixture.layout.configPath);
+    expect(unsigned[0]!.message).toContain("constitution_signed_by");
+    // The fix must carry BOTH fields: `config set` replaces the section, so a
+    // signer-only re-run would drop the tier it just recorded.
+    expect(unsigned[0]!.fix).toContain("nahel config set inception");
+    expect(unsigned[0]!.fix).toContain("tier=");
+    expect(unsigned[0]!.fix).toContain("constitution_signed_by=");
+    expect(unsigned[0]!.fix).toContain("human");
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a signer an AGENT act transcribed warns, naming the act and the actor", async () => {
+    const fixture = await setupFixture(dirs);
+    await setInception(fixture, ["tier=standard", "constitution_signed_by=jim"], "agent:claude-code");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, agent-transcribed]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("agent:claude-code");
+    // The act itself is named, so a reader can find it in `nahel progress`.
+    const events = [];
+    for await (const event of readJournal(fixture.layout)) events.push(event);
+    const act = events.filter((event) => event.type === "config.updated").at(-1)!;
+    expect(findings[0]!.message).toContain(act.id);
+  });
+
+  test("a human re-record after an agent's clears the warning — the prescribed fix works end to end", async () => {
+    const fixture = await setupFixture(dirs);
+    await setInception(fixture, ["tier=seed", "constitution_signed_by=jim"], "agent:claude-code");
+    expect(findingsFor(await validateStore(fixture.layout), "inception.unsigned")).toHaveLength(1);
+
+    await setInception(fixture, ["tier=seed", "constitution_signed_by=jim"], "human:jim");
+    expect(findingsFor(await validateStore(fixture.layout), "inception.unsigned")).toEqual([]);
+  });
+
+  test("a hand-edited signer no journaled act accounts for warns — unprovable is not signed", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      inception: { tier: "standard", constitution_signed_by: "jim" },
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, unrecorded]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("no journaled config mutation");
+  });
+
+  test("same-second writers that disagree warn, and the fix says to re-run a second later", async () => {
+    const fixture = await setupFixture(dirs);
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      inception: { tier: "standard", constitution_signed_by: "jim" },
+    });
+
+    const frozen = { now: () => "2026-07-25T12:00:00Z", random: fixture.env.random };
+    for (const actor of [
+      { kind: "human", id: "jim" } as const,
+      { kind: "agent", id: "claude-code" } as const,
+    ]) {
+      await appendEvent(fixture.layout, frozen, {
+        type: "config.updated",
+        actor,
+        session: newSessionSegmentId(fixture.env),
+        payload: {
+          section: "inception",
+          value: { tier: "standard", constitution_signed_by: "jim" },
+        },
+      });
+    }
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, same-second tie]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("same second");
+    expect(findings[0]!.message).toContain("human:jim");
+    expect(findings[0]!.message).toContain("agent:claude-code");
+    expect(findings[0]!.fix).toContain("second");
+  });
+
+  test("a store with WORK but no inception section at all warns — the gate would refuse this run", async () => {
+    const fixture = await setupFixture(dirs);
+    await createItem(fixture, { name: "unfounded-work" });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, absent under work]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("inception");
+    expect(findings[0]!.fix).toContain("nahel config set inception");
+  });
+
+  test("a freshly scaffolded store stays quiet — nothing has been founded OR worked on yet", async () => {
+    const fixture = await setupFixture(dirs);
+    expect(await validateStore(fixture.layout)).toEqual([]);
+  });
+
+  test("a recorded founding with no inception section warns — the founding went through, the tier record did not", async () => {
+    const fixture = await setupFixture(dirs);
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await configCommand.run(
+        ["set", "founding", "--data", "mode=guided"],
+        fixture.env,
+        fixture.root,
+        "human:jim",
+      );
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, absent under a guided founding]", findings);
+    expect(findings).toHaveLength(1);
+  });
+
+  test("under a HANDS-OFF founding an agent-recorded tier is silent — the human's act was the paragraph", async () => {
+    // afk-run gate 1a: under hands-off the act checked for human attribution
+    // is the FOUNDING act, and "the tier record itself may be agent-attributed
+    // (the human was gone by then)". The field is still required, and is here.
+    const fixture = await setupFixture(dirs);
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await configCommand.run(
+        ["set", "founding", "--data", "mode=hands-off", "--data", "paragraph=Ship it."],
+        fixture.env,
+        fixture.root,
+        "human:jim",
+      );
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    await setInception(fixture, ["tier=standard", "constitution_signed_by=jim"], "agent:claude-code");
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[inception, hands-off with agent tier record]", findings);
+    expect(findingsFor(findings, "inception.unsigned")).toEqual([]);
+    expect(findingsFor(findings, "founding.unsigned")).toEqual([]);
+  });
+
+  test("a hands-off founding missing the FIELD still warns — the paragraph does not record who signed", async () => {
+    const fixture = await setupFixture(dirs);
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await configCommand.run(
+        ["set", "founding", "--data", "mode=hands-off", "--data", "paragraph=Ship it."],
+        fixture.env,
+        fixture.root,
+        "human:jim",
+      );
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    await setInception(fixture, ["tier=standard"], "agent:claude-code");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "inception.unsigned");
+    console.log("[inception, hands-off without the field]", findings);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("constitution_signed_by");
+  });
+});
+
 describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {
   /** Commit a routing map straight into config — routing carries no provenance. */
   async function setRouting(

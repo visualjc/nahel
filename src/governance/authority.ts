@@ -251,6 +251,15 @@ export type FoundingSignatureDefect =
   /** Same-second acts that disagree on actor kind or bytes; ordering cannot decide. */
   | "ambiguous";
 
+/**
+ * One axis a same-second founding tie can disagree on. All three are
+ * load-bearing: who acted decides whether anything was signed, the mode
+ * decides which door the project came through (and so whether the inception
+ * record answers for its own provenance), and the paragraph is the signed
+ * content itself.
+ */
+export type FoundingDisagreement = "actor" | "mode" | "paragraph";
+
 /** Whether the founding paragraph is human-signed, and the act that decided it. */
 export interface FoundingSignatureStatus {
   /** True ONLY when a human-attributed act wrote the `founding` section. */
@@ -260,11 +269,12 @@ export interface FoundingSignatureStatus {
   /** The same-second recorders that could not be ordered ("ambiguous" only). */
   tied?: { event: string; actor: Actor }[];
   /**
-   * What the tied acts disagree ABOUT ("ambiguous" only) — who acted, the
-   * paragraph they recorded, or both. Callers state the disagreement at hand
-   * rather than asserting one mode for every tie.
+   * WHICH axes the tied acts disagree on ("ambiguous" only): who acted, the
+   * door they recorded, the paragraph they recorded, or any combination. A
+   * list in a fixed order, never empty — callers state the disagreements at
+   * hand instead of asserting one that does not apply.
    */
-  disagreement?: "actor" | "paragraph" | "both";
+  disagreement?: FoundingDisagreement[];
   /**
    * The `mode` the governing act actually recorded ("mode-mismatch" only), so
    * callers can name the door the journal attests beside the one config
@@ -291,10 +301,11 @@ export interface FoundingSignatureStatus {
  * The provenance rule is merge authority's, act for act (`events` must arrive
  * in the journal's total order, oldest → newest): the LAST act on the section
  * governs, "last" is decided by TIMESTAMP alone, and a same-second tie between
- * acts that DISAGREE — on actor kind or on the paragraph recorded — is not
- * decided at all; a lottery must never decide whether a constitution is
- * signed. Ties that agree on both carry no ambiguity: there is nothing for the
- * order to change.
+ * acts that DISAGREE — on actor kind, on the mode, or on the paragraph
+ * recorded — is not decided at all; a lottery must never decide whether a
+ * constitution is signed, nor which door it was founded through. Ties that
+ * agree on ALL THREE carry no ambiguity: there is nothing for the order to
+ * change.
  *
  * An act signs the bytes ITS OWN payload records, compared verbatim against
  * the committed paragraph — nothing trims, reflows, or case-folds, exactly as
@@ -313,18 +324,22 @@ export function foundingSignatureStatus(
   const finalists = latestSectionActs("founding", events);
   const latest = finalists[finalists.length - 1];
   if (finalists.length > 1) {
-    // Both halves of the fail-safe, tracked separately so the caller can name
-    // the disagreement at hand instead of asserting one mode for every tie.
-    const actorDiffers = finalists.some((event) => event.actor.kind !== latest!.actor.kind);
-    const paragraphDiffers = finalists.some(
-      (event) => settledParagraph(event) !== settledParagraph(latest!),
-    );
-    if (actorDiffers || paragraphDiffers) {
+    // Every axis of the fail-safe, tracked separately so the caller names the
+    // disagreements at hand instead of asserting one that does not apply. The
+    // MODE belongs here as much as the other two: it decides which door the
+    // project came through, and letting the order pick it would hand a
+    // hands-off exemption to a tie that never established one.
+    const differs = (field: (event: JournalEvent) => unknown): boolean =>
+      finalists.some((event) => field(event) !== field(latest!));
+    const disagreement: FoundingDisagreement[] = [];
+    if (differs((event) => event.actor.kind)) disagreement.push("actor");
+    if (differs(settledMode)) disagreement.push("mode");
+    if (differs(settledParagraph)) disagreement.push("paragraph");
+    if (disagreement.length > 0) {
       return {
         signed: false,
         tied: finalists.map(attribution),
-        disagreement:
-          actorDiffers && paragraphDiffers ? "both" : actorDiffers ? "actor" : "paragraph",
+        disagreement,
         defect: "ambiguous",
       };
     }

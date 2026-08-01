@@ -4,6 +4,7 @@ import { resolveReviewSlots } from "../dispatch/invocation";
 import {
   constitutionSignatureStatus,
   mergeAuthorityStatus,
+  type FoundingDisagreement,
   type FoundingSignatureStatus,
   type InceptionSignatureStatus,
   type MergeAuthorityStatus,
@@ -822,6 +823,13 @@ function checkMergeAuthority(state: ParsedState): Finding[] {
  * corrupt state — the paragraph stays exactly as recorded, it just authorizes
  * nothing. But it is never silent (hard constraint 6).
  */
+/** How each tie axis reads in the warning, in the order they are reported. */
+const TIE_DISAGREEMENTS: Record<FoundingDisagreement, string> = {
+  actor: "under different actor kinds",
+  mode: "recording different founding modes",
+  paragraph: "recording different paragraphs",
+};
+
 function foundingSignatureCause(status: FoundingSignatureStatus, declaredMode: string): string {
   if (status.defect === "agent-recorded") {
     return (
@@ -860,15 +868,10 @@ function foundingSignatureCause(status: FoundingSignatureStatus, declaredMode: s
     const tied = (status.tied ?? [])
       .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
       .join(", ");
-    // The tie's OWN disagreement — same-second acts may differ on who acted,
-    // on the paragraph they recorded, or on both, and naming a mode that does
-    // not apply would misdescribe the journal.
-    const how =
-      status.disagreement === "paragraph"
-        ? "recording different paragraphs"
-        : status.disagreement === "both"
-          ? "under different actor kinds AND recording different paragraphs"
-          : "under different actor kinds";
+    // The tie's OWN disagreements — same-second acts may differ on who acted,
+    // on the door they recorded, on the paragraph, or on any combination, and
+    // naming an axis that does not apply would misdescribe the journal.
+    const how = (status.disagreement ?? []).map((axis) => TIE_DISAGREEMENTS[axis]).join(" AND ");
     return (
       `${(status.tied ?? []).length} config mutations recorded it in the same second (${tied}) ` +
       `${how} — same-second acts from different sessions carry no ordering, ` +

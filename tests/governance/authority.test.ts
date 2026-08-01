@@ -483,14 +483,19 @@ describe("constitution signature verdict — both founding doors, one answer", (
   }
 
   /** One `config.updated` event for the `founding` section, by the given actor. */
-  function foundingConfigEvent(id: string, actor: Actor, seq: number): JournalEvent {
+  function foundingConfigEvent(
+    id: string,
+    actor: Actor,
+    seq: number,
+    value: Record<string, unknown> = HANDS_OFF,
+  ): JournalEvent {
     return {
       id,
       ts: `2026-07-25T12:00:0${seq}Z`,
       seq,
       type: CONFIG_UPDATED_EVENT_TYPE,
       actor,
-      payload: { section: "founding", value: HANDS_OFF },
+      payload: { section: "founding", value },
     };
   }
 
@@ -667,6 +672,53 @@ describe("constitution signature verdict — both founding doors, one answer", (
     );
     console.log("[constitution, guided founding carrying a paragraph]", status.inception);
     expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
+  });
+
+  /**
+   * The exemption's own laundering path, one level up from the signer's: the
+   * MODE config declares is editable text like any other field. A guided
+   * founding a human genuinely recorded, hand-edited to `mode: hands-off`,
+   * would otherwise announce the zero-return door — and exempt an
+   * agent-recorded signature from the provenance rule — while the journal
+   * records no such founding. Only the act's own recorded mode may engage it.
+   */
+  test("a founding hand-edited from guided to hands-off exempts nothing — the act recorded another door", () => {
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      // What the human actually did: a GUIDED founding, paragraph and all.
+      foundingConfigEvent("aaaaaaa8", HUMAN, 1, {
+        mode: "guided",
+        paragraph: HANDS_OFF.paragraph,
+      }),
+      inceptionConfigEvent("aaaaaaa9", AGENT, 2),
+    ]);
+    console.log("[constitution, mode hand-edited to hands-off]", status);
+    // The founding half names the hand-edit: the act recorded another mode.
+    expect(status.founding?.signed).toBe(false);
+    expect(status.founding?.defect).toBe("mode-mismatch");
+    expect(status.founding?.recordedBy).toEqual({ event: "aaaaaaa8", actor: HUMAN });
+    // ...and the inception half is judged on its own provenance after all.
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
+    expect(status.foundedHandsOff).toBe(false);
+  });
+
+  test("a hands-off founding the journal DOES record still exempts — the rule reads the act, not the file", () => {
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      foundingConfigEvent("aaaaaab1", HUMAN, 1),
+      inceptionConfigEvent("aaaaaab2", AGENT, 2),
+    ]);
+    expect(status.founding?.signed).toBe(true);
+    expect(status.inception.signed).toBe(true);
+    expect(status.foundedHandsOff).toBe(true);
+  });
+
+  test("a hands-off founding NO act records exempts nothing — unprovable is not a door", () => {
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      inceptionConfigEvent("aaaaaab3", AGENT, 2),
+    ]);
+    console.log("[constitution, hands-off with no founding act]", status);
+    expect(status.foundedHandsOff).toBe(false);
     expect(status.inception.defect).toBe("agent-recorded");
   });
 

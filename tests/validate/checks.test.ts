@@ -1183,6 +1183,54 @@ describe("validate — inception signature provenance (inception.unsigned, F7.2)
     console.log("[inception, guided fix]", findings[0]!.fix);
     expect(findings[0]!.fix).toContain("a HUMAN must");
   });
+
+  test("a founding hand-edited from guided to hands-off warns on both halves and keeps the HUMAN fix", async () => {
+    // The exemption's own laundering path: a guided founding a human genuinely
+    // recorded, hand-edited in the file to `mode: hands-off`, would otherwise
+    // announce the zero-return door and excuse an agent-transcribed signature
+    // — while the journal records no hands-off founding at all.
+    const fixture = await setupFixture(dirs);
+    const { configCommand } = await import("../../src/commands/config");
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await configCommand.run(
+        ["set", "founding", "--data", "mode=guided", "--data", "paragraph=Ship it."],
+        fixture.env,
+        fixture.root,
+        "human:jim",
+      );
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    await setInception(
+      fixture,
+      ["tier=standard", "constitution_signed_by=jim"],
+      "agent:claude-code",
+    );
+
+    const config = await readConfig(fixture.layout);
+    await writeConfig(fixture.layout, {
+      ...config,
+      founding: { mode: "hands-off", paragraph: "Ship it." },
+    });
+
+    const findings = await validateStore(fixture.layout);
+    console.log("[inception, founding mode hand-edited]", findings);
+    const founding = findingsFor(findings, "founding.unsigned");
+    expect(founding).toHaveLength(1);
+    expect(founding[0]!.message).toContain("guided");
+    expect(founding[0]!.message).toContain("human:jim");
+
+    const unsigned = findingsFor(findings, "inception.unsigned");
+    expect(unsigned).toHaveLength(1);
+    expect(unsigned[0]!.message).toContain("agent:claude-code");
+    // The fix must not hand this store the zero-return path: no act records a
+    // hands-off founding, so nobody but the human can sign here.
+    expect(unsigned[0]!.fix).toContain("a HUMAN must");
+    expect(unsigned[0]!.fix).not.toContain("an AGENT may");
+  });
 });
 
 describe("validate — review slots cross-vendor (routing.review-same-vendor, F3.1)", () => {

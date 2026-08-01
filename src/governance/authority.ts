@@ -335,6 +335,13 @@ export type InceptionSignatureDefect =
   /** The config mutation that recorded the signer was made by an agent actor. */
   | "agent-recorded"
   /**
+   * The latest inception act recorded a DIFFERENT `constitution_signed_by`
+   * than config holds — the signer moved after it was recorded. Distinct from
+   * `unrecorded`: the act exists and `recordedBy` names it, so callers must
+   * say "this act recorded another signer", never "no act exists".
+   */
+  | "signer-mismatch"
+  /**
    * No journaled config mutation records the signer — either none wrote the
    * section at all, or the latest one recorded no signer field (a hand edit,
    * a journal that lost the act). Unprovable is not signed.
@@ -381,12 +388,18 @@ export interface ConstitutionSignatureStatus {
  * The provenance rule is merge authority's, act for act: the LAST act on the
  * section governs, "last" is decided by TIMESTAMP alone, and a same-second tie
  * between acts that DISAGREE — on actor kind or on the signer recorded — is
- * not decided at all. An act records what its OWN payload carries, so a latest
- * act with no signer field records no signature however it was attributed:
- * that is `unrecorded`, the same verdict merge gives a flip its latest act
- * does not set. What is NOT compared is the signer VALUE against the actor's
- * id — the field is who signed, the act's actor is provenance, and a legacy
- * project may label the same human either way.
+ * not decided at all.
+ *
+ * An act signs the VALUE its own payload recorded, compared against the signer
+ * config holds — the founding half's rule (F9.5), for the same reason: without
+ * it, one old human act would authenticate every later hand-edit of the field,
+ * which is precisely what a signature exists to prevent. A latest act with no
+ * signer field records nothing at all (`unrecorded`, merge's verdict for a
+ * flip its latest act does not set); one recording ANOTHER signer is a
+ * `signer-mismatch`, and that outranks actor kind — an act naming someone else
+ * says nothing about THIS signer, whoever made it. What is never compared is
+ * the signer against the ACTOR's id: the field is who signed, the actor is
+ * provenance, and a legacy project may label the same human either way.
  *
  * `provenanceRequired` is false under a hands-off founding, where the human's
  * single act was spent on the paragraph and the tier record may legitimately
@@ -422,6 +435,9 @@ function inceptionSignatureStatus(
     return { signed: false, defect: "unrecorded" };
   }
   const recordedBy = attribution(latest);
+  if (settledSigner(latest) !== inception.constitution_signed_by) {
+    return { signed: false, recordedBy, defect: "signer-mismatch" };
+  }
   if (latest.actor.kind !== "human") {
     return { signed: false, recordedBy, defect: "agent-recorded" };
   }
@@ -436,9 +452,15 @@ function inceptionSignatureStatus(
  * A hands-off founding spends the human's single act on the paragraph: that
  * act is the signature, and the tier record beside it needs only to carry the
  * signer field. Every other project — guided, or founded before the field
- * existed — has no paragraph, so the act that recorded
- * `inception.constitution_signed_by` is the signature instead. Both halves are
- * reported: they fail independently and are repaired by different acts.
+ * existed — signs with the act that recorded
+ * `inception.constitution_signed_by` instead. Both halves are reported: they
+ * fail independently and are repaired by different acts.
+ *
+ * The exemption keys off the declared MODE, never off a paragraph existing:
+ * the schema requires a paragraph OF hands-off but permits one on a guided
+ * founding too, and a guided founding never spent the human's act on it — they
+ * were present throughout and sign the tier record themselves. Keying off the
+ * paragraph would hand any guided project a free pass for one optional field.
  *
  * `events` is an ARRAY, not an iterable: both halves scan it.
  */
@@ -446,10 +468,13 @@ export function constitutionSignatureStatus(
   config: Pick<Config, "founding" | "inception"> | undefined,
   events: readonly JournalEvent[],
 ): ConstitutionSignatureStatus {
-  const founding = foundingSignatureStatus(config?.founding, events);
   return {
-    founding,
-    inception: inceptionSignatureStatus(config?.inception, events, founding === undefined),
+    founding: foundingSignatureStatus(config?.founding, events),
+    inception: inceptionSignatureStatus(
+      config?.inception,
+      events,
+      config?.founding?.mode !== "hands-off",
+    ),
   };
 }
 

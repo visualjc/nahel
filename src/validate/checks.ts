@@ -899,6 +899,21 @@ function inceptionSignatureCause(status: InceptionSignatureStatus): string {
       "a human's name is not that human's signature"
     );
   }
+  if (status.defect === "signer-mismatch") {
+    // Only a HUMAN act ever signed anything, so only there can the field have
+    // moved out from under a signature. Saying that of an agent act would
+    // assert a signature F7.2 never granted it (foundingSignatureCause's rule,
+    // same reason).
+    const consequence =
+      status.recordedBy!.actor.kind === "human"
+        ? "the signer moved after it was recorded, and an act signs only what it recorded"
+        : "and an agent-transcribed signature is no signature anyway, so this signer never signed";
+    return (
+      `the latest act on nahel/config's \`inception\` section (event ${status.recordedBy!.event}, ` +
+      `by ${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id}) recorded a different ` +
+      `\`constitution_signed_by\` than nahel/config holds — ${consequence}`
+    );
+  }
   if (status.defect === "ambiguous") {
     const tied = (status.tied ?? [])
       .map((tie) => `${tie.event} by ${tie.actor.kind}:${tie.actor.id}`)
@@ -912,6 +927,48 @@ function inceptionSignatureCause(status: InceptionSignatureStatus): string {
   return (
     "no journaled config mutation records nahel/config's `constitution_signed_by`, " +
     "so the signature's human provenance cannot be proven"
+  );
+}
+
+/**
+ * WHO repairs an unsigned inception record — the answer differs by founding
+ * mode, and getting it wrong breaks the mode's promise. Under a hands-off
+ * founding the human is gone BY DESIGN (F9.5's zero-return door): the
+ * signature is the founding act, and the tier record beside it is bookkeeping
+ * an agent completes, citing that act. Demanding the human's return there
+ * would make validate ask for the one thing the mode exists to avoid. Every
+ * other project signs with THIS act, so only the human can make it.
+ *
+ * Both fields in the one command either way: `config set` replaces the whole
+ * section, so a signer-only re-run would drop the tier (and a tier-only one
+ * the signature). The tier is named when config records one, so the command
+ * is a paste rather than a lookup.
+ */
+function inceptionSignatureFix(
+  state: ParsedState,
+  status: InceptionSignatureStatus,
+  founding: FoundingSignatureStatus | undefined,
+): string {
+  const tier = state.config?.inception?.tier ?? "<seed|standard|full>";
+  const set = (signer: string): string =>
+    `\`nahel config set inception --data tier=${tier} --data 'constitution_signed_by=${signer}'\``;
+
+  if (state.config?.founding?.mode === "hands-off") {
+    const signature =
+      founding?.recordedBy === undefined
+        ? "the act that recorded the founding paragraph"
+        : `the founding act (event ${founding.recordedBy.event})`;
+    return (
+      `an AGENT may record this — run ${set("<the human who founded>")}: under a hands-off ` +
+      `founding the signature is ${signature}, not this act, so the tier record is bookkeeping ` +
+      "that must never wait for the human to come back (nahel/workflows/inception.md)"
+    );
+  }
+  return (
+    `a HUMAN must run ${set("<their id>")} themselves (as a human actor — NAHEL_ACTOR unset, or ` +
+    `human:<id>)${resignTiming(status.defect)}; \`config set\` replaces the whole section, so ` +
+    "both fields must be given in that one act, and the act itself IS the signature " +
+    "(nahel/workflows/inception.md)"
   );
 }
 
@@ -964,17 +1021,7 @@ function checkConstitutionSignature(state: ParsedState): Finding[] {
       message:
         `${inceptionSignatureCause(inception)} — the constitution is unsigned and the autonomy ` +
         "gate refuses to start an AFK run",
-      // Both fields in the ONE act: `config set` replaces the whole section,
-      // so a signer-only re-run would drop the tier (and a tier-only one the
-      // signature). The tier is named when config already records one, so the
-      // command is a paste rather than a lookup.
-      fix:
-        "a HUMAN must run `nahel config set inception " +
-        `--data tier=${state.config.inception?.tier ?? "<seed|standard|full>"} ` +
-        "--data 'constitution_signed_by=<their id>'` (as a human actor — NAHEL_ACTOR unset, " +
-        `or human:<id>)${resignTiming(inception.defect)}; \`config set\` replaces the whole ` +
-        "section, so both fields must be given in that one act, and the act itself IS the " +
-        "signature (nahel/workflows/inception.md)",
+      fix: inceptionSignatureFix(state, inception, founding),
     });
   }
 

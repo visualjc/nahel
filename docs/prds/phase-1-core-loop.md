@@ -7,6 +7,8 @@ updated: 2026-07-21T18:04:24Z
 # Phase 1 — Core loop, interactive
 
 > PRD authored by plan item `phase-1-prd` (`d8sa37p8`). Lifecycle (draft→approved) lives on that work item, never here (ADR-0013). Grounded in `docs/roadmap.md` Phase 1, PRODUCT.md, CONTEXT.md, ADR-0013/0014/0015, and the 2026-07-21 scoping session.
+>
+> *[Phase numbering: this document predates the 2026-08-01 renumbering — every phase number **4 or higher** below refers to the old scheme and is now one greater (old 4 Roles & governance → 5, old 5 Ecosystem breadth → 6, old 6 UI → 7). Text left as written; see `docs/roadmap.md` § Amendments.]*
 
 ## Overview / goal
 

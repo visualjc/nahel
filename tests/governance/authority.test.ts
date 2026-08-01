@@ -80,7 +80,8 @@ describe("governance resolution (PRD F2.2 config semantics)", () => {
   test("the canonical defaults are product=delegated, architecture=human", () => {
     // F2.2: "a project with no governance config behaves as delegated —
     // pushing forward is the default unless told not to"; architecture stays
-    // human until the Phase 4 architect slice ships.
+    // human until the Phase 5 architect slice ships (Roles & governance,
+    // renumbered 4→5 on 2026-08-01).
     expect(GOVERNANCE_DEFAULTS).toEqual({ product: "delegated", architecture: "human" });
   });
 

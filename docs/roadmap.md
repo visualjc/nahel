@@ -59,9 +59,10 @@ Per-repo config: how to launch, seed, and test the app (commands, ports, test cr
 - **Role charters** (`nahel/roles/product-owner.md`, `architect.md`) — agent-neutral markdown (Intent-style specialists, portable). Review **at artifact gates**, not continuously: PO gates PRD `draft→approved`, scope changes, acceptance criteria; Architect gates epic plans and ADR compliance.
 - **Constitution** (human-seeded, immutable without human signature in every mode): project goal, domain facts (e.g. "how speed counting works"), hard constraints, non-goals.
 - **Legislation** (delegable per project): priorities, PRD approvals, new ADRs, architecture evolution.
-- Per-project: `governance: {product: human|delegated, architecture: human|delegated}`.
+- Per-project: `governance: {product: human|delegated|agent, architecture: human|delegated}`.
   - `human`: agents propose, human approves.
   - `delegated`: 2-of-N **cross-vendor consensus** (Claude proposes / Codex verifies pattern generalized), append-only decision records, and `nahel digest` (audit, not gate). Constitution disagreements park to `human-review-needed`; run continues elsewhere.
+  - `agent` (**product only** — not a legal `architecture` value, enforced by a separate enum per field; added 2026-08-01 with the Phase 4 roadmap layer): **agent-as-PO swarm mode** — an agent owns product decisions on the roadmap outright, acting under its own authority with no consensus step and no awaiting-your-eyes surface. Under `human` and `delegated`, agent-authored roadmap acts are still recorded and never refused, but surface in `nahel brief` until a human-attributed roadmap act (or `nahel roadmap ack`) clears them. The constitution stays human-signed in every mode.
 - AFK reviews are **advisory-with-teeth**: a reject parks the item, never stalls the run, never gets overridden.
 
 ### 8. Inception — tiered founding workflow
@@ -118,29 +119,40 @@ Ordering principle: **AFK-first** — the autonomous team is the priority; human
 - Ordered before governance: QA improves every AFK run; delegated governance only matters once you start walking away from product decisions.
 - **Exit test**: QA sweep of an existing app produces committed passing e2e tests + at least one real bug item with captured repro.
 
-### Phase 4 — Roles & governance
+### Phase 4 — Roadmap layer
+The layer *above* plan items: the thing that feeds the PRD→Epic→Issue engine. A three-generation tree — product nodes → feature nodes → work items — held as one `roadmap node` record type (`kind: product | feature | initiative`), with **every status derived** (feature dev from its epic's rollup, product from its feature children, QA from `qa.sweep-completed`, deploy/release from two new event types) and **nothing hand-set**. Ordering is horizons `now | next | later` only — no ranks, and multiple parallel *nows* are the intended shape. Matt Pocock's **wayfinder** method is adopted onto nahel state: maps and decision tickets (research/prototype/grilling/task) as lightweight in-store records, with **advisory blocking everywhere** — the anti-waterfall rule — and `roadmap frontier` (open + unblocked + unclaimed) as the takeable edge. Fully in-store: **no tracker integration this round** (mirrors stay one-way and later, `c31rnb9k`; mindmap viz is `64p2tza6`). New surfaces: `nahel roadmap [ref]`, a capped roadmap block in `brief`, `nahel standup --since`. Delivered in three slices — orientation, mapping, lifecycle tail (deploy/release events, stage view, PRD archival to `docs/prds/archived/`).
+- **Exit test** (one per slice): Jim's three real orientation questions ("where are we with the product / where is feature A / where is feature A item 2") are each answerable by one command in both migrated stores, and a standup renders a real time window; one foggy feature is charted and one ticket resolved, with an item deliberately started while blocked and nothing refused; one feature walks epic→QA→deploy→release with its PRD archived, all derived.
+- PRD: [docs/prds/phase-4-roadmap-layer.md](prds/phase-4-roadmap-layer.md) (plan item `sp2yf32m`).
+
+### Phase 5 — Roles & governance
 - PRODUCT.md / ARCHITECTURE.md conventions; role charters (PO, architect); artifact gates wired into feature/plan lanes.
 - Delegated governance: cross-vendor consensus protocol, append-only decisions, `nahel digest`.
 - **Exit test**: the blackjack project runs a week of delegated legislation; the digest is coherent; the constitution was never touched.
 
-### Phase 5 — Ecosystem breadth
+### Phase 6 — Ecosystem breadth
 - Provider mirror plugin API; **GitHub mirror first** (recovering ccpm's team-visibility story), then Linear/Trello/Obsidian as demand appears.
 - Shim targets: codex, opencode, cursor-agent, pi, Gemini CLI.
 - Tool-skill (`kind: tool`) support: codegraph, Understand-Anything healthchecks.
 - Hardening for public release: docs site, install script, versioning, examples. **This is the LinkedIn/launch moment.**
 
-### Phase 6 — UI
-- **6a — Review inbox** (`nahel review`): local web app; cross-project inbox of pending human decisions (PRD approvals, prototype judgments, waivers, digests, parked items, diff review); approve/reject/comment = frontmatter edits + journal events. Tailscale tunnel ⇒ phone approvals.
-- **6b — Orchestration workspace** (Intent-class): spaces over worktrees, live agent progress, step-in/step-out (claim/handback buttons), spec + changes + context views. Built entirely on the state model — a rendering layer, not a second brain.
+### Phase 7 — UI
+- **7a — Review inbox** (`nahel review`): local web app; cross-project inbox of pending human decisions (PRD approvals, prototype judgments, waivers, digests, parked items, diff review); approve/reject/comment = frontmatter edits + journal events. Tailscale tunnel ⇒ phone approvals.
+- **7b — Orchestration workspace** (Intent-class): spaces over worktrees, live agent progress, step-in/step-out (claim/handback buttons), spec + changes + context views. Built entirely on the state model — a rendering layer, not a second brain.
 
 ---
 
 ## Deferred / open questions
 
-- **The roadmap layer (post-Phase-2 pivot)** — Jim's framing, 2026-07-25, deliberately loose (plan item `roadmap-layer`, `sp2yf32m`): software development has five critical parts — (1) product roadmaps → feature roadmaps, (2) development, (3) QA, (4) deployment, (5) marketing/communications — and nahel today covers only development deeply (QA is Phase 3). The layer above plan items — roadmap creation and management, the thing that *feeds* the PRD→Epic→Issue engine — is the next pivot once the core loop works end-to-end. Hands-off founding (Phase 2 F9) is its degenerate case; this document is itself a hand-written instance of what it would systematize. Deployment and marketing/comms are unexplored. Grill session required before any PRD.
+- ~~**The roadmap layer (post-Phase-2 pivot)**~~ — **resolved 2026-08-01**: grilled with Jim and scheduled as **Phase 4** above (PRD `docs/prds/phase-4-roadmap-layer.md`, plan item `sp2yf32m`). Of the five critical parts of software development this framing named — (1) product roadmaps → feature roadmaps, (2) development, (3) QA, (4) deployment, (5) marketing/communications — Phase 4 covers (1) and records (4) and (5) as events only; the workflows that perform deploys and announcements remain unexplored.
 - **Two-way provider sync** — only if a human teammate materializes who lives in Linear/Jira.
 - **Consensus vendor set** — Codex is today's verifier; the consensus protocol should treat "which second vendor" as config, not architecture.
 - **Skills registry ambitions** — v1 is a manifest + lockfile; a real registry only if the ecosystem asks.
 - **Recurring exploratory QA sweeps** (agent-as-tester on a schedule) — deliberately not in v1; revisit after the ratchet proves itself.
 - **Work queue / desktop daemon** — not needed while remote = transport to an always-on host agent; revisit if kickoff-while-truly-offline becomes real.
 - **Name/IP** — README attribution line for the Sanderson inspiration; rename only if Dragonsteel ever objects.
+
+---
+
+## Amendments
+
+- **2026-08-01** — Phases renumbered from 4 onward at Jim's ruling (journal event `wf87dkyx`, plan item `sp2yf32m`): the **roadmap layer becomes Phase 4**; Roles & governance shifts 4→5, Ecosystem breadth 5→6, UI 6→7 (no work had started on any of them). The former "roadmap layer" deferred question is resolved into the new Phase 4.

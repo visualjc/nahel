@@ -20,7 +20,7 @@ Agentic software development fails not because agents write bad code, but becaus
 
 ## Install
 
-Nothing is published yet — no npm package, no release binaries (both land in Phase 5). Until then, one command compiles the standalone binary and puts `nahel` on your PATH. Needs [Bun](https://bun.sh) and git:
+Nothing is published yet — no npm package, no release binaries (both land in Phase 6). Until then, one command compiles the standalone binary and puts `nahel` on your PATH. Needs [Bun](https://bun.sh) and git:
 
 ```sh
 git clone https://github.com/visualjc/nahel.git && cd nahel && bun install && bun run install:local

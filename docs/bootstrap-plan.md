@@ -2,6 +2,8 @@
 
 Companion to [nahel-roadmap.md](nahel-roadmap.md). This is the *meta*-plan: how we build the thing that builds things, using ccpm + yolo-afk-dev as temporary scaffolding until Nahel can manage itself.
 
+*[Phase numbering: this document predates the 2026-08-01 renumbering — every phase number **4 or higher** below refers to the old scheme and is now one greater (old 4 Roles & governance → 5, old 5 Ecosystem breadth → 6, old 6 UI → 7). Text left as written; see `docs/roadmap.md` § Amendments.]*
+
 ## Directory & repo layout
 
 ```

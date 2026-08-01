@@ -7,6 +7,8 @@ updated: 2026-07-25T18:42:08Z
 # Phase 2 — AFK engine
 
 > PRD authored by plan item `phase-2-prd` (`b95x0sar`). Lifecycle (draft→approved) lives on that work item, never here (ADR-0013). Grounded in `docs/roadmap.md` Phase 2, PRODUCT.md, ADR-0015/0016, the 2026-07-24 scoping session (journal note `h0b28h4s`), and the Phase 1 exit-test empirics (PRs #13–#18).
+>
+> *[Phase numbering: this document predates the 2026-08-01 renumbering — every phase number **4 or higher** below refers to the old scheme and is now one greater (old 4 Roles & governance → 5, old 5 Ecosystem breadth → 6, old 6 UI → 7). Text left as written; see `docs/roadmap.md` § Amendments.]*
 
 ## Overview / goal
 

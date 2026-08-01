@@ -6,6 +6,8 @@ updated: 2026-07-29T05:10:00Z
 
 # Phase 3 — QA Lane
 
+> *[Phase numbering: this document predates the 2026-08-01 renumbering — every phase number **4 or higher** below refers to the old scheme and is now one greater (old 4 Roles & governance → 5, old 5 Ecosystem breadth → 6, old 6 UI → 7). Text left as written; see `docs/roadmap.md` § Amendments.]*
+
 ## Goal
 
 Nahel builds software without a human in the loop (Phase 2); it must also

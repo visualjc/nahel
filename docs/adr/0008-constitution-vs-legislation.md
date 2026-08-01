@@ -24,3 +24,9 @@ Phase 2 F9.5 adds a founding mode in which the human's entire input is one parag
 - The elaboration is verified with the delegated-legislation provenance shape (cross-vendor, separately actor-attributed, bound to an exact revision of the founded artifact set). Consensus authorizes legislation-layer content only; it can neither sign the paragraph nor amend it. A failed or missing verification, or a paragraph too thin to yield a coherent goal, refuses the `standard` tier rather than papering over the gap.
 
 Procedure: `nahel/workflows/inception.md`.
+
+## Amendment — 2026-08-01: `agent` product governance (Phase 4 roadmap layer)
+
+Jim's ruling (journal event `wf87dkyx`, plan item `sp2yf32m`): `governance.product` gains a third value, `agent` — agent-as-PO owns product decisions on the roadmap outright, under its own journaled authority, with no consensus step and no awaiting-your-eyes surface. `delegated` keeps its meaning above (cross-vendor consensus). **Product-side only**: `governance.architecture` remains `human|delegated`; the two fields carry separate enums so `architecture: agent` is refused by schema. The constitution stays human-signed in every mode — agent-as-PO governs legislation, never the constitution.
+
+Spec: `docs/prds/phase-4-roadmap-layer.md` (F5).

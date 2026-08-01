@@ -13,7 +13,8 @@ import type { StoreLayout } from "../store/layout";
  *   1. Who owns legislation here? A project with NO governance config behaves
  *      as `delegated` on product — pushing forward is the default unless told
  *      not to, and `governance: human` is the explicit brake — while
- *      architecture stays `human` until the Phase 4 architect slice ships.
+ *      architecture stays `human` until the Phase 5 architect slice ships
+ *      (Roles & governance, renumbered 4→5 on 2026-08-01).
  *
  *   2. Is `merge: on-approve` actually in force? Only when the journal proves
  *      a HUMAN actor made the config mutation that set it. Hard constraint 6

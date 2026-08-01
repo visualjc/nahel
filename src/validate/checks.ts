@@ -822,12 +822,24 @@ function checkMergeAuthority(state: ParsedState): Finding[] {
  * corrupt state — the paragraph stays exactly as recorded, it just authorizes
  * nothing. But it is never silent (hard constraint 6).
  */
-function foundingSignatureCause(status: FoundingSignatureStatus): string {
+function foundingSignatureCause(status: FoundingSignatureStatus, declaredMode: string): string {
   if (status.defect === "agent-recorded") {
     return (
       `the config mutation that recorded it (event ${status.recordedBy!.event}) was made by ` +
       `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id} — an agent-run founding ` +
       `act signs nothing`
+    );
+  }
+  if (status.defect === "mode-mismatch") {
+    // No signature is claimed either way here, so this wording holds for both
+    // actor kinds: what the act attests is a DOOR, and config declares another
+    // one. Named first because the mode decides what the paragraph even means.
+    return (
+      `the latest founding act (event ${status.recordedBy!.event}, by ` +
+      `${status.recordedBy!.actor.kind}:${status.recordedBy!.actor.id}) recorded mode ` +
+      `${JSON.stringify(status.recordedMode)}, not the ${JSON.stringify(declaredMode)} ` +
+      "nahel/config declares — the door moved after the act, and an act attests only the mode " +
+      "it recorded"
     );
   }
   if (status.defect === "paragraph-mismatch") {
@@ -939,6 +951,9 @@ function inceptionSignatureCause(status: InceptionSignatureStatus): string {
  * would make validate ask for the one thing the mode exists to avoid. Every
  * other project signs with THIS act, so only the human can make it.
  *
+ * `foundedHandsOff` is the JOURNAL's answer, never config's own `mode` field:
+ * a hand-edited door must not talk an agent into signing on a human's behalf.
+ *
  * Both fields in the one command either way: `config set` replaces the whole
  * section, so a signer-only re-run would drop the tier (and a tier-only one
  * the signature). The tier is named when config records one, so the command
@@ -948,20 +963,20 @@ function inceptionSignatureFix(
   state: ParsedState,
   status: InceptionSignatureStatus,
   founding: FoundingSignatureStatus | undefined,
+  foundedHandsOff: boolean,
 ): string {
   const tier = state.config?.inception?.tier ?? "<seed|standard|full>";
   const set = (signer: string): string =>
     `\`nahel config set inception --data tier=${tier} --data 'constitution_signed_by=${signer}'\``;
 
-  if (state.config?.founding?.mode === "hands-off") {
-    const signature =
-      founding?.recordedBy === undefined
-        ? "the act that recorded the founding paragraph"
-        : `the founding act (event ${founding.recordedBy.event})`;
+  if (foundedHandsOff) {
+    // A journal-proved hands-off door always has ONE governing founding act —
+    // that is what proved it (authority.ts) — so the citation is always there.
     return (
       `an AGENT may record this — run ${set("<the human who founded>")}: under a hands-off ` +
-      `founding the signature is ${signature}, not this act, so the tier record is bookkeeping ` +
-      "that must never wait for the human to come back (nahel/workflows/inception.md)"
+      `founding the signature is the founding act (event ${founding!.recordedBy!.event}), not ` +
+      "this act, so the tier record is bookkeeping that must never wait for the human to come " +
+      "back (nahel/workflows/inception.md)"
     );
   }
   return (
@@ -981,17 +996,25 @@ function inceptionSignatureFix(
  */
 function checkConstitutionSignature(state: ParsedState): Finding[] {
   if (state.config === undefined) return [];
-  const { founding, inception } = constitutionSignatureStatus(state.config, state.events);
+  const { founding, inception, foundedHandsOff } = constitutionSignatureStatus(
+    state.config,
+    state.events,
+  );
   const findings: Finding[] = [];
 
   if (founding !== undefined && !founding.signed) {
+    // The mode config DECLARES: the act re-recording it must restore the door
+    // this project actually came through, and under a mode-mismatch the two
+    // are precisely what disagree.
+    const declaredMode = state.config.founding!.mode;
     findings.push({
       severity: "warning",
       check: "founding.unsigned",
       path: state.input.configPath,
       message:
-        `nahel/config records a founding paragraph, but ${foundingSignatureCause(founding)} — ` +
-        `the constitution is unsigned and the autonomy gate refuses to treat it as founded`,
+        "nahel/config records a founding paragraph, but " +
+        `${foundingSignatureCause(founding, declaredMode)} — the constitution is unsigned and ` +
+        "the autonomy gate refuses to treat it as founded",
       // The JSON --data form, never `--data paragraph=…`: the key=value
       // dialect trims the whole entry (parseDataEntries), so the value loses
       // its trailing whitespace and the human would re-sign bytes that differ
@@ -999,7 +1022,7 @@ function checkConstitutionSignature(state: ParsedState): Finding[] {
       // text through untouched — and verbatim is the whole promise (F9.5).
       fix:
         "a HUMAN must re-run `nahel config set founding " +
-        `--data '{"mode": "hands-off", "paragraph": "<the paragraph, verbatim>"}'\` ` +
+        `--data '{"mode": "${declaredMode}", "paragraph": "<the paragraph, verbatim>"}'\` ` +
         `(as a human actor — NAHEL_ACTOR unset, or human:<id>)${resignTiming(founding.defect)}; ` +
         "that journaled act IS the paragraph's signature (nahel/workflows/inception.md)",
     });
@@ -1021,7 +1044,7 @@ function checkConstitutionSignature(state: ParsedState): Finding[] {
       message:
         `${inceptionSignatureCause(inception)} — the constitution is unsigned and the autonomy ` +
         "gate refuses to start an AFK run",
-      fix: inceptionSignatureFix(state, inception, founding),
+      fix: inceptionSignatureFix(state, inception, founding, foundedHandsOff),
     });
   }
 

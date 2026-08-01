@@ -133,6 +133,11 @@ function settledParagraph(event: JournalEvent): unknown {
   return settledField(event, "paragraph");
 }
 
+/** The founding door an act RECORDED — the only mode the journal attests. */
+function settledMode(event: JournalEvent): unknown {
+  return settledField(event, "mode");
+}
+
 /** The signer an inception act RECORDED — the field that act actually signs. */
 function settledSigner(event: JournalEvent): unknown {
   return settledField(event, "constitution_signed_by");
@@ -233,6 +238,14 @@ export type FoundingSignatureDefect =
    * records other bytes", never "no act exists".
    */
   | "paragraph-mismatch"
+  /**
+   * The latest founding act records a DIFFERENT `mode` than config holds —
+   * the door moved after the act. Outranks `paragraph-mismatch`: the mode
+   * decides whether the paragraph carries any authority at all, so an
+   * unauthenticated mode is the outer question, and it is the one that would
+   * otherwise announce a hands-off founding no act ever recorded.
+   */
+  | "mode-mismatch"
   /** No journaled config mutation records it at all — nothing to point at. */
   | "unrecorded"
   /** Same-second acts that disagree on actor kind or bytes; ordering cannot decide. */
@@ -252,6 +265,13 @@ export interface FoundingSignatureStatus {
    * rather than asserting one mode for every tie.
    */
   disagreement?: "actor" | "paragraph" | "both";
+  /**
+   * The `mode` the governing act actually recorded ("mode-mismatch" only), so
+   * callers can name the door the journal attests beside the one config
+   * declares. Typed loosely because events are data: a payload may carry
+   * anything, and the renderer quotes whatever is there.
+   */
+  recordedMode?: unknown;
   /** Present exactly when `signed` is false. */
   defect?: FoundingSignatureDefect;
 }
@@ -280,7 +300,9 @@ export interface FoundingSignatureStatus {
  * the committed paragraph — nothing trims, reflows, or case-folds, exactly as
  * F9.5 stores it. Without that comparison an old human act would launder any
  * later hand-edit of the text, which is precisely what the signature exists to
- * prevent.
+ * prevent. The `mode` is compared the same way and FIRST: it decides whether
+ * the paragraph carries authority at all, so a founding whose declared door is
+ * not the one its act recorded proves nothing about either.
  */
 export function foundingSignatureStatus(
   founding: Config["founding"],
@@ -317,6 +339,17 @@ export function foundingSignatureStatus(
   // does. Mismatch outranks actor kind — an act recording other bytes says
   // nothing about THIS paragraph, whoever made it.
   const recordedBy = attribution(latest);
+  // The MODE first: it is the claim that decides what the paragraph means (and
+  // whether the inception record is exempt from the provenance rule), so a
+  // door config declares but no act recorded settles nothing beneath it.
+  if (settledMode(latest) !== founding.mode) {
+    return {
+      signed: false,
+      recordedBy,
+      recordedMode: settledMode(latest),
+      defect: "mode-mismatch",
+    };
+  }
   if (settledParagraph(latest) !== founding.paragraph) {
     return { signed: false, recordedBy, defect: "paragraph-mismatch" };
   }
@@ -377,6 +410,14 @@ export interface ConstitutionSignatureStatus {
   founding?: FoundingSignatureStatus;
   /** The inception record's half, required under BOTH doors. */
   inception: InceptionSignatureStatus;
+  /**
+   * True when the JOURNAL proves the hands-off door: config declares it AND a
+   * single governing founding act recorded that same mode. The door config
+   * declares alone never suffices — it is editable text, and only the act is
+   * journaled. Callers read THIS wherever the answer turns on which door the
+   * project came through (who may repair the tier record, above all).
+   */
+  foundedHandsOff: boolean;
 }
 
 /**
@@ -456,11 +497,18 @@ function inceptionSignatureStatus(
  * `inception.constitution_signed_by` instead. Both halves are reported: they
  * fail independently and are repaired by different acts.
  *
- * The exemption keys off the declared MODE, never off a paragraph existing:
- * the schema requires a paragraph OF hands-off but permits one on a guided
- * founding too, and a guided founding never spent the human's act on it — they
- * were present throughout and sign the tier record themselves. Keying off the
- * paragraph would hand any guided project a free pass for one optional field.
+ * The exemption keys off the MODE, never off a paragraph existing: the schema
+ * requires a paragraph OF hands-off but permits one on a guided founding too,
+ * and a guided founding never spent the human's act on it — they were present
+ * throughout and sign the tier record themselves. Keying off the paragraph
+ * would hand any guided project a free pass for one optional field.
+ *
+ * And it keys off the mode the JOURNAL records, not the one config declares:
+ * a guided founding hand-edited to `mode: hands-off` would otherwise announce
+ * the zero-return door and excuse an agent-transcribed signature, on the
+ * strength of a text edit no act attests. `mode-mismatch` (and an act that
+ * cannot be singled out at all) therefore exempts nothing — unprovable is not
+ * a door, exactly as unprovable is not a signature.
  *
  * `events` is an ARRAY, not an iterable: both halves scan it.
  */
@@ -468,13 +516,18 @@ export function constitutionSignatureStatus(
   config: Pick<Config, "founding" | "inception"> | undefined,
   events: readonly JournalEvent[],
 ): ConstitutionSignatureStatus {
+  const founding = foundingSignatureStatus(config?.founding, events);
+  // `recordedBy` present means ONE act governs (an unrecorded founding and an
+  // undecidable tie both leave it unset), and no mode mismatch means that act
+  // recorded the very door config declares.
+  const foundedHandsOff =
+    config?.founding?.mode === "hands-off" &&
+    founding?.recordedBy !== undefined &&
+    founding.defect !== "mode-mismatch";
   return {
-    founding: foundingSignatureStatus(config?.founding, events),
-    inception: inceptionSignatureStatus(
-      config?.inception,
-      events,
-      config?.founding?.mode !== "hands-off",
-    ),
+    founding,
+    inception: inceptionSignatureStatus(config?.inception, events, !foundedHandsOff),
+    foundedHandsOff,
   };
 }
 

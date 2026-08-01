@@ -1,0 +1,2 @@
+{"id":"8kxdk4s9","ts":"2026-08-01T18:34:19Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"c31rnb9k","payload":{"target":"item","record":{"id":"c31rnb9k","name":"roadmap-pm-tool-adapters","type":"feature","status":"backlog","lane":"full","depends_on":[],"external_refs":[],"created":"2026-08-01T18:34:19Z","updated":"2026-08-01T18:34:19Z"},"body":""}}
+{"id":"n58jb4rp","ts":"2026-08-01T18:34:19Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"q0z5ygw4","ts":"2026-08-01T18:34:32Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"64p2tza6","payload":{"summary":"Future effort (Jim, chat 2026-08-01, explicitly NOT this round): mind-map visualization of the roadmap (inspired by a wayfinder user's star-map harness), plus exporting to external mind-map tools. Waits until the project/feature roadmap layer works."}}
+{"id":"xfj8csp7","ts":"2026-08-01T18:34:32Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

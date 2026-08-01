@@ -1,0 +1,2 @@
+{"id":"x33n4gxg","ts":"2026-08-01T18:34:32Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"c31rnb9k","payload":{"summary":"Future effort (Jim, chat 2026-08-01): PM-tool adapters beyond the first target — linear, trello, jira. GitHub Issues is the FIRST tracker target and belongs to the roadmap-layer effort itself (this round), not this item."}}
+{"id":"5zqm7q3b","ts":"2026-08-01T18:34:32Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

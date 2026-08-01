@@ -778,7 +778,11 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
     /** Two same-second founding acts, straight into the journal. */
     async function tie(
       fixture: Awaited<ReturnType<typeof setupFixture>>,
-      acts: { actor: { kind: "human" | "agent"; id: string }; paragraph: string }[],
+      acts: {
+        actor: { kind: "human" | "agent"; id: string };
+        paragraph: string;
+        mode?: string;
+      }[],
     ): Promise<void> {
       const frozen = { now: () => "2026-07-25T12:00:00Z", random: fixture.env.random };
       for (const act of acts) {
@@ -788,7 +792,7 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
           session: newSessionSegmentId(fixture.env),
           payload: {
             section: "founding",
-            value: { mode: "hands-off", paragraph: act.paragraph },
+            value: { mode: act.mode ?? "hands-off", paragraph: act.paragraph },
           },
         });
       }
@@ -858,6 +862,37 @@ describe("validate — founding signature provenance (founding.unsigned, F9.5)",
       expect(findings[0]!.message).toContain("different actor kinds");
       expect(findings[0]!.message).toContain("different paragraphs");
     });
+
+    /**
+     * The MODE is the third thing a tie can disagree about, and the one that
+     * decides whether the whole inception record is exempt from the provenance
+     * rule. Two acts agreeing on who acted and on the paragraph, differing
+     * only in the door they record, must not be settled by which one happens
+     * to land last — so the fail-safe is asserted in BOTH orders.
+     */
+    for (const modes of [
+      ["hands-off", "guided"],
+      ["guided", "hands-off"],
+    ] as const) {
+      test(`a tie on MODE alone is ambiguous with ${modes[1]} recorded last — order never picks the door`, async () => {
+        const fixture = await setupFixture(dirs);
+        await commitParagraph(fixture, PARAGRAPH);
+        await tie(fixture, [
+          { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH, mode: modes[0] },
+          { actor: { kind: "human", id: "jim" }, paragraph: PARAGRAPH, mode: modes[1] },
+        ]);
+
+        const findings = findingsFor(await validateStore(fixture.layout), "founding.unsigned");
+        console.log(`[founding, tie on mode, ${modes[1]} last]`, findings);
+        expect(findings).toHaveLength(1);
+        expect(findings[0]!.message).toContain("same second");
+        expect(findings[0]!.message).toContain("different founding modes");
+        // Both acts are the same human recording the same paragraph: naming
+        // either of those disagreements here would be false.
+        expect(findings[0]!.message).not.toContain("different actor kinds");
+        expect(findings[0]!.message).not.toContain("different paragraphs");
+      });
+    }
   });
 
   test("a whitespace-bearing paragraph recorded through the JSON --data form stays silent end to end", async () => {

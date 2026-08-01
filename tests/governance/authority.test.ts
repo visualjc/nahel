@@ -713,6 +713,39 @@ describe("constitution signature verdict — both founding doors, one answer", (
     expect(status.foundedHandsOff).toBe(true);
   });
 
+  /**
+   * The exemption's fail-safe, asserted in BOTH orders: two same-second acts
+   * agreeing on who acted and on the paragraph, differing only in the MODE
+   * they record, must not let event ordering decide which door the project
+   * came through — the same lottery the actor-kind and paragraph fail-safes
+   * already refuse. Whichever lands last, the answer is "undecidable".
+   */
+  for (const [first, second] of [
+    ["hands-off", "guided"],
+    ["guided", "hands-off"],
+  ] as const) {
+    test(`same-second acts differing only in MODE are ambiguous with ${second} recorded last`, () => {
+      const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+        foundingConfigEvent("bbbbbbb1", HUMAN, 0, {
+          mode: first,
+          paragraph: HANDS_OFF.paragraph,
+        }),
+        foundingConfigEvent("bbbbbbb2", HUMAN, 0, {
+          mode: second,
+          paragraph: HANDS_OFF.paragraph,
+        }),
+        inceptionConfigEvent("bbbbbbb3", AGENT, 1),
+      ]);
+      console.log(`[constitution, mode tie with ${second} last]`, status);
+      expect(status.founding?.signed).toBe(false);
+      expect(status.founding?.defect).toBe("ambiguous");
+      expect(status.founding?.tied).toHaveLength(2);
+      // No proven door, so the tier record is judged on its own provenance.
+      expect(status.foundedHandsOff).toBe(false);
+      expect(status.inception.defect).toBe("agent-recorded");
+    });
+  }
+
   test("a hands-off founding NO act records exempts nothing — unprovable is not a door", () => {
     const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
       inceptionConfigEvent("aaaaaab3", AGENT, 2),

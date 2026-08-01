@@ -4,6 +4,7 @@ import type { CommandContext } from "../../src/cli";
 import { briefCommand } from "../../src/commands/brief";
 import { itemPath, knowledgePaths, readConfig, writeConfig } from "../../src/store/layout";
 import { GOAL_HEADING, HARD_CONSTRAINTS_HEADING } from "../../src/templates/product";
+import { validateStore } from "../../src/validate";
 import { composeBrief } from "../../src/views/brief";
 import { makeTempDir, seededEnv } from "../store/helpers";
 import { buildPopulatedStore, type PopulatedStore } from "../views/helpers";
@@ -56,8 +57,15 @@ describe("nahel brief — happy path", () => {
     const result = await runBrief([], store.root);
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
+    // The command's OWN warnings source, not composeBrief's no-warnings
+    // default: this store was never founded (`inception.unsigned`, F7.2), so
+    // comparing against the default would compare two different briefs.
     expect(result.stdout).toBe(
-      await composeBrief(store.layout, await readConfig(store.layout)),
+      await composeBrief(store.layout, await readConfig(store.layout), async (layout) =>
+        (await validateStore(layout, { now: seededEnv().now() })).map(
+          (finding) => `${finding.severity}: [${finding.check}] ${finding.message}`,
+        ),
+      ),
     );
     expect(result.stdout).toContain("Ship the thing.");
     expect(result.stdout).toContain("1. Stay deterministic.");

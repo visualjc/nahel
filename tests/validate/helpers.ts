@@ -1,3 +1,4 @@
+import { spyOn } from "bun:test";
 import { rename, rm, writeFile } from "node:fs/promises";
 import type { Env } from "../../src/schema/env";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
@@ -44,6 +45,32 @@ export async function setupFixture(
   const agent = await createStoreContext(root, env);
   const human = await createStoreContext(root, env, { actorOverride: "human:jim" });
   return { root, layout, env, agent, human };
+}
+
+/**
+ * Found the store the way a human does: `nahel config set inception` recording
+ * the tier and the signature, as a human actor. A store carrying WORK but no
+ * signed inception record is a real defect (`inception.unsigned`, F7.2), so
+ * every fixture whose point is "nothing at all is wrong here" founds itself
+ * first — through the real command, not a config write, because the journaled
+ * act IS the signature.
+ */
+export async function signConstitution(fixture: ValidateFixture): Promise<void> {
+  const { configCommand } = await import("../../src/commands/config");
+  const logSpy = spyOn(console, "log").mockImplementation(() => {});
+  const errSpy = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const code = await configCommand.run(
+      ["set", "inception", "--data", "tier=seed", "--data", "constitution_signed_by=jim"],
+      fixture.env,
+      fixture.root,
+      "human:jim",
+    );
+    if (code !== 0) throw new Error("config set inception failed");
+  } finally {
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+  }
 }
 
 /** Create a work item through the choke point (journaled + written, in sync). */

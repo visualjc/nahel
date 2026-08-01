@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { configCommand } from "../../src/commands/config";
 import {
+  constitutionSignatureStatus,
   foundingSignatureStatus,
   GOVERNANCE_DEFAULTS,
   MERGE_AUTHORITY_DEFAULT,
@@ -448,6 +449,326 @@ describe("founding signature provenance — the paragraph is signed by the act t
     ]);
     expect(status?.defect).toBe("paragraph-mismatch");
     expect(status?.recordedBy).toEqual({ event: "ffffffff", actor: AGENT });
+  });
+});
+
+/**
+ * The COMPLETE constitution-signature verdict (PRD F7.2, F9.5,
+ * nahel/workflows/afk-run.md gate 1a). Two doors lead to a founded project and
+ * the gate reads a different act behind each:
+ *
+ *   - hands-off — the human's single act is the founding paragraph, so the
+ *     `inception` act may be agent-attributed; only the FIELD is asked of it.
+ *   - guided or legacy — there is no paragraph, so the act that wrote the
+ *     `inception` section carrying `constitution_signed_by` IS the signature.
+ *
+ * Both halves come from ONE function, so no caller reconstructs half the rule.
+ */
+describe("constitution signature verdict — both founding doors, one answer", () => {
+  /** One `config.updated` event for the `inception` section, by the given actor. */
+  function inceptionConfigEvent(
+    id: string,
+    actor: Actor,
+    seq: number,
+    value: Record<string, unknown> = { tier: "standard", constitution_signed_by: "jim" },
+  ): JournalEvent {
+    return {
+      id,
+      ts: `2026-07-25T12:00:0${seq}Z`,
+      seq,
+      type: CONFIG_UPDATED_EVENT_TYPE,
+      actor,
+      payload: { section: "inception", value },
+    };
+  }
+
+  /** One `config.updated` event for the `founding` section, by the given actor. */
+  function foundingConfigEvent(
+    id: string,
+    actor: Actor,
+    seq: number,
+    value: Record<string, unknown> = HANDS_OFF,
+  ): JournalEvent {
+    return {
+      id,
+      ts: `2026-07-25T12:00:0${seq}Z`,
+      seq,
+      type: CONFIG_UPDATED_EVENT_TYPE,
+      actor,
+      payload: { section: "founding", value },
+    };
+  }
+
+  const SIGNED = { tier: "standard", constitution_signed_by: "jim" } as const;
+
+  test("no inception section at all: absent — nothing records the tier, let alone a signer", () => {
+    const status = constitutionSignatureStatus({}, []);
+    console.log("[constitution, no inception section]", status);
+    expect(status.founding).toBeUndefined();
+    expect(status.inception).toEqual({ signed: false, defect: "absent" });
+  });
+
+  test("an inception section with no constitution_signed_by is unsigned — presence is the first question", () => {
+    const status = constitutionSignatureStatus({ inception: { tier: "seed" } }, []);
+    console.log("[constitution, tier without signer]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("unsigned");
+  });
+
+  test("a signer recorded by a HUMAN act is signed, naming the act", () => {
+    const status = constitutionSignatureStatus({ inception: SIGNED }, [
+      inceptionConfigEvent("11111111", HUMAN, 1),
+    ]);
+    expect(status.inception).toEqual({
+      signed: true,
+      recordedBy: { event: "11111111", actor: HUMAN },
+    });
+  });
+
+  test("a signer an AGENT act transcribed signs nothing — the same rule merge authority applies", () => {
+    const status = constitutionSignatureStatus({ inception: SIGNED }, [
+      inceptionConfigEvent("22222222", AGENT, 1),
+    ]);
+    console.log("[constitution, agent-transcribed signer]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
+    expect(status.inception.recordedBy).toEqual({ event: "22222222", actor: AGENT });
+  });
+
+  test("a hand-edited signer no journaled act accounts for is unrecorded", () => {
+    const status = constitutionSignatureStatus({ inception: SIGNED }, []);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("unrecorded");
+    expect(status.inception.recordedBy).toBeUndefined();
+  });
+
+  test("a latest act that recorded NO signer is unrecorded — an act signs what its own payload carries", () => {
+    // The laundering shape: a human act recorded the tier alone, and the
+    // signer field arrived later by hand. That act signed nothing.
+    const status = constitutionSignatureStatus({ inception: SIGNED }, [
+      inceptionConfigEvent("33333333", HUMAN, 1, { tier: "standard" }),
+    ]);
+    console.log("[constitution, tier-only act under a hand-added signer]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("unrecorded");
+  });
+
+  /**
+   * The founding half's paragraph-mismatch lesson, applied here: an act signs
+   * the VALUE its own payload recorded, never whatever config holds later.
+   * Without that comparison a human act naming one signer would authenticate
+   * any later hand-edit naming another — the laundering a signature exists to
+   * prevent. Still never compared: the signer against the ACTOR's id.
+   */
+  test("a human act that recorded ANOTHER signer does not authenticate a later hand-edit", () => {
+    const status = constitutionSignatureStatus(
+      { inception: { tier: "standard", constitution_signed_by: "alice" } },
+      [inceptionConfigEvent("aaaaaaa4", HUMAN, 1)], // this act recorded "jim"
+    );
+    console.log("[constitution, signer swapped under the act]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    // A MISMATCH, not an absence: the act exists and is nameable — it simply
+    // recorded another signer. Collapsing it into `unrecorded` would send the
+    // reader hunting for an act that is right there.
+    expect(status.inception.defect).toBe("signer-mismatch");
+    expect(status.inception.recordedBy).toEqual({ event: "aaaaaaa4", actor: HUMAN });
+  });
+
+  test("a MISMATCHING agent act still reports as a mismatch, naming the agent that recorded it", () => {
+    const status = constitutionSignatureStatus(
+      { inception: { tier: "standard", constitution_signed_by: "alice" } },
+      [inceptionConfigEvent("aaaaaaa5", AGENT, 1)],
+    );
+    expect(status.inception.defect).toBe("signer-mismatch");
+    expect(status.inception.recordedBy).toEqual({ event: "aaaaaaa5", actor: AGENT });
+  });
+
+  test("the signer is compared to the ACT's value, never to the actor's id", () => {
+    // A human whose actor id differs from the name they sign under is ordinary
+    // in a legacy store (`human:jim` recording `jim.carter`). The act recorded
+    // that value, so the act signs it.
+    const status = constitutionSignatureStatus(
+      { inception: { tier: "standard", constitution_signed_by: "jim.carter" } },
+      [
+        inceptionConfigEvent("aaaaaaa6", HUMAN, 1, {
+          tier: "standard",
+          constitution_signed_by: "jim.carter",
+        }),
+      ],
+    );
+    expect(status.inception.signed).toBe(true);
+    expect(status.inception.defect).toBeUndefined();
+  });
+
+  test("same-second writers of different actor kinds are ambiguous — a lottery never signs", () => {
+    const status = constitutionSignatureStatus({ inception: SIGNED }, [
+      inceptionConfigEvent("44444444", HUMAN, 0),
+      inceptionConfigEvent("55555555", AGENT, 0),
+    ]);
+    console.log("[constitution, same-second tie]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("ambiguous");
+    expect(status.inception.tied).toHaveLength(2);
+  });
+
+  test("a strictly LATER human act breaks the tie and signs", () => {
+    const status = constitutionSignatureStatus({ inception: SIGNED }, [
+      inceptionConfigEvent("66666666", AGENT, 0),
+      inceptionConfigEvent("77777777", HUMAN, 1),
+    ]);
+    expect(status.inception.signed).toBe(true);
+    expect(status.inception.recordedBy?.event).toBe("77777777");
+  });
+
+  test("a forged non-config event carrying an inception payload signs nothing (type is the key)", () => {
+    const forged: JournalEvent = {
+      id: "88888888",
+      ts: "2026-07-25T12:00:00Z",
+      seq: 0,
+      type: "note",
+      actor: HUMAN,
+      payload: { section: "inception", value: SIGNED },
+    };
+    const status = constitutionSignatureStatus({ inception: SIGNED }, [forged]);
+    expect(status.inception.defect).toBe("unrecorded");
+  });
+
+  test("under a hands-off founding the inception act may be AGENT-attributed — the human's act was the paragraph", () => {
+    // afk-run gate 1a: "the tier record itself may be agent-attributed (the
+    // human was gone by then)". Only the FIELD is asked of it.
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      foundingConfigEvent("99999999", HUMAN, 1),
+      inceptionConfigEvent("aaaaaaa1", AGENT, 2),
+    ]);
+    console.log("[constitution, hands-off with agent tier record]", status);
+    expect(status.founding?.signed).toBe(true);
+    expect(status.inception.signed).toBe(true);
+    expect(status.inception.defect).toBeUndefined();
+  });
+
+  test("a hands-off founding still needs the FIELD — the paragraph does not record who signed", () => {
+    const status = constitutionSignatureStatus(
+      { founding: HANDS_OFF, inception: { tier: "standard" } },
+      [foundingConfigEvent("aaaaaaa2", HUMAN, 1)],
+    );
+    console.log("[constitution, hands-off without the field]", status.inception);
+    expect(status.founding?.signed).toBe(true);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("unsigned");
+  });
+
+  /**
+   * The exemption belongs to the hands-off MODE, not to the mere presence of a
+   * paragraph: the schema requires a paragraph of hands-off but permits one on
+   * a GUIDED founding too, and a guided founding never spent the human's act
+   * on it — the human was present the whole way and signs the tier record
+   * themselves. Keying off the paragraph would hand any guided project a free
+   * pass by adding one optional field.
+   */
+  test("a GUIDED founding that carries a paragraph does NOT exempt the inception act", () => {
+    const status = constitutionSignatureStatus(
+      { founding: { mode: "guided", paragraph: HANDS_OFF.paragraph }, inception: SIGNED },
+      [inceptionConfigEvent("aaaaaaa7", AGENT, 2)],
+    );
+    console.log("[constitution, guided founding carrying a paragraph]", status.inception);
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
+  });
+
+  /**
+   * The exemption's own laundering path, one level up from the signer's: the
+   * MODE config declares is editable text like any other field. A guided
+   * founding a human genuinely recorded, hand-edited to `mode: hands-off`,
+   * would otherwise announce the zero-return door — and exempt an
+   * agent-recorded signature from the provenance rule — while the journal
+   * records no such founding. Only the act's own recorded mode may engage it.
+   */
+  test("a founding hand-edited from guided to hands-off exempts nothing — the act recorded another door", () => {
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      // What the human actually did: a GUIDED founding, paragraph and all.
+      foundingConfigEvent("aaaaaaa8", HUMAN, 1, {
+        mode: "guided",
+        paragraph: HANDS_OFF.paragraph,
+      }),
+      inceptionConfigEvent("aaaaaaa9", AGENT, 2),
+    ]);
+    console.log("[constitution, mode hand-edited to hands-off]", status);
+    // The founding half names the hand-edit: the act recorded another mode.
+    expect(status.founding?.signed).toBe(false);
+    expect(status.founding?.defect).toBe("mode-mismatch");
+    expect(status.founding?.recordedBy).toEqual({ event: "aaaaaaa8", actor: HUMAN });
+    // ...and the inception half is judged on its own provenance after all.
+    expect(status.inception.signed).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
+    expect(status.foundedHandsOff).toBe(false);
+  });
+
+  test("a hands-off founding the journal DOES record still exempts — the rule reads the act, not the file", () => {
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      foundingConfigEvent("aaaaaab1", HUMAN, 1),
+      inceptionConfigEvent("aaaaaab2", AGENT, 2),
+    ]);
+    expect(status.founding?.signed).toBe(true);
+    expect(status.inception.signed).toBe(true);
+    expect(status.foundedHandsOff).toBe(true);
+  });
+
+  /**
+   * The exemption's fail-safe, asserted in BOTH orders: two same-second acts
+   * agreeing on who acted and on the paragraph, differing only in the MODE
+   * they record, must not let event ordering decide which door the project
+   * came through — the same lottery the actor-kind and paragraph fail-safes
+   * already refuse. Whichever lands last, the answer is "undecidable".
+   */
+  for (const [first, second] of [
+    ["hands-off", "guided"],
+    ["guided", "hands-off"],
+  ] as const) {
+    test(`same-second acts differing only in MODE are ambiguous with ${second} recorded last`, () => {
+      const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+        foundingConfigEvent("bbbbbbb1", HUMAN, 0, {
+          mode: first,
+          paragraph: HANDS_OFF.paragraph,
+        }),
+        foundingConfigEvent("bbbbbbb2", HUMAN, 0, {
+          mode: second,
+          paragraph: HANDS_OFF.paragraph,
+        }),
+        inceptionConfigEvent("bbbbbbb3", AGENT, 1),
+      ]);
+      console.log(`[constitution, mode tie with ${second} last]`, status);
+      expect(status.founding?.signed).toBe(false);
+      expect(status.founding?.defect).toBe("ambiguous");
+      expect(status.founding?.tied).toHaveLength(2);
+      // No proven door, so the tier record is judged on its own provenance.
+      expect(status.foundedHandsOff).toBe(false);
+      expect(status.inception.defect).toBe("agent-recorded");
+    });
+  }
+
+  test("a hands-off founding NO act records exempts nothing — unprovable is not a door", () => {
+    const status = constitutionSignatureStatus({ founding: HANDS_OFF, inception: SIGNED }, [
+      inceptionConfigEvent("aaaaaab3", AGENT, 2),
+    ]);
+    console.log("[constitution, hands-off with no founding act]", status);
+    expect(status.foundedHandsOff).toBe(false);
+    expect(status.inception.defect).toBe("agent-recorded");
+  });
+
+  test("the founding half is exactly foundingSignatureStatus — one rule, not two", () => {
+    // The paragraph half must keep answering as it always did, including the
+    // states only it has (paragraph-mismatch) and the guided silence.
+    const events = [foundingConfigEvent("aaaaaaa3", AGENT, 1)];
+    expect(constitutionSignatureStatus({ founding: HANDS_OFF }, events).founding).toEqual(
+      foundingSignatureStatus(HANDS_OFF, events)!,
+    );
+    expect(constitutionSignatureStatus({ founding: { mode: "guided" } }, []).founding).toBeUndefined();
+  });
+
+  test("an absent config answers for both halves rather than throwing", () => {
+    const status = constitutionSignatureStatus(undefined, []);
+    expect(status.founding).toBeUndefined();
+    expect(status.inception.defect).toBe("absent");
   });
 });
 

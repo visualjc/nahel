@@ -16,6 +16,7 @@ import {
   healItemWrites,
   sabotageItemWrites,
   setupFixture,
+  signConstitution,
   type ValidateFixture,
 } from "./helpers";
 
@@ -75,6 +76,7 @@ async function injectDivergence(fixture: ValidateFixture) {
 describe("nahel validate — the command", () => {
   test("a clean repo validates silently: exit 0, no output", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     await createItem(fixture);
 
     const result = await runValidate([], fixture.root);
@@ -157,6 +159,7 @@ describe("nahel validate — the command", () => {
 
   test("stays clean (exit 0, no findings) after log-driven rotation archives segments", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     await createItem(fixture);
     for (const text of ["one", "two"]) {
       const ctx: CommandContext = {
@@ -167,8 +170,9 @@ describe("nahel validate — the command", () => {
       };
       expect(await logCommand.run(["note", "--data", `text=${text}`], ctx)).toBe(0);
     }
-    // log closed + archived its own session segments.
-    expect((await listSegments(fixture.layout)).archived).toHaveLength(2);
+    // log closed + archived its own session segments — three with the founding
+    // act's, since every CLI invocation mints and closes a segment of its own.
+    expect((await listSegments(fixture.layout)).archived).toHaveLength(3);
 
     const result = await runValidate([], fixture.root);
     expect(result.code).toBe(0);
@@ -178,6 +182,7 @@ describe("nahel validate — the command", () => {
 
   test("errors are reported with check, path, and fix, and exit non-zero", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const path = itemPath(fixture.layout, "badbadb1");
     await writeFile(
       path,
@@ -209,6 +214,7 @@ describe("nahel validate — the command", () => {
 
   test("warnings are reported but do not fail: exit 0", async () => {
     const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await signConstitution(fixture);
     await createItem(fixture);
     await closeStoreContext(fixture.agent); // archive the session segment: un-distilled debt
 
@@ -223,6 +229,7 @@ describe("nahel validate — the command", () => {
 
   test("--json emits the machine shape: repaired + findings", async () => {
     const fixture = await setupFixture(dirs, { compaction: { max_events: 1 } });
+    await signConstitution(fixture);
     await createItem(fixture);
     await closeStoreContext(fixture.agent);
 
@@ -241,6 +248,7 @@ describe("nahel validate — the command", () => {
 
   test("the command feeds the clock into the age threshold: old un-distilled archives warn end-to-end", async () => {
     const fixture = await setupFixture(dirs, { compaction: { max_age_days: 30 } });
+    await signConstitution(fixture);
     await createItem(fixture); // events at 2026-07-16 (the fixture epoch)
     await closeStoreContext(fixture.agent);
 
@@ -270,6 +278,7 @@ describe("nahel validate — the command", () => {
 
   test("--repair replays the journaled mutation, reports it, and the repo then validates clean", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const { v1, v2 } = await injectDivergence(fixture);
 
     const repair = await runValidate(["--repair"], fixture.root);
@@ -291,6 +300,7 @@ describe("nahel validate — the command", () => {
 
   test("--repair --json carries the repaired records in the machine shape", async () => {
     const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
     const { v1 } = await injectDivergence(fixture);
 
     const result = await runValidate(["--repair", "--json"], fixture.root);

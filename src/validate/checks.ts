@@ -12,6 +12,7 @@ import {
 import {
   configSchema,
   distilledSchema,
+  isArchivedPrdPath,
   mapFrontmatterSchema,
   observationFrontmatterSchema,
   roadmapNodeFrontmatterSchema,
@@ -45,7 +46,8 @@ import {
   SESSION_CLOSED_EVENT_TYPE,
   type SegmentScan,
 } from "../store/journal";
-import { featureDevStatus } from "../views/roadmap";
+import { eventDocuments } from "../store/mutate";
+import { featureDevStatus, featureStatus } from "../views/roadmap";
 
 /**
  * `nahel validate`'s check library (PRD F8): pure functions over the raw
@@ -152,6 +154,15 @@ export interface ValidationInput {
    * without it the roadmap.adr-missing warning is skipped.
    */
   adrPresence?: Record<string, boolean>;
+  /**
+   * Existence and content of every path a journaled DOCUMENT step names (F10):
+   * `documentPresence` for all of them, `documentText` for the `append` targets
+   * whose completion is judged by content rather than by existence. Optional,
+   * and absent entirely in a store no archival ever touched — without them the
+   * document half of the divergence report is skipped, like `prdPresence`.
+   */
+  documentPresence?: Record<string, boolean>;
+  documentText?: Record<string, string>;
   /**
    * The repo's prototype refs — local branches with their tips, the resolved
    * default branch, and the remote-tracking prototype refs (Phase 2 F5.2),
@@ -786,6 +797,70 @@ function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
           fix: "write the ADR or fix the node's reference with `nahel roadmap node update <ref> --adr <path>` — an ADR may arrive by a later merge",
         });
       }
+    }
+  }
+  return findings;
+}
+
+/**
+ * The PRD lifecycle (Phase 4 F10): a feature's PRD is LIVE until the feature is
+ * released and ARCHIVED after, and both halves coming apart is worth saying.
+ * All three are warnings — nothing here was refused at write time, and none of
+ * them makes the store unreadable:
+ *
+ * - `prd-missing`: the node's document is not on disk. The node-side twin of
+ *   `item.prd-missing`, and the shape a half-finished archival leaves behind
+ *   (the file moved, the reference did not) — so it names the path that points
+ *   at neither location.
+ * - `prd-unarchived`: the feature reached `released`, so its delta is closed,
+ *   but the document is still sitting in the live directory.
+ * - `closed-delta`: the reverse and the more serious of the two — a node that
+ *   is NOT released pointing INTO the archive, which is someone continuing
+ *   work against a delta that was closed. The fix is the doctrine: a new node
+ *   with a new PRD, naming this one as its predecessor.
+ *
+ * The stage comes from F9's derivation, never from a field: featureStatus IS
+ * the rule, so a node these checks call released is exactly one the roadmap
+ * renders as released.
+ */
+function checkPrdLifecycle(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.prdPresence;
+  const items = [...state.items.values()].map((entry) => entry.record);
+  for (const { record, path } of state.roadmapNodes.values()) {
+    const prd = record.prd;
+    if (prd === undefined) continue;
+    if (presence?.[prd] === false) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.prd-missing",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) references PRD ${prd}, which does not exist on disk`,
+        fix: "the PRD may arrive by a later merge — otherwise fix the reference with `nahel roadmap node update <ref> --prd <path>`, or, if an archival was interrupted, `nahel validate --repair` completes it",
+      });
+    }
+    const released = featureStatus(record, items, state.events).stage === "released";
+    if (released && !isArchivedPrdPath(prd)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.prd-unarchived",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is released, but its PRD ${prd} is still live — ` +
+          "a released delta is closed, and its PRD belongs in the archive",
+        fix: `close it with \`nahel roadmap archive ${record.name}\` — the PRD moves with every reference to it, and the product design doc is updated in the same act`,
+      });
+    }
+    if (!released && isArchivedPrdPath(prd)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.closed-delta",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is not released, but its PRD ${prd} is archived — ` +
+          "this is work continuing against a delta that was already closed",
+        fix: `an archived PRD is never reopened or edited: open a new feature node with a new PRD instead, naming this one as its predecessor (\`nahel roadmap node new feature <name> ... --predecessor ${record.name}\`)`,
+      });
     }
   }
   return findings;
@@ -1679,6 +1754,10 @@ function mutationRecords(event: JournalEvent): Mutation[] {
       }
       const record = entry as Record<string, unknown>;
       const target = record["target"];
+      // A DOCUMENT step is a step of the sequence but not a record (F10): it
+      // has no id and no schema to compare against disk, and checkArchival
+      // reports it against the filesystem instead.
+      if (target === "document") continue;
       if (typeof target !== "string" || !(target in MUTATION_SCHEMAS)) {
         mutations.push({
           target: sequenceTarget(event),
@@ -2026,6 +2105,100 @@ function checkDivergence(state: ParsedState): Finding[] {
           `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
         fix: repairFix,
       });
+    }
+  }
+  return findings;
+}
+
+/**
+ * The DOCUMENT half of divergence (Phase 4 F10). A journaled document step is
+ * the same promise a journaled record write is — the journal states what the
+ * filesystem should hold — so an act killed before the file work landed is
+ * reported in the same words and healed by the same flag.
+ *
+ * The three shapes a `move` can be caught in are named separately, because they
+ * are three different facts about where the document is:
+ *
+ * - neither location holds it: repair cannot invent a document, so this is the
+ *   one archival state `--repair` will not fix, and it says so;
+ * - the destination is empty and the source still holds it: the move never
+ *   started, the journal is ahead;
+ * - BOTH hold it: the copy landed and the source was never unlinked — the one
+ *   partial state the move's own ordering can leave, and the next repair pass
+ *   removes the source.
+ *
+ * An `append` is judged by its MARKER, not by the line: a design doc is
+ * permanent and gets reworded, and the act has landed as long as the pointer
+ * it carried is in the document.
+ */
+function checkArchival(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.documentPresence;
+  const repairFix =
+    "run `nahel validate --repair` — it applies the journaled document step and only makes real what the journal already records";
+  for (const event of state.events) {
+    const { edits, invalid } = eventDocuments(event);
+    for (const reason of invalid) {
+      findings.push({
+        severity: "error",
+        check: "journal.payload",
+        message:
+          `mutation event ${event.id} (${event.type}) carries an unusable document step — ${reason} — ` +
+          "repair cannot use it",
+        fix: "the event payload was corrupted — restore the segment from git",
+      });
+    }
+    if (presence === undefined) continue;
+    for (const edit of edits) {
+      if (edit.op === "move") {
+        const to = presence[edit.to] === true;
+        const from = presence[edit.from] === true;
+        if (!to && !from) {
+          findings.push({
+            severity: "error",
+            check: "roadmap.document-lost",
+            message:
+              `event ${event.id} moved ${edit.from} to ${edit.to}, and the document is at neither ` +
+              "location — no PRD is ever deleted, so this is a hand deletion",
+            fix: "restore the document from git — `nahel validate --repair` cannot invent one",
+          });
+        } else if (!to) {
+          findings.push({
+            severity: "error",
+            check: "journal.divergence",
+            path: edit.to,
+            message: `document ${edit.to} is missing its journaled move from ${edit.from} (event ${event.id}) — the journal is ahead`,
+            fix: repairFix,
+          });
+        } else if (from) {
+          findings.push({
+            severity: "error",
+            check: "journal.divergence",
+            path: edit.from,
+            message: `document ${edit.from} was journaled as moved to ${edit.to} (event ${event.id}) but still exists at both — the journal is ahead`,
+            fix: repairFix,
+          });
+        }
+        continue;
+      }
+      if (presence[edit.path] !== true) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.design-doc-missing",
+          message: `event ${event.id} appended to ${edit.path}, which does not exist on disk — the product design doc is permanent, never archived and never deleted`,
+          fix: "restore the document from git, or point the product node at the right one with `nahel roadmap node update <ref> --design-doc <path>`",
+        });
+        continue;
+      }
+      if (!(state.input.documentText?.[edit.path] ?? "").includes(edit.marker)) {
+        findings.push({
+          severity: "error",
+          check: "journal.divergence",
+          path: edit.path,
+          message: `document ${edit.path} does not carry what event ${event.id} recorded (${edit.marker}) — the journal is ahead`,
+          fix: repairFix,
+        });
+      }
     }
   }
   return findings;
@@ -2424,6 +2597,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkRoadmapRefs(state),
     ...checkRoadmapDerivation(state),
     ...checkRoadmapAdrRefs(state),
+    ...checkPrdLifecycle(state),
     ...checkRoadmapShape(state),
     ...checkWayfinder(state),
     ...checkPrdRefs(state),
@@ -2438,6 +2612,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkClaimedActiveRuns(state),
     ...checkJournal(state),
     ...checkDivergence(state),
+    ...checkArchival(state),
     ...checkHotState(state),
     ...checkMaintenance(state),
     ...checkSkillsDrift(state),

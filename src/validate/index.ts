@@ -4,6 +4,7 @@ import { roadmapNodeFrontmatterSchema, workItemFrontmatterSchema } from "../sche
 import { readFrontmatterFile } from "../store/frontmatter";
 import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
+import { eventDocuments } from "../store/mutate";
 import { scanPrototypeRefs } from "../store/prototype";
 import {
   itemPath,
@@ -97,6 +98,31 @@ async function collectDocPresence(
 }
 
 /**
+ * Existence on disk of every schema-valid `prd` path any ROADMAP NODE carries
+ * (Phase 4 F1/F10), folded into the same presence map the item-side paths use:
+ * one path is one file whoever points at it, and the archival act moves node
+ * and item references together, so a single map is what keeps the two sides
+ * from disagreeing about whether the document is there.
+ */
+async function collectNodePrdPresence(
+  layout: StoreLayout,
+  input: ValidationInput,
+  presence: Record<string, boolean>,
+): Promise<void> {
+  const prdField = roadmapNodeFrontmatterSchema.shape.prd;
+  for (const raw of input.roadmapNodes) {
+    const parsed = prdField.safeParse(raw.frontmatter?.["prd"]);
+    if (!parsed.success || parsed.data === undefined || parsed.data in presence) continue;
+    try {
+      presence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      presence[parsed.data] = false;
+    }
+  }
+}
+
+/**
  * Existence on disk of every schema-valid ADR path any roadmap node
  * cross-references (F1), keyed by the path as written — the node-side twin of
  * collectDocPresence, collected here so the checks stay pure. Only paths the
@@ -125,6 +151,44 @@ async function collectAdrPresence(
     }
   }
   return presence;
+}
+
+/**
+ * What every journaled DOCUMENT step names, as data (Phase 4 F10): whether each
+ * path exists, and — for an `append`, whose completion is judged by content —
+ * the text itself. The steps are read through the store's own payload parser,
+ * so the checks judge exactly what repair would apply. Collected here for the
+ * same reason PRD presence is: the checks touch no filesystem.
+ */
+async function collectDocumentState(
+  layout: StoreLayout,
+  input: ValidationInput,
+): Promise<void> {
+  const presence: Record<string, boolean> = {};
+  const text: Record<string, string> = {};
+  const read = async (path: string): Promise<string | null> => {
+    try {
+      return await readTextFile(join(layout.root, path));
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      return null;
+    }
+  };
+  for (const segment of input.segments) {
+    for (const event of segment.events) {
+      for (const edit of eventDocuments(event).edits) {
+        for (const path of edit.op === "move" ? [edit.from, edit.to] : [edit.path]) {
+          if (path in presence) continue;
+          const content = await read(path);
+          presence[path] = content !== null;
+          if (content !== null && edit.op === "append") text[path] = content;
+        }
+      }
+    }
+  }
+  if (Object.keys(presence).length === 0) return;
+  input.documentPresence = presence;
+  input.documentText = text;
 }
 
 /**
@@ -246,9 +310,12 @@ export async function collectValidationInput(
   // read stays inside the repo; anything else is already a schema.item
   // finding, not a path to probe.
   input.prdPresence = await collectDocPresence(layout, input, "prd");
+  await collectNodePrdPresence(layout, input, input.prdPresence);
   input.investigationPresence = await collectDocPresence(layout, input, "investigation");
   // ADR cross-references on roadmap nodes (F1), same rules and same purity.
   input.adrPresence = await collectAdrPresence(layout, input);
+  // The document steps journaled acts record (F10), read the same way.
+  await collectDocumentState(layout, input);
 
   // Prototype refs (Phase 2 F5.2): read-only git plumbing, the same store-layer
   // privilege the claim baseline holds. Never throws — a checkout that is not a

@@ -571,23 +571,33 @@ export async function applyDocumentEdit(
   return "applied";
 }
 
-/** The document steps one journal event carries, or [] when it carries none. */
-function eventDocuments(event: JournalEvent): DocumentEdit[] {
-  if (!MUTATION_EVENT_TYPES.has(event.type)) return [];
-  const records = event.payload["records"];
-  if (event.payload["target"] !== "sequence" || !Array.isArray(records)) return [];
+/**
+ * The document steps one journal event carries: the edits that parsed, and the
+ * reason each one that did not. PURE — no I/O — so `validate`'s checks read the
+ * payload through the same function repair applies it through, and the two can
+ * never disagree about what an event says the filesystem should hold.
+ */
+export function eventDocuments(event: JournalEvent): {
+  edits: DocumentEdit[];
+  invalid: string[];
+} {
   const edits: DocumentEdit[] = [];
+  const invalid: string[] = [];
+  if (!MUTATION_EVENT_TYPES.has(event.type)) return { edits, invalid };
+  const records = event.payload["records"];
+  if (event.payload["target"] !== "sequence" || !Array.isArray(records)) return { edits, invalid };
   for (const entry of records) {
     if (entry === null || typeof entry !== "object") continue;
     const payload = entry as Record<string, unknown>;
     if (payload["target"] !== "document") continue;
     const { target: _target, ...edit } = payload;
-    // An unparseable edit is a `validate` finding (journal.payload), not
-    // something to guess at: repair only makes real what the journal states.
+    // An unparseable edit is reported, never guessed at: repair only makes
+    // real what the journal actually states.
     const parsed = documentEditSchema.safeParse(edit);
     if (parsed.success) edits.push(parsed.data);
+    else invalid.push(parsed.error.issues.map((issue) => issue.message).join("; "));
   }
-  return edits;
+  return { edits, invalid };
 }
 
 /**
@@ -602,7 +612,7 @@ function eventDocuments(event: JournalEvent): DocumentEdit[] {
 export async function replayDocuments(layout: StoreLayout): Promise<RepairedRecord[]> {
   const repaired: RepairedRecord[] = [];
   for await (const event of readJournal(layout)) {
-    for (const edit of eventDocuments(event)) {
+    for (const edit of eventDocuments(event).edits) {
       if ((await applyDocumentEdit(layout, edit)) === "applied") {
         repaired.push({
           target: "document",

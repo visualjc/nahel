@@ -763,7 +763,7 @@ function horizonEntries(events: readonly JournalEvent[]): Map<string, HorizonEnt
  * slugs are a merge shape `validate` reports, and an order that was not total
  * would let two of them swap between renders.
  */
-export function horizonEntryOrder(
+function horizonEntryOrder(
   nodes: readonly RoadmapNodeRecord[],
   events: readonly JournalEvent[],
 ): RoadmapNodeRecord[] {

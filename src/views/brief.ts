@@ -458,9 +458,16 @@ function clipText(text: string, codePoints: number): string {
   return Array.from(text).slice(0, codePoints).join("");
 }
 
-/** One deterministic assembly at a given rung of the truncation ladder. */
+/**
+ * One deterministic assembly at a given rung of the truncation ladder.
+ *
+ * `roadmap` arrives pre-rendered because no rung touches it — it is self-capping
+ * at BRIEF_ROADMAP_MAX_LINES — and re-deriving every feature's status once per
+ * rung would walk the item tree and the journal for an answer that cannot change.
+ */
 function assemble(
   inputs: BriefInputs,
+  roadmap: string | null,
   keptEvents: number,
   dropDone: boolean,
   constitutionClip: number | null,
@@ -496,9 +503,7 @@ function assemble(
   if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
   // Optional, between the policy and the work: where the product is going
   // (Phase 4 F4). It sits ABOVE item statuses because that is the reading
-  // order — intent, then the work under it — and it is self-capping at
-  // BRIEF_ROADMAP_MAX_LINES, so no rung of the ladder below touches it.
-  const roadmap = renderBriefRoadmap(inputs.nodes ?? [], inputs.snapshot.items, inputs.events);
+  // order — intent, then the work under it.
   if (roadmap !== null) sections.push(`== roadmap ==\n${roadmap}`);
   sections.push(
     `== item statuses ==\n${statusSection}`,
@@ -541,31 +546,34 @@ function largestFitting(lo: number, hi: number, size: (value: number) => number)
  * every section is present and every truncation is marked — never silent.
  */
 export function renderBrief(inputs: BriefInputs): string {
+  // Derived once, above the ladder: the roadmap block is the same string at
+  // every rung (Phase 4 F4 — it is capped, never truncated).
+  const roadmap = renderBriefRoadmap(inputs.nodes ?? [], inputs.snapshot.items, inputs.events);
   const total = inputs.events.length;
-  const full = assemble(inputs, total, false, null);
+  const full = assemble(inputs, roadmap, total, false, null);
   if (byteLength(full) <= BRIEF_BUDGET_BYTES) return full;
 
   // Rung 1: drop oldest activity first. Size is monotone in kept events, so
   // binary-search the largest kept count in [0, total-1] (marker present).
   if (total > 0) {
     const kept = largestFitting(0, total - 1, (k) =>
-      byteLength(assemble(inputs, k, false, null)),
+      byteLength(assemble(inputs, roadmap, k, false, null)),
     );
-    if (kept >= 0) return assemble(inputs, kept, false, null);
+    if (kept >= 0) return assemble(inputs, roadmap, kept, false, null);
   }
 
   // Rung 2: with activity exhausted, drop done-item detail.
   const dropDone = withoutDoneDetail(inputs.snapshot.items).omitted > 0;
-  if (dropDone && byteLength(assemble(inputs, 0, true, null)) <= BRIEF_BUDGET_BYTES) {
-    return assemble(inputs, 0, true, null);
+  if (dropDone && byteLength(assemble(inputs, roadmap, 0, true, null)) <= BRIEF_BUDGET_BYTES) {
+    return assemble(inputs, roadmap, 0, true, null);
   }
 
   // Rung 3: clip the constitution, keeping the largest prefix that fits.
   const constitutionLength = Array.from(constitutionBody(inputs)).length;
   const clip = largestFitting(0, constitutionLength, (c) =>
-    byteLength(assemble(inputs, 0, dropDone, c)),
+    byteLength(assemble(inputs, roadmap, 0, dropDone, c)),
   );
-  return assemble(inputs, 0, dropDone, Math.max(clip, 0));
+  return assemble(inputs, roadmap, 0, dropDone, Math.max(clip, 0));
 }
 
 /**

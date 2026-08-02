@@ -11,7 +11,7 @@ import { epochSeconds, timestampFromEpochSeconds, TIMESTAMP_PATTERN } from "../s
 import { compareEvents } from "../store/journal";
 import type { RoadmapNodeRecord } from "../store/layout";
 import { payloadText, roadmapNodeSummary } from "./roadmap";
-import { descendantIds, type RunSnapshot } from "./snapshot";
+import { epicCoverage, type RunSnapshot } from "./snapshot";
 
 /**
  * `nahel standup --since <when>` (Phase 4 F4): a CURATED read over the journal
@@ -286,16 +286,20 @@ const OUTSIDE_HEADING = "outside the roadmap";
 
 /**
  * Which roadmap nodes cover each item: a node covers the items under its epic,
- * the SAME association rule F2's columns use (descendantIds over the item
- * `parent` tree). Two nodes whose epics nest therefore both report the inner
- * subtree's acts — the honest reading of a store that names one epic inside
- * another, and exactly what the roadmap's columns already show.
+ * the SAME association rule F2's columns use — snapshot.ts's epicCoverage, the
+ * one place that rule lives. Two nodes whose epics nest therefore both report
+ * the inner subtree's acts — the honest reading of a store that names one epic
+ * inside another, and exactly what the roadmap's columns already show.
+ *
+ * A node whose epic id no record carries covers NOTHING, so its acts fall
+ * through to `outside the roadmap` instead of grouping under a ghost feature:
+ * the orphans still naming that dead id as their parent ARE movement no node
+ * covers, which is exactly what that section exists for.
  */
 function coveringNodes(inputs: StandupInputs): Map<string, string[]> {
   const covering = new Map<string, string[]>();
   for (const { frontmatter } of inputs.nodes) {
-    if (frontmatter.epic === undefined) continue;
-    for (const item of descendantIds(inputs.items, frontmatter.epic)) {
+    for (const item of epicCoverage(inputs.items, frontmatter.epic)) {
       const nodes = covering.get(item);
       if (nodes === undefined) covering.set(item, [frontmatter.id]);
       else nodes.push(frontmatter.id);

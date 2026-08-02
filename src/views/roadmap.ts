@@ -14,7 +14,7 @@ import type {
 } from "../schema/records";
 import { compareEvents } from "../store/journal";
 import type { MapRecord, RoadmapNodeRecord, TicketRecord } from "../store/layout";
-import { buildItemTree, descendantIds } from "./snapshot";
+import { buildItemTree, descendantIds, epicCoverage } from "./snapshot";
 import { renderItemTree } from "./status";
 
 /**
@@ -234,8 +234,9 @@ export interface RoadmapDevRollup {
  *
  * The rollup covers the epic's whole SUBTREE, not just its direct children:
  * work nests (an epic's task can own its own children), and the same coverage
- * rule the event association uses below — descendantIds, which claims and
- * `progress --item` also use — is the only one under which "flipping a leaf
+ * rule the event association uses below — snapshot.ts's epicCoverage, over the
+ * descendantIds walk claims and `progress --item` also use — is the only one
+ * under which "flipping a leaf
  * work item to done changes the feature's status" (F2's first acceptance
  * criterion) holds. The epic item's OWN status is excluded: it is the
  * container, not work under itself.
@@ -248,38 +249,9 @@ export function featureDevStatus(
   node: RoadmapNodeFrontmatter,
   items: readonly WorkItemFrontmatter[],
 ): RoadmapDevRollup {
-  return devRollup(node.epic, items, epicCoverage(node, items));
+  return devRollup(node.epic, items, epicCoverage(items, node.epic));
 }
 
-/** A node with no epic covers nothing — no walk, and no event can associate. */
-const NO_COVERAGE: ReadonlySet<string> = new Set();
-
-/**
- * The item ids a feature node's epic covers: the epic plus its descendants, the
- * ONE walk of the item tree per node. Callers that need both the rollup and the
- * event association compute it once and pass it to each — they are asking the
- * same question of the same subtree.
- *
- * An epic id NO ITEM RECORD carries covers nothing at all. F2 states the rule
- * as resolution, not as string equality — an event covers a node iff its `item`
- * resolves to that node's epic ITEM or to a descendant of it in the item
- * `parent` tree — and a dangling id resolves to nothing, so the honest coverage
- * is empty. The dev rollup still reads `unknown` (the id is recorded, the work
- * is not there) and `validate` still names the missing epic; what changes is
- * that no logged lifecycle event can carry the node past a development nobody
- * can find. This SUPERSEDES the earlier reading — coverage by ref, so events
- * associate with a dangling epic — which seeded the walk with an id no record
- * carried and let a deploy or release advance the stage of a node whose epic
- * had been dropped, straight into F9's stage and F10's archival gate.
- */
-function epicCoverage(
-  node: RoadmapNodeFrontmatter,
-  items: readonly WorkItemFrontmatter[],
-): ReadonlySet<string> {
-  if (node.epic === undefined) return NO_COVERAGE;
-  if (!items.some((item) => item.id === node.epic)) return NO_COVERAGE;
-  return descendantIds(items, node.epic);
-}
 
 /**
  * The rollup over an ALREADY-computed coverage set — the single place every row
@@ -432,7 +404,7 @@ export function featureStatus(
 ): RoadmapFeatureStatus {
   // One walk, shared by the rollup and the association below. A node with no
   // epic yields the empty coverage, so the loop simply matches nothing.
-  const covered = epicCoverage(node, items);
+  const covered = epicCoverage(items, node.epic);
   const rollup = devRollup(node.epic, items, covered);
   const winners = new Map<string, JournalEvent>();
   for (const event of events) {
@@ -944,6 +916,9 @@ function workItemsSection(
     );
     return;
   }
+  // The two "none" cases are DIFFERENT facts and say so, which is why this
+  // branch exists rather than reading an empty coverage twice; the set itself
+  // still comes from epicCoverage, so nothing here re-states the rule.
   if (!items.some((item) => item.id === node.epic)) {
     lines.push(
       `work items: none — epic ${node.epic} has no item record here ` +
@@ -951,7 +926,7 @@ function workItemsSection(
     );
     return;
   }
-  const covered = descendantIds(items, node.epic);
+  const covered = epicCoverage(items, node.epic);
   const subtree = items.filter((item) => covered.has(item.id));
   lines.push(`work items (${subtree.length}):`);
   // knownIds is every item in the store, so the epic's own parent — which sits

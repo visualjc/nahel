@@ -30,7 +30,7 @@ import {
   roadmapNodeLinks,
   type FrontierScope,
 } from "../views/roadmap";
-import { descendantIds, loadSnapshot } from "../views/snapshot";
+import { epicCoverage, loadSnapshot } from "../views/snapshot";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
 import { ARCHIVE_USAGE, runArchiveSubcommand } from "./roadmap-archive";
 import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
@@ -553,7 +553,10 @@ function frontierScope(
   return {
     name: node.name,
     map: maps.find(({ frontmatter }) => frontmatter.node === node.id)?.frontmatter.id ?? null,
-    items: node.epic === undefined ? new Set<string>() : descendantIds(items, node.epic),
+    // The same resolution rule the columns and standup use: a node naming no
+    // epic, or one no record carries, scopes to no items — an orphan still
+    // pointing at a dropped epic is takeable work, but it is not this node's.
+    items: epicCoverage(items, node.epic),
   };
 }
 

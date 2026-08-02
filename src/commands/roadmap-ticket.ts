@@ -15,7 +15,12 @@ import {
   type StoreLayout,
   type TicketRecord,
 } from "../store/layout";
-import { closeStoreContext, mutate, type StoreContext } from "../store/mutate";
+import {
+  closeStoreContext,
+  mutate,
+  type SequenceWrite,
+  type StoreContext,
+} from "../store/mutate";
 import { renderTicket } from "../views/roadmap";
 import { commandContext, requireValid, UsageError } from "./item";
 import { requireMap } from "./roadmap-map";
@@ -350,28 +355,102 @@ function decisionObservation(
   };
 }
 
-/** Parse the one required text flag `resolve` and `close` each take. */
-function requireText(args: string[], flag: "decision" | "reason", verb: string): {
-  ref: string;
-  text: string;
-} {
-  const { values, positionals } = parseArgs({
-    args,
-    options: { [flag]: { type: "string" } },
-    allowPositionals: true,
-  });
+/** The one-line text `resolve` and `close` each require, hardened once. */
+function requireOneLineText(value: unknown, flag: string, hint: string): string {
+  if (typeof value !== "string" || value.trim() === "") throw new UsageError(hint);
+  return requireSingleLine(value.trim(), flag);
+}
+
+/** The single `<ref>` positional every lifecycle verb takes. */
+function onlyPositional(positionals: string[], verb: string): string {
   if (positionals.length !== 1) {
     throw new UsageError(`roadmap ticket ${verb} takes exactly one <ref> (a ticket id)`);
   }
-  const text = values[flag];
-  if (typeof text !== "string" || text.trim() === "") {
+  return positionals[0]!;
+}
+
+/** `resolve <ref> --decision <one-liner>`. */
+function parseResolveArgs(args: string[]): { ref: string; decision: string } {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { decision: { type: "string" } },
+    allowPositionals: true,
+  });
+  return {
+    ref: onlyPositional(positionals, "resolve"),
+    decision: requireOneLineText(
+      values.decision,
+      "--decision",
+      "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, indexed on the map, and distilled into an observation)",
+    ),
+  };
+}
+
+/**
+ * How a close disposes of the question — the two cases F7's close row names,
+ * and the reason they cannot share one spelling:
+ *
+ * - `out-of-scope`: ruled BEYOND the destination. Gains a line in the map's Out
+ *   of scope, which is the section that keeps the map from growing without
+ *   bound; entries there never graduate.
+ * - `invalidated`: another decision answered the question out of existence. It
+ *   was never beyond the destination, so an Out-of-scope line would be false —
+ *   the invalidating ref goes on the TICKET, and the map renders it beside
+ *   Decisions so far, derived from the tickets rather than stored a second time.
+ */
+type CloseDisposition = { kind: "out-of-scope" } | { kind: "invalidated"; by: string };
+
+/** `close <ref> --reason <why> (--out-of-scope | --invalidated-by <ref>)`. */
+function parseCloseArgs(args: string[]): {
+  ref: string;
+  reason: string;
+  disposition: CloseDisposition;
+} {
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      reason: { type: "string" },
+      "out-of-scope": { type: "boolean" },
+      "invalidated-by": { type: "string" },
+    },
+    allowPositionals: true,
+  });
+  const ref = onlyPositional(positionals, "close");
+  const outOfScope = values["out-of-scope"] === true;
+  const invalidatedBy = values["invalidated-by"];
+  if (outOfScope && invalidatedBy !== undefined) {
     throw new UsageError(
-      flag === "decision"
-        ? "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, indexed on the map, and distilled into an observation)"
-        : "a close states why the question was ruled away — pass a non-empty --reason <why> (it becomes the map's Out of scope line)",
+      "--out-of-scope and --invalidated-by are mutually exclusive — a question is either beyond the " +
+        "destination or answered out of existence by another decision, never both",
     );
   }
-  return { ref: positionals[0]!, text: requireSingleLine(text.trim(), `--${flag}`) };
+  if (!outOfScope && invalidatedBy === undefined) {
+    throw new UsageError(
+      "a close states WHICH disposition it is: --out-of-scope (ruled beyond the destination — it gains a " +
+        "line in the map's Out of scope) or --invalidated-by <ticket-or-event-id> (another decision " +
+        "answered the question out of existence — it was never beyond the destination, so no Out-of-scope " +
+        "line is written)",
+    );
+  }
+  const reason = requireOneLineText(
+    values.reason,
+    "--reason",
+    "a close states why the question was ruled away — pass a non-empty --reason <why> (it is the ticket's epitaph under either disposition)",
+  );
+  if (invalidatedBy !== undefined && !ID_PATTERN.test(invalidatedBy)) {
+    throw new UsageError(
+      `--invalidated-by ${JSON.stringify(invalidatedBy)} is not an id — it names the resolved ticket, or the ` +
+        "journal event, whose decision answered this question out of existence",
+    );
+  }
+  return {
+    ref,
+    reason,
+    disposition:
+      invalidatedBy === undefined
+        ? { kind: "out-of-scope" }
+        : { kind: "invalidated", by: invalidatedBy },
+  };
 }
 
 /**
@@ -385,7 +464,7 @@ async function ticketResolve(
   cwd: string,
   actorOverride?: string,
 ): Promise<number> {
-  const { ref, text: decision } = requireText(args, "decision", "resolve");
+  const { ref, decision } = parseResolveArgs(args);
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "resolve");
@@ -434,9 +513,11 @@ async function ticketResolve(
 }
 
 /**
- * `close`: rule the question away. The ticket and the map's Out of scope line
- * ride one event, the same shape `resolve` does — a closed question never
- * becomes a decision, so nothing is indexed and nothing is distilled.
+ * `close`: rule the question away, saying WHICH way (see CloseDisposition).
+ * The ticket and — for an out-of-scope ruling — the map's Out of scope line
+ * ride one event, the same shape `resolve` does. A closed question never
+ * becomes a decision under either disposition, so nothing is indexed in
+ * Decisions so far and nothing is distilled.
  */
 async function ticketClose(
   args: string[],
@@ -444,7 +525,7 @@ async function ticketClose(
   cwd: string,
   actorOverride?: string,
 ): Promise<number> {
-  const { ref, text: reason } = requireText(args, "reason", "close");
+  const { ref, reason, disposition } = parseCloseArgs(args);
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "close");
@@ -452,26 +533,32 @@ async function ticketClose(
 
   const now = ctx.env.now();
   const { claimant: _released, ...rest } = current.frontmatter;
+  const closed: TicketFrontmatter = {
+    ...rest,
+    state: "closed",
+    reason,
+    ...(disposition.kind === "invalidated" ? { invalidated_by: disposition.by } : {}),
+    updated: now,
+  };
+  // An invalidated close touches only the ticket: the map already carries the
+  // decision that killed the question, and renders the death beside it.
+  const writes: SequenceWrite[] = [{ target: "ticket", frontmatter: closed, body: current.body }];
+  if (disposition.kind === "out-of-scope") {
+    writes.push({
+      target: "map",
+      frontmatter: {
+        ...map.frontmatter,
+        out_of_scope: [...map.frontmatter.out_of_scope, { reason, ticket: rest.id }],
+        updated: now,
+      },
+      body: map.body,
+    });
+  }
   await mutate(ctx, {
     target: "sequence",
     eventType: CORE_EVENT_TYPES.ticketClosed,
     eventId: generateId(ctx.env),
-    writes: [
-      {
-        target: "ticket",
-        frontmatter: { ...rest, state: "closed", reason, updated: now },
-        body: current.body,
-      },
-      {
-        target: "map",
-        frontmatter: {
-          ...map.frontmatter,
-          out_of_scope: [...map.frontmatter.out_of_scope, { reason, ticket: rest.id }],
-          updated: now,
-        },
-        body: map.body,
-      },
-    ],
+    writes,
   });
   await closeStoreContext(ctx);
   return 0;

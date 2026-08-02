@@ -105,7 +105,8 @@ function ticketLines(record: TicketRecord): string[] {
 
 /**
  * Render one map (F7): the node it charts, its destination, its Notes prose,
- * and all four listed sections — decisions so far, not yet specified, out of
+ * and its listed sections — decisions so far, the questions a decision
+ * invalidated (derived from the tickets, see below), not yet specified, out of
  * scope, and the tickets hanging off it. Pure over records already read, so two
  * reads of an unchanged store are byte-identical (HC1).
  *
@@ -128,6 +129,24 @@ export function renderMap(
     lines,
     "decisions so far",
     map.decisions.map((entry) => `${entry.ticket}  ${entry.decision}`),
+  );
+  // The questions another decision answered out of existence (F7's invalidated
+  // close). DERIVED from the tickets rather than stored as a sixth section: the
+  // fact already lives on the ticket that died, and the layer's rule is that
+  // anything derivable is derived and never hand-set (F2). It prints HERE, next
+  // to the decisions, because the decision that killed each of these is one of
+  // them — and deliberately NOT under Out of scope, which means "ruled beyond
+  // the destination" and would be false of every line below.
+  section(
+    lines,
+    "invalidated by a decision",
+    tickets
+      .filter(({ frontmatter }) => frontmatter.invalidated_by !== undefined)
+      .map(({ frontmatter }) =>
+        [`${frontmatter.id}  invalidated by ${frontmatter.invalidated_by}`, frontmatter.reason]
+          .filter((part) => part !== undefined && part !== "")
+          .join("  —  "),
+      ),
   );
   section(lines, "not yet specified", map.fog);
   section(
@@ -158,6 +177,7 @@ export function renderTicket(record: TicketRecord, map: MapRecord | null): strin
   fieldLine(lines, "blockers", ticket.blockers.join(", "));
   fieldLine(lines, "decision", ticket.decision);
   fieldLine(lines, "reason", ticket.reason);
+  fieldLine(lines, "invalidated_by", ticket.invalidated_by);
   fieldLine(lines, "resolution", ticket.resolution);
   lines.push(`  created=${ticket.created}  updated=${ticket.updated}`);
   const question = record.body.trimEnd();

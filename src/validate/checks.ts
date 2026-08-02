@@ -981,6 +981,25 @@ function checkWayfinder(state: ParsedState): Finding[] {
         }
       }
     }
+    // `close --invalidated-by` records the decision that killed the question.
+    // A ref resolving to neither a ticket nor a journal event records nothing —
+    // reported like every other dangling ref in the layer, never refused (the
+    // target may arrive by a later merge, ADR-0012).
+    if (
+      record.invalidated_by !== undefined &&
+      !state.ticketFiles.has(record.invalidated_by) &&
+      !state.eventIds.has(record.invalidated_by)
+    ) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.ticket-invalidator-missing",
+        path,
+        message:
+          `decision ticket ${record.id} was closed as invalidated by ${record.invalidated_by}, ` +
+          "which is neither a ticket nor a journal event — nothing records what killed the question",
+        fix: "the invalidating record may arrive by a later merge — otherwise re-close it against the real decision (`nahel roadmap ticket close <ref> --invalidated-by <ticket-or-event-id> --reason <why>`)",
+      });
+    }
     // The claimant and the state are one fact spelled twice: `claimed` means
     // someone holds it, and no other state holds anything.
     if (record.state === "claimed" && record.claimant === undefined) {

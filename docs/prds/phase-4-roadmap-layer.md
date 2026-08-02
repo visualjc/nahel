@@ -425,8 +425,15 @@ tracker anywhere:
 | `open` → `claimed` | `nahel roadmap ticket claim <ref>` |
 | `claimed` → `open` | `nahel roadmap ticket release <ref>` |
 | `open`/`claimed` → `resolved` | `nahel roadmap ticket resolve <ref> --decision <one-liner>` |
-| `open`/`claimed` → `closed` | `nahel roadmap ticket close <ref> --reason <why>` (out of scope, or invalidated by another decision) |
+| `open`/`claimed` → `closed` | `nahel roadmap ticket close <ref> --reason <why> --out-of-scope`, or `… --invalidated-by <ticket-or-event>` |
 | `resolved`/`closed` → body distilled | `nahel roadmap ticket distill <ref>` |
+
+A close **states which disposition it is**, because the two the row covers are
+different facts: `--out-of-scope` means ruled beyond the destination and adds
+the reason to that section, while `--invalidated-by` means another decision
+answered the question out of existence — it was never beyond the destination,
+so it records the invalidating ref on the ticket and writes no Out-of-scope
+line (the map renders those beside Decisions so far, derived from the tickets).
 
 **Claim semantics** are advisory assignment, deliberately NOT the
 intervention claim (`nahel intervene claim` keeps its freeze semantics for
@@ -478,8 +485,11 @@ state**, not corruption: `validate` names it and `validate --repair`
   completes it, and re-running the original verb afterwards is idempotent —
   no duplicate observation, no second index line. Exercised at every
   interruption point, not just the first.
-- An out-of-scope ruling `close`s the ticket, adds one line to Out of scope
-  with its reason, and never appears in Decisions so far.
+- An out-of-scope ruling `close --out-of-scope`s the ticket, adds one line to
+  Out of scope with its reason, and never appears in Decisions so far; a
+  `close --invalidated-by <ref>` records the invalidating ref on the ticket
+  instead, adds NO Out-of-scope line, and never appears in Decisions so far
+  either — and a close naming neither disposition (or both) is refused.
 - Both workflow docs pass the workflow-format doc tests and are installed by
   the existing shim generator like every other workflow (HC5: drivable by
   conversation alone).

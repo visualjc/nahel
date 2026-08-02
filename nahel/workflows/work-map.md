@@ -60,11 +60,23 @@ Before any `nahel` command: if you are an agent, set
    the answer, not the topic — "we own the fly.io deploy and nothing
    downstream of it", never "deploy target decided".
 
-   If the question turned out to be beyond the destination, or another
-   decision invalidated it, close it instead — the reason becomes the map's
-   Out of scope line, and it never becomes a decision:
+   If the question is not going to be answered, close it instead — and say
+   WHICH of the two reasons it is, because they are different facts and only
+   one of them belongs in Out of scope. Neither ever becomes a decision:
 
-       nahel roadmap ticket close <ticket-id> --reason "<why the question goes away>"
+       nahel roadmap ticket close <ticket-id> --out-of-scope \
+         --reason "<why this is beyond the destination>"
+
+       nahel roadmap ticket close <ticket-id> --invalidated-by <ticket-or-event-id> \
+         --reason "<which decision answered it out of existence>"
+
+   `--out-of-scope` adds the reason to the map's **Out of scope** section:
+   ruled beyond the destination, and it never graduates. `--invalidated-by`
+   records the decision that killed the question on the ticket, and the map
+   shows it beside Decisions so far — a question another decision answered was
+   never beyond the destination, so filing it under Out of scope would be
+   false, and would turn the one section that bounds the map into a graveyard
+   nobody trusts.
 
    If you are stopping without an answer, hand it back:
 

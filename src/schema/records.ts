@@ -242,12 +242,27 @@ export const ticketFrontmatterSchema = z.strictObject({
   state: z.enum(DECISION_TICKET_STATES),
   /** Who holds the advisory claim; present exactly while state is `claimed`. */
   claimant: nonEmptyString("claimant actor id").optional(),
-  /** Sibling tickets this one waits on — advisory, never enforced (F8). */
+  /**
+   * Sibling tickets this one waits on — tickets on the SAME map, since a
+   * blocker gates work on one destination (a cross-map edge is a `validate`
+   * warning). Advisory throughout: nothing anywhere refuses work over one (F8).
+   */
   blockers: z.array(idField),
   /** The one-liner `resolve` recorded (also indexed on the map). */
   decision: nonEmptyString("decision").optional(),
-  /** Why `close` ruled the question away (also a line in the map's Out of scope). */
+  /** Why `close` ruled the question away — required by both dispositions. */
   reason: nonEmptyString("reason").optional(),
+  /**
+   * The decision that killed this question, when `close` recorded the
+   * INVALIDATED disposition (F7's close row): the resolved ticket — or the
+   * journal event — whose decision answered it out of existence. Its presence
+   * is what tells the two closes apart: an out-of-scope close carries none and
+   * adds a line to the map's Out of scope instead, while an invalidated
+   * question was never beyond the destination, so filing it there would be
+   * false. The map renders these beside its Decisions so far, derived from the
+   * tickets — there is no sixth stored section (F2: derive, never hand-set).
+   */
+  invalidated_by: idField.optional(),
   /** The resolution event id — what the decision's observation cites as its source. */
   resolution: idField.optional(),
   created: timestampField,

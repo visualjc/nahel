@@ -711,3 +711,74 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
     expect(status.stage).toBe("tested");
   });
 });
+
+describe("featureStatus — the epic's subtree is walked once", () => {
+  /**
+   * Wrap each item so reading `parent` is counted. The subtree walk is the
+   * only thing in this layer that reads `parent`, so the counter measures
+   * WALKS without patching or mocking any function: the real code path runs
+   * untouched over ordinary records that happen to keep a tally.
+   */
+  function countingItems(items: readonly WorkItemFrontmatter[]): {
+    items: WorkItemFrontmatter[];
+    reads: () => number;
+  } {
+    let reads = 0;
+    const counted = items.map((item) => {
+      const { parent, ...rest } = item;
+      return Object.defineProperty({ ...rest } as WorkItemFrontmatter, "parent", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return parent;
+        },
+      });
+    });
+    return { items: counted, reads: () => reads };
+  }
+
+  test("featureStatus reads the item tree no more than the dev rollup alone does", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done", "backlog", "dropped"]);
+    const child = items[1]!;
+    items.push(makeFrontmatter(env, { name: "grandchild", status: "done", parent: child.id }));
+    const node = makeNode(env, { epic: epic.id });
+    const events = [makeEvent({ item: epic.id, payload: { failed: 0 } })];
+
+    // The unit is one walk, whatever a walk costs — the comparison pins the
+    // COUNT of walks without asserting anything about how one is performed.
+    const rollup = countingItems(items);
+    featureDevStatus(node, rollup.items);
+    const full = countingItems(items);
+    featureStatus(node, full.items, events);
+
+    expect(rollup.reads()).toBeGreaterThan(0);
+    expect(full.reads()).toBe(rollup.reads());
+  });
+
+  test("a node with no epic walks nothing at all", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { items } = epicWith(env, ["done"]);
+    const node = makeNode(env);
+    const counted = countingItems(items);
+
+    featureStatus(node, counted.items, [makeEvent({ payload: { failed: 0 } })]);
+
+    expect(counted.reads()).toBe(0);
+  });
+
+  test("a dangling epic id still walks once — coverage is by ref, so events still associate", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: "aaaaaaaa" });
+    const counted = countingItems(items);
+
+    const status = featureStatus(node, counted.items, [
+      makeEvent({ item: "aaaaaaaa", payload: { failed: 0 } }),
+    ]);
+
+    expect(status.dev).toBe("unknown");
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+    expect(counted.reads()).toBeGreaterThan(0);
+  });
+});

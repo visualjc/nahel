@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { itemCommand } from "../../src/commands/item";
 import { logCommand } from "../../src/commands/log";
 import { roadmapCommand } from "../../src/commands/roadmap";
+import { validateCommand } from "../../src/commands/validate";
 import type { Env } from "../../src/schema/env";
 import { CORE_EVENT_TYPES, RELEASE_ANNOUNCED_EVENT_TYPE } from "../../src/schema/events";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
 import { readJournal } from "../../src/store/journal";
+import * as store from "../../src/store/layout";
 import {
   ensureLayout,
   readItem,
@@ -360,5 +362,229 @@ describe("nahel roadmap archive — the released delta is closed (F10)", () => {
     expect(await fails(fixture.env, fixture.root, ["archive", "no-such-node"])).toContain(
       "does not name a roadmap node",
     );
+  });
+});
+
+/**
+ * F10's crash shape: archival is a SEQUENCE — one write-ahead event, then the
+ * PRD's move-and-stamp, the feature node's link, the authoring plan item, the
+ * epic, each further record sharing the path, and finally the product design
+ * doc's line. The criterion is that a process killed at EVERY one of those
+ * boundaries leaves a recoverable partial state: `validate` names it,
+ * `validate --repair` completes it, and re-running archival afterwards changes
+ * nothing — the header stamped once, no reference rewritten twice.
+ *
+ * How each kill is injected: an interruption point IS a write that never
+ * happened, so each case makes exactly one write fail and leaves every read
+ * working. Where the step writes into a directory of its own — the archive
+ * directory, the roadmap dir, the design doc's dir — the directory is chmod'ed
+ * read-only, F7's technique. The catch-all steps all write into `nahel/items`,
+ * so a directory cannot separate them: those fail the Nth item write instead,
+ * which is the only way to reach the N+1 sub-boundaries the PRD names (after
+ * ANY prefix of the catch-all updates), and leaves disk in byte-for-byte the
+ * state a SIGKILL at that instant would.
+ */
+
+/** Make every write under `dir` fail while every read still succeeds. */
+async function freeze(dir: string): Promise<void> {
+  await chmod(dir, 0o555);
+}
+
+async function thaw(dir: string): Promise<void> {
+  await chmod(dir, 0o755);
+}
+
+/** Run `act` with the store frozen at `dir`, restoring the mode afterwards. */
+async function withFrozen(dir: string, act: () => Promise<void>): Promise<void> {
+  await freeze(dir);
+  try {
+    await act();
+  } finally {
+    await thaw(dir);
+  }
+}
+
+/** Run `act` with the Nth (1-based) item record write failing — a kill at that step. */
+async function withKilledItemWrite(nth: number, act: () => Promise<void>): Promise<void> {
+  const original = store.writeItem;
+  let calls = 0;
+  const spy = spyOn(store, "writeItem").mockImplementation(async (layout, record, body) => {
+    calls += 1;
+    if (calls === nth) throw new Error("killed between two item writes");
+    return original(layout, record, body);
+  });
+  try {
+    await act();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `act` with the move's UNLINK failing — the copy lands, the source stays. */
+async function withKilledUnlink(act: () => Promise<void>): Promise<void> {
+  const spy = spyOn(store, "removeFile").mockImplementation(async () => {
+    throw new Error("killed between the copy and the unlink");
+  });
+  try {
+    await act();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+async function validate(root: string, args: string[] = []): Promise<{ code: number; out: string }> {
+  const out: string[] = [];
+  const code = await validateCommand.run(args, {
+    env: seededEnv(),
+    cwd: root,
+    stdout: (line) => out.push(line),
+    stderr: (line) => out.push(line),
+  });
+  return { code, out: out.join("\n") };
+}
+
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+/** The whole answer about one archival, after everything settles. */
+async function settled(fixture: Released) {
+  const archived = await text(fixture.root, ARCHIVED_PATH);
+  const design = await text(fixture.root, DESIGN_DOC);
+  return {
+    live: await text(fixture.root, PRD_PATH),
+    stamps: archived === null ? 0 : occurrences(archived, "> **Archived"),
+    carriesDocument: archived?.includes("The delta this PRD states.") ?? false,
+    refs: await prdRefs(fixture),
+    designNotes: design === null ? 0 : occurrences(design, ARCHIVED_PATH),
+    archivals: (await events(fixture.layout)).filter(
+      (event) => event.type === CORE_EVENT_TYPES.prdArchived,
+    ).length,
+  };
+}
+
+/** What a completed archival looks like, whatever route the store took to get there. */
+async function expectComplete(fixture: Released): Promise<void> {
+  expect(await settled(fixture)).toEqual({
+    live: null,
+    stamps: 1,
+    carriesDocument: true,
+    refs: {
+      [fixture.node]: ARCHIVED_PATH,
+      [fixture.plan]: ARCHIVED_PATH,
+      [fixture.epic]: ARCHIVED_PATH,
+      [fixture.others[0]]: ARCHIVED_PATH,
+      [fixture.others[1]]: ARCHIVED_PATH,
+    },
+    designNotes: 1,
+    archivals: 1,
+  });
+}
+
+describe("archival interrupted at every boundary of the sequence (F10)", () => {
+  /**
+   * One interruption point: kill the act there, then prove the whole
+   * convergence — validate names the partial state, --repair completes it,
+   * re-running is refused, and the store ends where a clean archival ends.
+   */
+  async function interruptedAt(
+    kill: (fixture: Released, act: () => Promise<void>) => Promise<void>,
+  ): Promise<{ before: string }> {
+    const fixture = await released();
+    await kill(fixture, async () => {
+      expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).not.toBe("");
+    });
+
+    // 1. The journal is ahead of whatever did not land, and validate says so.
+    const before = await validate(fixture.root);
+    expect(before.code).toBe(1);
+
+    // 2. --repair rolls the sequence forward from the one event holding it.
+    const repaired = await validate(fixture.root, ["--repair"]);
+    expect(repaired.out).toContain("repaired");
+    expect(repaired.code).toBe(0);
+    await expectComplete(fixture);
+
+    // 3. Re-running archival afterwards changes nothing: the delta is closed.
+    expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).toContain(
+      "already",
+    );
+    await expectComplete(fixture);
+
+    // 4. And the store is clean — a repaired sequence leaves no error behind.
+    const after = await validate(fixture.root);
+    expect(after.out).not.toContain("journal.divergence");
+    expect(after.out).not.toContain("roadmap.prd-unarchived");
+    expect(after.code).toBe(0);
+    return { before: before.out };
+  }
+
+  test("killed after the event, before the PRD move — nothing landed at all", async () => {
+    const { before } = await interruptedAt((fixture, act) =>
+      withFrozen(join(fixture.root, "docs", "prds"), act),
+    );
+    expect(before).toContain("journal.divergence");
+    expect(before).toContain(ARCHIVED_PATH);
+  });
+
+  test("killed after the event-and-move, before the feature node's link", async () => {
+    const { before } = await interruptedAt((fixture, act) =>
+      withFrozen(fixture.layout.roadmapDir, act),
+    );
+    // The document moved; every record still names the old path, which now
+    // points at neither location — the partial state, named.
+    expect(before).toContain("journal.divergence");
+    expect(before).toContain("roadmap.prd-missing");
+    expect(before).toContain(PRD_PATH);
+  });
+
+  test("killed between the copy and the unlink — the PRD is at BOTH locations", async () => {
+    const { before } = await interruptedAt((_fixture, act) => withKilledUnlink(act));
+    expect(before).toContain("journal.divergence");
+    expect(before).toContain("still exists at both");
+  });
+
+  test("killed after the feature node's link, before the authoring plan item", async () => {
+    const { before } = await interruptedAt((_fixture, act) => withKilledItemWrite(1, act));
+    expect(before).toContain("journal.divergence");
+  });
+
+  test("killed after the plan item, before the epic — the second reference kind", async () => {
+    const { before } = await interruptedAt((_fixture, act) => withKilledItemWrite(2, act));
+    expect(before).toContain("journal.divergence");
+  });
+
+  test("killed after the epic, before ANY catch-all update", async () => {
+    const { before } = await interruptedAt((_fixture, act) => withKilledItemWrite(3, act));
+    expect(before).toContain("journal.divergence");
+  });
+
+  test("killed after ONE of the two catch-all updates — a prefix, not the batch", async () => {
+    const { before } = await interruptedAt((_fixture, act) => withKilledItemWrite(4, act));
+    expect(before).toContain("journal.divergence");
+  });
+
+  test("killed after every catch-all update, before the product design doc", async () => {
+    const { before } = await interruptedAt((fixture, act) =>
+      withFrozen(join(fixture.root, "docs", "design"), act),
+    );
+    // Every reference has moved and the design doc is stale — the second
+    // partial state F10 names by hand.
+    expect(before).toContain("journal.divergence");
+    expect(before).toContain(DESIGN_DOC);
+  });
+
+  test("a PRD at NEITHER location is the one state repair refuses to invent", async () => {
+    const fixture = await released();
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    await rm(join(fixture.root, ARCHIVED_PATH));
+
+    const findings = await validate(fixture.root);
+    expect(findings.code).toBe(1);
+    expect(findings.out).toContain("roadmap.document-lost");
+    expect(findings.out).toContain("hand deletion");
+    const repaired = await validate(fixture.root, ["--repair"]);
+    expect(repaired.code).toBe(1);
+    expect(await text(fixture.root, ARCHIVED_PATH)).toBeNull();
   });
 });

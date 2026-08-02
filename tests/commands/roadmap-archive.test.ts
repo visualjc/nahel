@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { itemCommand } from "../../src/commands/item";
 import { logCommand } from "../../src/commands/log";
@@ -1061,5 +1061,55 @@ describe("a dangling epic covers no lifecycle events (F2's rule, F10's gate)", (
     const report = await validate(fixture.root);
     expect(report.out).toContain("roadmap.epic-missing");
     expect(report.out).not.toContain(`node ${node} (ghost-delta) is released`);
+  });
+});
+
+/**
+ * A finding's `fix` is an instruction someone will follow literally, so it has
+ * to be the sequence that actually converges. Once the archival event is
+ * journaled, `--repair` has already advanced the record refs to the archived
+ * path — so "re-run `nahel roadmap archive`" walks straight into the
+ * already-archived refusal and the store stays broken. What converges is:
+ * move the foreign document aside, then repair again, which completes the move
+ * the journal has been holding all along.
+ */
+describe("the collision's recovery actually converges (F10)", () => {
+  test("move the foreign document aside, repair again, and validate comes back clean", async () => {
+    const fixture = await released();
+    await withFrozen(join(fixture.root, "docs", "prds"), async () => {
+      expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).not.toBe("");
+    });
+    await mkdir(join(fixture.root, "docs", "prds", "archived"), { recursive: true });
+    await writeFile(
+      join(fixture.root, ARCHIVED_PATH),
+      "> **Archived — the delta this PRD stated is closed.**\n>\n> - Journal: archived by event aaaaaaaa\n",
+      "utf8",
+    );
+
+    // The first repair advances the records and refuses the move.
+    expect((await validate(fixture.root, ["--repair"])).code).toBe(1);
+    const stuck = await validate(fixture.root);
+    expect(stuck.out).toContain("roadmap.document-collision");
+    // The instruction must NOT be "re-run the verb": that path is closed now.
+    const fix = stuck.out
+      .split("\n")
+      .find((line) => line.includes("fix:") && line.includes("delta"))!;
+    expect(fix).toContain("validate --repair");
+    expect(fix).not.toContain("re-run `nahel roadmap archive`");
+    // Following the verb instead proves why: the delta already reads closed.
+    expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).toContain(
+      "already archived",
+    );
+
+    // The prescribed sequence: the stranger moves aside, repair completes.
+    await rename(
+      join(fixture.root, ARCHIVED_PATH),
+      join(fixture.root, "docs/prds/archived/detached-state-2024.md"),
+    );
+    const repaired = await validate(fixture.root, ["--repair"]);
+    expect(repaired.out).toContain("repaired");
+    expect(repaired.code).toBe(0);
+    await expectComplete(fixture);
+    expect(await text(fixture.root, "docs/prds/archived/detached-state-2024.md")).not.toBeNull();
   });
 });

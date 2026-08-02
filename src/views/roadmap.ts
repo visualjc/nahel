@@ -131,3 +131,39 @@ export function featureDevStatus(
   if (live.every((item) => item.status === "backlog")) return { status: "planned" };
   return { status: "in-flight" };
 }
+
+/**
+ * The feature nodes a product node rolls up (F2): its `feature` CHILDREN, in
+ * the id order readRoadmapNodes returns. An `initiative` child is deliberately
+ * not one of them — an initiative links features sideways and its own rollup
+ * semantics are undefined (F1's non-goal), so counting it here would invent a
+ * number the PRD refuses to define.
+ */
+export function productFeatureNodes(
+  nodes: readonly RoadmapNodeRecord[],
+  productId: string,
+): RoadmapNodeRecord[] {
+  return nodes.filter(
+    ({ frontmatter }) => frontmatter.kind === "feature" && frontmatter.parent === productId,
+  );
+}
+
+/** The order the product distribution prints its buckets in. */
+const DEV_STATUS_ORDER: readonly RoadmapDevStatus[] = ["built", "in-flight", "planned", "unknown"];
+
+/**
+ * A product node's status (F2): the count distribution of its feature
+ * children's dev statuses — never one word that hides the shape, and never a
+ * bucket left out. Every bucket prints even at zero, `unknown` included: the
+ * distribution is a fixed-width shape a reader can scan down a column, and an
+ * omitted bucket would read as a bucket that was not derived.
+ *
+ * A product with no feature children renders `no features` — the explicit
+ * statement, not a row of zeros that would claim an empty rollup was measured.
+ */
+export function renderProductStatus(statuses: readonly RoadmapDevStatus[]): string {
+  if (statuses.length === 0) return "no features";
+  return DEV_STATUS_ORDER.map(
+    (status) => `${statuses.filter((each) => each === status).length} ${status}`,
+  ).join(" · ");
+}

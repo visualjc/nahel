@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { parseWorkflowDoc } from "../../src/install/workflow";
-import { SELF_RECORDED_EVENT_TYPES } from "../../src/schema/events";
+import {
+  ITEM_STARTED_BLOCKED_EVENT_TYPE,
+  SELF_RECORDED_EVENT_TYPES,
+} from "../../src/schema/events";
 import { readFrontmatterFile } from "../../src/store/frontmatter";
 
 /**
@@ -109,6 +112,64 @@ describe("work-map.md — one ticket, one decision, and the fog that graduates",
     const { body } = await shippedWorkflow("work-map.md");
     expect(body).toContain("advisory");
     expect(body).toContain("blocked");
+  });
+
+  test("the ticket is picked off the FRONTIER, not by eyeballing a map (F8)", async () => {
+    const { body } = await shippedWorkflow("work-map.md");
+    // F7 shipped this doc pointing at `map show`, which lists every ticket in
+    // every state and leaves "which of these can I actually take" to the
+    // reader. F8's verb answers it, so the doc reaches for it FIRST — and the
+    // map stays named, because the destination is the context the decision is
+    // made in.
+    expect(body).toContain("nahel roadmap frontier");
+    expect(body).toContain("nahel roadmap map show");
+    expect(body.indexOf("nahel roadmap frontier")).toBeLessThan(
+      body.indexOf("nahel roadmap ticket claim"),
+    );
+  });
+});
+
+/**
+ * The frontier is new VOCABULARY, and the glossary is where this project's
+ * vocabulary lives — the same place F1's roadmap node, F7's decision ticket and
+ * F9's lifecycle events were defined. Two things a reader has to be able to
+ * look up rather than reverse-engineer from a renderer: the predicate, spelled
+ * once per kind because the kinds share no words, and the anti-waterfall rule
+ * that makes the whole thing advisory.
+ */
+describe("the vocabulary the takeable edge is named in (F8)", () => {
+  /** One glossary entry, by its bolded term — the line is the definition. */
+  async function entry(term: string): Promise<string> {
+    const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
+    const line = glossary.split("\n").find((each) => each.startsWith(`- **${term}** —`));
+    expect(line).toBeDefined();
+    return line!;
+  }
+
+  test("the glossary defines the frontier per KIND, in the words each kind uses", async () => {
+    const defined = await entry("Frontier");
+    expect(defined).toContain("`nahel roadmap frontier`");
+    // Tickets: open, unclaimed, every blocker settled.
+    for (const word of ["`open`", "`resolved`", "`closed`"]) expect(defined).toContain(word);
+    // Work items: backlog, unclaimed by an intervention claim, deps settled.
+    for (const word of ["`backlog`", "`done`", "`dropped`", "`depends_on`"]) {
+      expect(defined).toContain(word);
+    }
+    // A claim covers the SUBTREE — the sub-predicate a reader gets wrong.
+    expect(defined).toContain("ancestor");
+    // It is a read, and it spans both kinds rather than answering only one.
+    expect(defined).toContain("both");
+  });
+
+  test("the glossary states the anti-waterfall rule and the event a deliberate start writes", async () => {
+    const defined = await entry("Anti-waterfall rule");
+    expect(defined).toContain("advisory");
+    expect(defined).toContain("refuse");
+    expect(defined).toContain(`\`${ITEM_STARTED_BLOCKED_EVENT_TYPE}\``);
+    // The three things the rule permits, all of them stated as correct rather
+    // than tolerated.
+    expect(defined).toContain("before");
+    expect(defined).toContain("parallel");
   });
 });
 

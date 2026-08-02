@@ -18,6 +18,7 @@ import {
   writeConfig,
   type StoreLayout,
 } from "../../src/store/layout";
+import * as lifecycle from "../../src/store/mutate";
 import { createStoreContext, mutate } from "../../src/store/mutate";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
@@ -954,5 +955,41 @@ describe("a configured design doc that cannot be written (F10)", () => {
     expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).toContain(
       "already",
     );
+  });
+});
+
+describe("the boundary AFTER the last write of the sequence (F10)", () => {
+  test("killed after the design doc's line: every step landed, and nothing is repeated", async () => {
+    const fixture = await released();
+    // The last thing the verb does after the sequence is close its session
+    // segment; a kill between the final document write and that close leaves
+    // the whole act on disk with the invocation never finished.
+    const spy = spyOn(lifecycle, "closeStoreContext").mockImplementation(async () => {
+      throw new Error("killed after the final document write");
+    });
+    try {
+      expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).not.toBe("");
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Every step of the sequence landed — the journal is ahead of nothing.
+    await expectComplete(fixture);
+    const before = await validate(fixture.root);
+    expect(before.out).not.toContain("journal.divergence");
+    expect(before.out).not.toContain("roadmap.");
+    expect(before.code).toBe(0);
+
+    // --repair has nothing to roll forward, and changes nothing if run.
+    const repaired = await validate(fixture.root, ["--repair"]);
+    expect(repaired.out).not.toContain("repaired");
+    expect(repaired.code).toBe(0);
+    await expectComplete(fixture);
+
+    // And re-running the verb is the same refusal a clean run earns.
+    expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).toContain(
+      "already",
+    );
+    await expectComplete(fixture);
   });
 });

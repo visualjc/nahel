@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { itemCommand } from "../../src/commands/item";
+import { logCommand } from "../../src/commands/log";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
@@ -10,11 +12,14 @@ import { readJournal } from "../../src/store/journal";
 import {
   ensureLayout,
   listRoadmapNodes,
+  openStore,
   readRoadmapNode,
   resolveRoadmapNode,
   writeConfig,
   type StoreLayout,
 } from "../../src/store/layout";
+import { featureDevStatus, featureStatus } from "../../src/views/roadmap";
+import { loadSnapshot } from "../../src/views/snapshot";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
@@ -560,5 +565,156 @@ describe("nahel roadmap — usage surface", () => {
     const { root, env } = await setup();
     expect(await roadmapCommand.run(["frontier"], env, root)).toBe(1);
     expect(stderr()).toContain("node");
+  });
+});
+
+/**
+ * The derivation layer's end-to-end criteria (Phase 4 F2): status is read out
+ * of work items and events, so nothing about a node record moves when the work
+ * under it moves, and the same commit derives the same words anywhere.
+ */
+describe("nahel roadmap node — derived status is read, never written", () => {
+  test("flipping a leaf work item to done changes the derived status with NO node record write", async () => {
+    const { root, layout, env } = await setup();
+    const epicLine = logs.length;
+    expect(await itemCommand.run(["new", "plan", "demo-epic", "full"], env, root)).toBe(0);
+    const epic = logs[epicLine]!;
+    const childLine = logs.length;
+    expect(
+      await itemCommand.run(["new", "feature", "leaf-work", "direct", "--parent", epic], env, root),
+    ).toBe(0);
+    const child = logs[childLine]!;
+    const nodeId = await newNode(env, root, [
+      "feature",
+      "a-feature",
+      "--horizon",
+      "now",
+      "--intent",
+      "the delta",
+      "--epic",
+      epic,
+    ]);
+
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "test@example.com");
+    git(root, "config", "user.name", "Test User");
+    git(root, "config", "commit.gpgsign", "false");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "the node and its epic");
+    const nodePath = join(layout.roadmapDir, `${nodeId}.md`);
+    const before = await stat(nodePath);
+    const node = (await readRoadmapNode(layout, nodeId)).frontmatter;
+    expect(featureDevStatus(node, (await loadSnapshot(layout)).items).status).toBe("planned");
+
+    expect(await itemCommand.run(["update", child, "--status", "done"], env, root)).toBe(0);
+
+    // The derived status moved…
+    expect(featureDevStatus(node, (await loadSnapshot(layout)).items).status).toBe("built");
+    // …and the node record did not: not a byte, not an mtime, not an event.
+    expect(git(root, "status", "--porcelain", "nahel/roadmap")).toBe("");
+    expect(git(root, "diff", "--", "nahel/roadmap")).toBe("");
+    expect((await stat(nodePath)).mtimeMs).toBe(before.mtimeMs);
+    const nodeEvents = (await journalEvents(layout)).filter((e) => e.type.startsWith("roadmap."));
+    expect(nodeEvents.map((e) => e.type)).toEqual(["roadmap.node-created"]);
+  });
+
+  test("a fresh clone of the same commit derives byte-identical status", async () => {
+    const { root, layout, env } = await setup();
+    const epicLine = logs.length;
+    expect(await itemCommand.run(["new", "plan", "demo-epic", "full"], env, root)).toBe(0);
+    const epic = logs[epicLine]!;
+    const childLine = logs.length;
+    expect(
+      await itemCommand.run(["new", "feature", "leaf-work", "direct", "--parent", epic], env, root),
+    ).toBe(0);
+    expect(await itemCommand.run(["update", logs[childLine]!, "--status", "done"], env, root)).toBe(0);
+    // The log command is ctx-shaped, unlike the argv commands above.
+    expect(
+      await logCommand.run(["qa.sweep-completed", "--item", epic, "--data", "failed=0"], {
+        env,
+        cwd: root,
+        stdout: (text) => logs.push(text),
+        stderr: (text) => errs.push(text),
+      }),
+    ).toBe(0);
+    // `log` warns that the type is an open extension — expected, and not a
+    // failure the roadmap assertions below should trip over.
+    expect(stderr()).toContain("open-extension type");
+    errs = [];
+    const nodeId = await newNode(env, root, [
+      "feature",
+      "a-feature",
+      "--horizon",
+      "now",
+      "--intent",
+      "the delta",
+      "--epic",
+      epic,
+    ]);
+
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "test@example.com");
+    git(root, "config", "user.name", "Test User");
+    git(root, "config", "commit.gpgsign", "false");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "the whole store");
+    const clone = await makeTempDir("nahel-cmd-roadmap-clone-");
+    dirs.push(clone);
+    execFileSync("git", ["clone", "-q", root, clone], { encoding: "utf8" });
+
+    async function derive(storeRoot: string): Promise<string> {
+      const target = await openStore(storeRoot);
+      const snapshot = await loadSnapshot(target);
+      const record = await readRoadmapNode(target, nodeId);
+      const events = await Array.fromAsync(readJournal(target));
+      return JSON.stringify(featureStatus(record.frontmatter, snapshot.items, events));
+    }
+
+    const here = await derive(root);
+    expect(await derive(root)).toBe(here);
+    expect(await derive(clone)).toBe(here);
+    // Not a vacuous comparison: this store really did reach a stage.
+    expect(here).toContain('"stage":"tested"');
+  });
+});
+
+describe("nahel roadmap node — no flag sets a derived status", () => {
+  test("`node update --status` exits non-zero naming the rule that owns the column", async () => {
+    const { root, layout, env } = await setup();
+    await newNode(env, root, ["feature", "a-feature", "--horizon", "now", "--intent", "the delta"]);
+
+    expect(await roadmapCommand.run(["node", "update", "a-feature", "--status", "built"], env, root)).toBe(1);
+    expect(stderr()).toContain("--status");
+    expect(stderr()).toContain("derived");
+    expect(stderr()).toContain("epic");
+    // Nothing was written: the node is exactly as it was created.
+    const record = await resolveRoadmapNode(layout, "a-feature");
+    expect(record?.frontmatter.horizon).toBe("now");
+  });
+
+  test("`node new --status` is refused the same way", async () => {
+    const { root, layout, env } = await setup();
+
+    expect(
+      await roadmapCommand.run(
+        ["node", "new", "feature", "a-feature", "--horizon", "now", "--intent", "x", "--status", "built"],
+        env,
+        root,
+      ),
+    ).toBe(1);
+    expect(stderr()).toContain("--status");
+    expect(await listRoadmapNodes(layout)).toEqual([]);
+  });
+
+  test("every derived column has a named refusal: stage, qa, deploy, release", async () => {
+    const { root, env } = await setup();
+    await newNode(env, root, ["feature", "a-feature", "--horizon", "now", "--intent", "the delta"]);
+
+    for (const flag of ["--stage", "--qa", "--deploy", "--release"]) {
+      errs = [];
+      expect(await roadmapCommand.run(["node", "update", "a-feature", flag, "x"], env, root)).toBe(1);
+      expect(stderr()).toContain(flag);
+      expect(stderr()).toContain("derived");
+    }
   });
 });

@@ -15,14 +15,20 @@ under `nahel/`.
 Before any `nahel` command: if you are an agent, set
 `NAHEL_ACTOR=agent:<your-id>` so every journal event carries your identity.
 
-1. Look at the map and pick a takeable ticket:
+1. Ask what is takeable, then read the map it belongs to:
 
+       nahel roadmap frontier <node-slug>
        nahel roadmap map show <node-slug>
 
-   Takeable means `open`, with no claimant, and every blocking ticket already
-   `resolved` or `closed`. Blocking is **advisory**: you may deliberately take
-   a blocked ticket when you judge the dependency soft — say so in the
-   decision when you do, so the next reader knows it was a choice.
+   The frontier lists exactly the takeable tickets — `open`, with no claimant,
+   and every blocking ticket already `resolved` or `closed` — so you never have
+   to work that out by eye. The map is still worth reading: it carries the
+   destination and the decisions so far, which are the context the next one is
+   made in. When the frontier is empty it says why (blocked, or claimed).
+
+   Blocking is **advisory**: you may deliberately take a blocked ticket when
+   you judge the dependency soft — say so in the decision when you do, so the
+   next reader knows it was a choice. Nothing refuses you.
 
 2. Claim it, so other sessions skip it:
 

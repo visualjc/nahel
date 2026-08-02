@@ -148,7 +148,8 @@ describe("the vocabulary the takeable edge is named in (F8)", () => {
 
   test("the glossary defines the frontier per KIND, in the words each kind uses", async () => {
     const defined = await entry("Frontier");
-    expect(defined).toContain("`nahel roadmap frontier`");
+    // The verb, code-formatted; the entry spells its optional ref too.
+    expect(defined).toContain("`nahel roadmap frontier");
     // Tickets: open, unclaimed, every blocker settled.
     for (const word of ["`open`", "`resolved`", "`closed`"]) expect(defined).toContain(word);
     // Work items: backlog, unclaimed by an intervention claim, deps settled.

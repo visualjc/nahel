@@ -10,6 +10,7 @@ import {
 } from "../schema/records";
 import { appendEvent, readJournal } from "../store/journal";
 import {
+  itemExists,
   openStore,
   readMaps,
   readRoadmapNodes,
@@ -28,7 +29,7 @@ import {
 import { loadSnapshot } from "../views/snapshot";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
 import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
-import { resolveNodeRef } from "./roadmap-ref";
+import { nearMissNames, resolveNodeRef } from "./roadmap-ref";
 import { runTicketSubcommand, TICKET_USAGE } from "./roadmap-ticket";
 
 /**
@@ -464,6 +465,36 @@ async function overview(cwd: string): Promise<number> {
 }
 
 /**
+ * What a ref that named no node earns. Two different facts, so two different
+ * answers: a ref that IS a work item is not a miss at all — the roadmap points
+ * at items and stops there (F1's one-way direction), so the answer is the verb
+ * that reads items. Anything else names the slugs it resembles, and points at
+ * the complete list when it resembles none.
+ */
+async function missedRef(
+  layout: StoreLayout,
+  nodes: readonly { frontmatter: RoadmapNodeFrontmatter }[],
+  ref: string,
+): Promise<UsageError> {
+  if (ID_PATTERN.test(ref) && (await itemExists(layout, ref))) {
+    return new UsageError(
+      `${ref} is a work item, not a roadmap node — read it with \`nahel progress --item ${ref}\` ` +
+        "(a feature node points AT its epic; the item never points back)",
+    );
+  }
+  const guesses = nearMissNames(
+    nodes.map(({ frontmatter }) => frontmatter.name),
+    ref,
+  );
+  return new UsageError(
+    `${JSON.stringify(ref)} does not name a roadmap node — ` +
+      (guesses.length === 0
+        ? "run `nahel roadmap` to list them"
+        : `near misses: ${guesses.join(", ")} (\`nahel roadmap\` lists them all)`),
+  );
+}
+
+/**
  * `nahel roadmap <ref>` (F3): zoom to one node. The whole tree is already in
  * hand for the breadcrumb and the reverse links, so the ref is matched against
  * it rather than read a second time — id first, then slug, exactly the
@@ -480,11 +511,7 @@ async function zoom(ref: string, args: string[], cwd: string): Promise<number> {
   const record =
     nodes.find(({ frontmatter }) => frontmatter.id === ref) ??
     nodes.find(({ frontmatter }) => frontmatter.name === ref);
-  if (record === undefined) {
-    throw new UsageError(
-      `${JSON.stringify(ref)} does not name a roadmap node — run \`nahel roadmap\` to list them`,
-    );
-  }
+  if (record === undefined) throw await missedRef(layout, nodes, ref);
   const { items } = await loadSnapshot(layout);
   console.log(
     renderRoadmapZoom(record, {

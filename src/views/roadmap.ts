@@ -559,6 +559,13 @@ function hintBlock(lines: string[], hints: readonly (string | undefined)[]): voi
 }
 
 /**
+ * The hint a leaf earns: a node with no children, no chart and no epic has
+ * nothing below it, and an output that simply stopped would read as a dead end.
+ * Up is a real drill path too — it is where the reader came from.
+ */
+const UP_HINT = "↳ nahel roadmap  — back to the product level";
+
+/**
  * `nahel roadmap` with no ref (F3): the product level. One line per product node
  * — its horizon, its id, and F2's distribution over its feature children — then
  * those children grouped by horizon with their derived columns.
@@ -755,12 +762,13 @@ export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomF
   if (node.kind === "feature") workItemsSection(node, facts.items, lines);
 
   const children = [...features.map(({ record: child }) => child), ...others];
-  hintBlock(lines, [
+  const hints = [
     zoomHint(children.map(({ frontmatter }) => frontmatter.name)),
     node.epic !== undefined && facts.items.some((item) => item.id === node.epic)
       ? `↳ nahel progress --item ${node.epic}  — the work under this feature`
       : undefined,
     map === undefined ? undefined : `↳ nahel roadmap map show ${node.name}  — the chart`,
-  ]);
+  ];
+  hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
   return lines.join("\n");
 }

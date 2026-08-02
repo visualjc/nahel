@@ -32,6 +32,45 @@ export function requireSingleLine(value: string, flag: string): string {
   return value;
 }
 
+/** How many guesses a missed ref is offered before the full list is the answer. */
+const NEAR_MISS_CAP = 5;
+
+/** The shortest prefix worth calling a resemblance — two letters resemble everything. */
+const NEAR_MISS_PREFIX = 3;
+
+/** How many leading characters two strings share. */
+function sharedPrefix(a: string, b: string): number {
+  let shared = 0;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared += 1;
+  return shared;
+}
+
+/**
+ * The stored slugs a missed ref resembles (F3: "unknown refs … name the
+ * near-miss slugs"). Resemblance is deliberately mechanical rather than a
+ * distance score: either slug contains the other, or they share a three-letter
+ * prefix. A typo, a truncation, and a forgotten suffix are what actually happens
+ * at a prompt, and a rule with no tuning constants derives the same guesses on
+ * every machine.
+ *
+ * Alphabetical and capped, so the list neither wobbles nor sprawls — the caller
+ * points at `nahel roadmap` for the complete enumeration.
+ */
+export function nearMissNames(names: readonly string[], ref: string): string[] {
+  const needle = ref.toLowerCase();
+  return [...new Set(names)]
+    .filter((name) => {
+      const candidate = name.toLowerCase();
+      return (
+        candidate.includes(needle) ||
+        needle.includes(candidate) ||
+        sharedPrefix(candidate, needle) >= NEAR_MISS_PREFIX
+      );
+    })
+    .sort()
+    .slice(0, NEAR_MISS_CAP);
+}
+
 /**
  * Resolve a node reference to an id. A slug must name a node that exists —
  * there is nothing else it could mean. A well-formed id is recorded as given

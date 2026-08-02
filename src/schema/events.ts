@@ -130,13 +130,25 @@ export const DISTILLED_EVENT_TYPE = "journal.distilled";
  * because two views now key on it: `brief`'s QA line and the roadmap's QA
  * column.
  *
- * `deploy.completed` and `release.announced` are F9's types; F2 owns the
- * derivation that reads them, so until F9 records any, the deploy and release
- * columns simply hit their no-event row.
+ * `deploy.completed` and `release.announced` are F9's lifecycle types, carrying
+ * a feature past its own development; F2 owns the derivation that reads them.
  */
 export const QA_SWEEP_EVENT_TYPE = "qa.sweep-completed";
 export const DEPLOY_COMPLETED_EVENT_TYPE = "deploy.completed";
 export const RELEASE_ANNOUNCED_EVENT_TYPE = "release.announced";
+
+/**
+ * The one payload key of each lifecycle type that a VIEW renders (F9's shapes,
+ * F2's render table): a deploy's `environment` and a release's `version`. The
+ * rest of each documented shape — a deploy's `ref` and `shipped`, a release's
+ * `channel` and `announcement` — is recorded and read by people, so no constant
+ * claims otherwise. These two are named here, beside the types, because the
+ * renderer and the glossary that teaches the vocabulary must not drift: a key
+ * renamed in code with the docs left behind teaches workflow authors to record
+ * a fact no column will ever show.
+ */
+export const DEPLOY_ENVIRONMENT_PAYLOAD_KEY = "environment";
+export const RELEASE_VERSION_PAYLOAD_KEY = "version";
 
 /**
  * The prototype lane's acts (Phase 2 F5). Two of them are read back by

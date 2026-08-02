@@ -1,8 +1,10 @@
 import { DECISION_TICKET_STATES, ROADMAP_HORIZONS } from "../schema/enums";
 import {
   DEPLOY_COMPLETED_EVENT_TYPE,
+  DEPLOY_ENVIRONMENT_PAYLOAD_KEY,
   QA_SWEEP_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
+  RELEASE_VERSION_PAYLOAD_KEY,
 } from "../schema/events";
 import type {
   JournalEvent,
@@ -438,11 +440,11 @@ export function featureStatus(
     deploy:
       deployed === undefined
         ? NO_VALUE
-        : `deployed ${payloadText(deployed.payload, "environment")} ${deployed.ts}`,
+        : `deployed ${payloadText(deployed.payload, DEPLOY_ENVIRONMENT_PAYLOAD_KEY)} ${deployed.ts}`,
     release:
       released === undefined
         ? NO_VALUE
-        : `released ${payloadText(released.payload, "version")} ${released.ts}`,
+        : `released ${payloadText(released.payload, RELEASE_VERSION_PAYLOAD_KEY)} ${released.ts}`,
   };
 }
 

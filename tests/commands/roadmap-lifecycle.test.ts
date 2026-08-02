@@ -475,18 +475,9 @@ describe("the vocabulary the two types are recorded under (F9)", () => {
       return at;
     });
     for (let i = 1; i < order.length; i += 1) expect(order[i]!).toBeGreaterThan(order[i - 1]!);
-    // Every word the stage can be, and the two rules that make it stable.
-    for (const stage of [
-      "released",
-      "deployed",
-      "tested",
-      "built",
-      "in-flight",
-      "planned",
-      "unknown",
-    ]) {
-      expect(defined).toContain(`\`${stage}\``);
-    }
+    // Every word the stage can be, spelled as one enum in precedence order —
+    // the glossary's house form for a closed set of values.
+    expect(defined).toContain("`released | deployed | tested | built | in-flight | planned | unknown`");
     expect(defined).toContain("first match wins");
     expect(defined).toContain("not recency");
     expect(defined).toContain("no stage field");

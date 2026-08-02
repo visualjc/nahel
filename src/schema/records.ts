@@ -6,6 +6,7 @@ import {
   INCEPTION_TIERS,
   LANES,
   MERGE_AUTHORITIES,
+  PRODUCT_GOVERNANCE_MODES,
   ROADMAP_HORIZONS,
   ROADMAP_NODE_KINDS,
   RUN_STATUSES,
@@ -460,9 +461,15 @@ export type Founding = z.infer<typeof foundingSchema>;
  * architecture (ADRs, architecture evolution). Both areas are declared
  * together: a half-declared governance posture is ambiguity, not state.
  * Recorded in Phase 1; delegated-consensus enforcement is a later phase.
+ *
+ * The two fields carry DIFFERENT enums (Phase 4 F5): only `product` takes
+ * `agent` (agent-as-PO), and `architecture` stays `human | delegated`. Each
+ * field validates against its own set, so `architecture: agent` is refused by
+ * the field's own `z.enum` — naming the field and its legal values — and a
+ * `product: agent` beside it rescues nothing.
  */
 export const governanceSchema = z.strictObject({
-  product: z.enum(GOVERNANCE_MODES),
+  product: z.enum(PRODUCT_GOVERNANCE_MODES),
   architecture: z.enum(GOVERNANCE_MODES),
 });
 export type Governance = z.infer<typeof governanceSchema>;

@@ -85,9 +85,30 @@ export type RoadmapHorizon = (typeof ROADMAP_HORIZONS)[number];
  * Who owns legislation for a governance area (glossary: Delegated
  * governance): `human` — agents propose, the human approves; `delegated` —
  * agent roles decide via consensus. Recorded in Phase 1, enforced later.
+ *
+ * This is the ARCHITECTURE side's set, and `config.governance.architecture` is
+ * its only remaining user: `agent` is a PRODUCT-side value (below), so
+ * widening this enum in place would silently make
+ * `governance.architecture: agent` valid — which docs/roadmap.md §7 does not
+ * permit until Phase 5 decides otherwise.
  */
 export const GOVERNANCE_MODES = ["human", "delegated"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
+
+/**
+ * Who owns PRODUCT legislation (glossary: Agent-as-PO; Phase 4 F5, ADR-0008 as
+ * amended 2026-08-01). The architecture set plus `agent` — agent-as-PO owns
+ * roadmap decisions outright, under its own journaled authority, with no
+ * consensus step and no awaiting-your-eyes surface. `delegated` keeps its
+ * Phase 2 meaning (cross-vendor consensus for PRD approval) untouched.
+ *
+ * A SEPARATE enum rather than a cross-field `refine`: `governanceSchema`
+ * declares each field independently, so the architecture side's refusal falls
+ * out of its own `z.enum` — no extra predicate, and the error names the
+ * offending field and its legal values for free.
+ */
+export const PRODUCT_GOVERNANCE_MODES = ["human", "delegated", "agent"] as const;
+export type ProductGovernanceMode = (typeof PRODUCT_GOVERNANCE_MODES)[number];
 
 /**
  * Who may merge a reviewed PR (glossary: Merge authority; PRD F3.4):

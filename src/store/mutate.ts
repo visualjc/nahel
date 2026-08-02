@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Env } from "../schema/env";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
 import {
+  documentEditSchema,
   mapFrontmatterSchema,
   observationFrontmatterSchema,
   roadmapNodeFrontmatterSchema,
@@ -10,6 +11,7 @@ import {
   ticketFrontmatterSchema,
   workItemFrontmatterSchema,
   type Actor,
+  type DocumentEdit,
   type JournalEvent,
   type MapFrontmatter,
   type ObservationFrontmatter,
@@ -19,6 +21,7 @@ import {
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { resolveActor } from "./actor";
+import { writeFileAtomic } from "./frontmatter";
 import {
   appendEvent,
   closeSession,
@@ -26,6 +29,7 @@ import {
   listSegments,
   mergeSegments,
   newSessionSegmentId,
+  readJournal,
   sessionSegmentPath,
 } from "./journal";
 import {
@@ -37,7 +41,9 @@ import {
   readObservation,
   readRoadmapNode,
   readRun,
+  readTextFile,
   readTicket,
+  removeFile,
   writeItem,
   writeMap,
   writeObservation,
@@ -193,11 +199,20 @@ export type Mutation =
    */
   | { target: "sequence"; eventType: string; eventId: string; writes: SequenceWrite[] };
 
-/** One record write inside a sequence mutation (see Mutation's `sequence`). */
+/**
+ * One step inside a sequence mutation (see Mutation's `sequence`) — a record
+ * write, or a DOCUMENT edit: the file work an act does outside the store's
+ * records (Phase 4 F10's PRD move-and-stamp and product design doc line). The
+ * steps apply in list order, which is the order the journal event records them
+ * in, so "killed after step k" is a state the event fully describes.
+ */
 export type SequenceWrite =
   | { target: "ticket"; frontmatter: TicketFrontmatter; body: string }
   | { target: "observation"; frontmatter: ObservationFrontmatter; body: string }
-  | { target: "map"; frontmatter: MapFrontmatter; body: string };
+  | { target: "map"; frontmatter: MapFrontmatter; body: string }
+  | { target: "item"; frontmatter: WorkItemFrontmatter; body: string }
+  | { target: "roadmap-node"; frontmatter: RoadmapNodeFrontmatter; body: string }
+  | { target: "document"; edit: DocumentEdit };
 
 export interface MutationResult {
   /** The write-ahead journal event recording this mutation. */
@@ -268,6 +283,9 @@ interface RecordWrite {
   /** Empty for runs, the one record with no markdown body. */
   body: string;
 }
+
+/** One applied step of a mutation: a record write, or a document edit (F10). */
+type MutationStep = RecordWrite | { target: "document"; edit: DocumentEdit };
 
 /** Every record kind a mutation event can carry. */
 export type RecordTarget =
@@ -365,17 +383,21 @@ const REPLAY_ORDER: readonly RecordTarget[] = [
   "ticket",
 ];
 
-/** The record writes one mutation carries, in the order they are applied. */
-function mutationWrites(mutation: Mutation): RecordWrite[] {
+/** The steps one mutation carries, in the order they are applied. */
+function mutationWrites(mutation: Mutation): MutationStep[] {
   if (mutation.target === "run") {
     return [{ target: "run", record: runSchema.parse(mutation.run), body: "" }];
   }
   if (mutation.target === "sequence") {
-    return mutation.writes.map((write) => ({
-      target: write.target,
-      record: RECORD_KINDS[write.target].parse(write.frontmatter),
-      body: write.body,
-    }));
+    return mutation.writes.map((write) =>
+      write.target === "document"
+        ? { target: "document" as const, edit: documentEditSchema.parse(write.edit) }
+        : {
+            target: write.target,
+            record: RECORD_KINDS[write.target].parse(write.frontmatter),
+            body: write.body,
+          },
+    );
   }
   return [
     {
@@ -386,8 +408,13 @@ function mutationWrites(mutation: Mutation): RecordWrite[] {
   ];
 }
 
-/** The payload one write contributes: the replay triple, minus a run's body. */
-function writePayload(write: RecordWrite): Record<string, unknown> {
+/**
+ * The payload one step contributes: the replay triple for a record (minus a
+ * run's body), and the edit itself for a document — everything repair needs to
+ * finish that step, written down before the step is taken.
+ */
+function writePayload(write: MutationStep): Record<string, unknown> {
+  if (write.target === "document") return { target: "document", ...write.edit };
   return {
     target: write.target,
     record: write.record,
@@ -397,7 +424,7 @@ function writePayload(write: RecordWrite): Record<string, unknown> {
 
 function mutationEventFields(
   mutation: Mutation,
-  writes: readonly RecordWrite[],
+  writes: readonly MutationStep[],
 ): {
   item?: string;
   run?: string;
@@ -463,18 +490,135 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
     payload: fields.payload,
   });
 
-  // Then the record writes, in the sequence's order. If any dies, the journal
-  // is ahead — replayPending materializes exactly what the event already
-  // records, whichever of the writes had landed.
+  // Then the writes, in the sequence's order. If any dies, the journal is
+  // ahead — replayPending materializes exactly what the event already records
+  // for the RECORDS, replayDocuments for the documents, whichever had landed.
   for (const write of writes) {
-    await RECORD_KINDS[write.target].write(ctx.layout, write.record, write.body);
+    if (write.target === "document") {
+      await applyDocumentEdit(ctx.layout, write.edit);
+    } else {
+      await RECORD_KINDS[write.target].write(ctx.layout, write.record, write.body);
+    }
   }
   return { event };
 }
 
-/** One record materialized by replayPending. */
+/** What applying a document edit did — repair reports only what it changed. */
+export type DocumentOutcome = "applied" | "already" | "unrepairable";
+
+/**
+ * Prepend the archival stamp to a document, BELOW its frontmatter when it has
+ * some (the frontmatter must stay the first thing in the file for every reader
+ * that parses it) and at the very top when it does not. Already-stamped text
+ * comes back untouched, which is what makes "stamped once, not twice" hold
+ * however many times repair or the verb passes over the same document.
+ */
+function stampDocument(text: string, header: string): string {
+  if (text.includes(header)) return text;
+  const block = header.endsWith("\n") ? header : `${header}\n`;
+  if (text.startsWith("---\n")) {
+    const close = text.indexOf("\n---\n", 3);
+    if (close !== -1) {
+      const cut = close + 5;
+      return `${text.slice(0, cut)}\n${block}${text.slice(cut)}`;
+    }
+  }
+  return `${block}\n${text}`;
+}
+
+/** Append one line, keeping a blank line between it and what came before. */
+function appendLine(text: string, line: string): string {
+  if (text === "" || text.endsWith("\n\n")) return `${text}${line}\n`;
+  return `${text}${text.endsWith("\n") ? "\n" : "\n\n"}${line}\n`;
+}
+
+/**
+ * Apply one document step (F10). Both ops converge rather than assume: they
+ * read what is on disk first, so applying an edit that already landed changes
+ * nothing and returns `already`. That is the whole recovery story for the file
+ * work — repair simply applies every document step the journal records, and
+ * the ones the original act completed are no-ops.
+ *
+ * A `move` writes the destination BEFORE unlinking the source, so no kill can
+ * leave the document at neither location: the reachable partial state is the
+ * document at BOTH, and the next pass removes the source. `unrepairable` means
+ * the source is gone and the destination was never written (a hand deletion —
+ * `validate` names it), or an `append` target that does not exist; nothing is
+ * invented in either case.
+ */
+export async function applyDocumentEdit(
+  layout: StoreLayout,
+  edit: DocumentEdit,
+): Promise<DocumentOutcome> {
+  if (edit.op === "move") {
+    const to = join(layout.root, edit.to);
+    const from = join(layout.root, edit.from);
+    const landed = await readTextFile(to);
+    if (landed === null) {
+      const source = await readTextFile(from);
+      if (source === null) return "unrepairable";
+      await writeFileAtomic(to, stampDocument(source, edit.header));
+    }
+    const sourceRemains = (await readTextFile(from)) !== null;
+    if (sourceRemains) await removeFile(from);
+    return landed === null || sourceRemains ? "applied" : "already";
+  }
+  const path = join(layout.root, edit.path);
+  const text = await readTextFile(path);
+  if (text === null) return "unrepairable";
+  if (text.includes(edit.marker)) return "already";
+  await writeFileAtomic(path, appendLine(text, edit.line));
+  return "applied";
+}
+
+/** The document steps one journal event carries, or [] when it carries none. */
+function eventDocuments(event: JournalEvent): DocumentEdit[] {
+  if (!MUTATION_EVENT_TYPES.has(event.type)) return [];
+  const records = event.payload["records"];
+  if (event.payload["target"] !== "sequence" || !Array.isArray(records)) return [];
+  const edits: DocumentEdit[] = [];
+  for (const entry of records) {
+    if (entry === null || typeof entry !== "object") continue;
+    const payload = entry as Record<string, unknown>;
+    if (payload["target"] !== "document") continue;
+    const { target: _target, ...edit } = payload;
+    // An unparseable edit is a `validate` finding (journal.payload), not
+    // something to guess at: repair only makes real what the journal states.
+    const parsed = documentEditSchema.safeParse(edit);
+    if (parsed.success) edits.push(parsed.data);
+  }
+  return edits;
+}
+
+/**
+ * The document half of `validate --repair` (F10): roll every journaled document
+ * step forward. The record half is replayPending; this one exists separately
+ * because a document is not a record — it has no id, no schema and no
+ * "behind its latest event" comparison, only the edit's own convergence rule.
+ *
+ * Events are walked in the journal's total order, and each step is idempotent,
+ * so a store where nothing crashed repairs to itself and reports nothing.
+ */
+export async function replayDocuments(layout: StoreLayout): Promise<RepairedRecord[]> {
+  const repaired: RepairedRecord[] = [];
+  for await (const event of readJournal(layout)) {
+    for (const edit of eventDocuments(event)) {
+      if ((await applyDocumentEdit(layout, edit)) === "applied") {
+        repaired.push({
+          target: "document",
+          id: edit.op === "move" ? edit.to : edit.path,
+          eventId: event.id,
+        });
+      }
+    }
+  }
+  return repaired;
+}
+
+/** One record materialized by replayPending, or document by replayDocuments. */
 export interface RepairedRecord {
-  target: RecordTarget;
+  target: RecordTarget | "document";
+  /** The record's id, or — for a document — the repo-relative path written. */
   id: string;
   /** The mutation event whose payload was replayed. */
   eventId: string;

@@ -1,5 +1,8 @@
+import type { JournalEvent } from "../schema/records";
 import { ID_PATTERN } from "../schema/id";
+import { readJournal } from "../store/journal";
 import { resolveRoadmapNode, type StoreLayout } from "../store/layout";
+import { isRoadmapColumnEvent } from "../views/roadmap";
 import { UsageError } from "./item";
 
 /**
@@ -30,6 +33,21 @@ export function requireSingleLine(value: string, flag: string): string {
     );
   }
   return value;
+}
+
+/**
+ * The journal facts the derived columns read (F2), collected while STREAMING so
+ * a long journal never has to fit in memory to derive a status: only the three
+ * column event types are kept, and the views take it from there. Shared, because
+ * both readers of the derivation need it — the roadmap views, and F10's archival
+ * gate, which asks the same derivation whether a feature is released.
+ */
+export async function columnEvents(layout: StoreLayout): Promise<JournalEvent[]> {
+  const events: JournalEvent[] = [];
+  for await (const event of readJournal(layout)) {
+    if (isRoadmapColumnEvent(event)) events.push(event);
+  }
+  return events;
 }
 
 /** How many guesses a missed ref is offered before the full list is the answer. */

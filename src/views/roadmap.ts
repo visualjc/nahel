@@ -564,6 +564,7 @@ export const ROADMAP_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "map",
   "ticket",
   "ack",
+  "archive",
   "frontier",
 ]);
 

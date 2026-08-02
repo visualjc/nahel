@@ -34,8 +34,9 @@ import {
 } from "../views/roadmap";
 import { descendantIds, loadSnapshot } from "../views/snapshot";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
+import { ARCHIVE_USAGE, runArchiveSubcommand } from "./roadmap-archive";
 import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
-import { nearMissNames, resolveNodeRef } from "./roadmap-ref";
+import { columnEvents, nearMissNames, resolveNodeRef } from "./roadmap-ref";
 import { runTicketSubcommand, TICKET_USAGE } from "./roadmap-ticket";
 
 /**
@@ -123,6 +124,8 @@ const USAGE = `usage:
     Say "seen": records a human-attributed acknowledgement that clears the
     brief's "roadmap changes since your last touch" line. Mutates no node.
     Run under an AGENT actor it is journaled as itself and clears nothing.
+
+${ARCHIVE_USAGE}
 
 ${MAP_USAGE}
 
@@ -452,19 +455,6 @@ async function nodeShow(args: string[], cwd: string): Promise<number> {
 }
 
 /**
- * The journal facts the derived columns read (F2), collected while STREAMING so
- * a long journal never has to fit in memory to render a roadmap: only the three
- * column event types are kept, and the views take it from there.
- */
-async function columnEvents(layout: StoreLayout): Promise<JournalEvent[]> {
-  const events: JournalEvent[] = [];
-  for await (const event of readJournal(layout)) {
-    if (isRoadmapColumnEvent(event)) events.push(event);
-  }
-  return events;
-}
-
-/**
  * `nahel roadmap` with no ref (F3): the product level. A pure read — the store
  * is opened, four collections are read, and the renderer turns them into text.
  * Nothing here writes, and an empty store is rendered (how to start), never
@@ -658,6 +648,7 @@ export const roadmapCommand: Command = {
       // `nahel roadmap node show <ref>` instead — the verbs win the word.
       if (group === undefined) return overview(cwd);
       if (group === "ack") return ack(rest, env, cwd, actorOverride);
+      if (group === "archive") return runArchiveSubcommand(rest, env, cwd, actorOverride);
       if (group === "frontier") return frontier(rest, cwd);
       if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
       if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);

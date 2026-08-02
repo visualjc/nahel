@@ -42,8 +42,17 @@ describe("schema/events", () => {
       ticketResolved: "roadmap.ticket-resolved",
       ticketClosed: "roadmap.ticket-closed",
       ticketDistilled: "roadmap.ticket-distilled",
+      // Phase 4 F10: the one write-ahead event a PRD archival rides — the
+      // record links AND the two document steps that reach outside the store.
+      prdArchived: "roadmap.prd-archived",
       note: "note",
     });
+  });
+
+  test("archival is self-recorded by its own verb — `nahel log` cannot forge a closed delta", () => {
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.prdArchived)).toBe(
+      "`nahel roadmap archive`",
+    );
   });
 
   test("the roadmap node mutations are self-recorded by their own verb — `nahel log` cannot forge them", () => {

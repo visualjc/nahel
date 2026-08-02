@@ -27,6 +27,7 @@ export const CORE_EVENT_TYPES = {
   ticketResolved: "roadmap.ticket-resolved",
   ticketClosed: "roadmap.ticket-closed",
   ticketDistilled: "roadmap.ticket-distilled",
+  prdArchived: "roadmap.prd-archived",
   note: "note",
 } as const;
 
@@ -102,7 +103,19 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.ticketResolved,
   CORE_EVENT_TYPES.ticketClosed,
   CORE_EVENT_TYPES.ticketDistilled,
+  CORE_EVENT_TYPES.prdArchived,
 ]);
+
+/**
+ * `roadmap.prd-archived` (Phase 4 F10): the ONE write-ahead event a PRD
+ * archival rides. It is a sequence mutation like `resolve` and `close`, but a
+ * longer one — the feature node's link, the authoring plan item's `prd`, the
+ * epic's, every further record sharing the path, AND the two DOCUMENT steps
+ * (the PRD's move-and-stamp, the product design doc's line) that reach outside
+ * the store's records. Carrying the documents in the same event is what makes
+ * the file work write-ahead rather than a side effect: a kill anywhere leaves
+ * the journal ahead of the filesystem, which `validate --repair` rolls forward.
+ */
 
 /**
  * The wayfinder mutation types (F7), each named by the verb that writes it —
@@ -223,6 +236,7 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   [CORE_EVENT_TYPES.roadmapNodeCreated, "`nahel roadmap node`"],
   [CORE_EVENT_TYPES.roadmapNodeUpdated, "`nahel roadmap node`"],
   ...WAYFINDER_EVENT_TYPES,
+  [CORE_EVENT_TYPES.prdArchived, "`nahel roadmap archive`"],
   [ROADMAP_ACKED_EVENT_TYPE, "`nahel roadmap ack`"],
   [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
   [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],

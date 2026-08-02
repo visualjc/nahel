@@ -101,6 +101,63 @@ const repoRelativeDocPathField = (what: string) =>
 const prdPathField = repoRelativeDocPathField("prd");
 
 /**
+ * Where a PRD goes once its feature is released (Phase 4 F10): the delta it
+ * stated is closed, so the document moves under `docs/prds/archived/` and is
+ * never reopened or edited again. A path CONVENTION rather than a schema rule —
+ * both the archival verb and `validate` read it, and a single spelling is what
+ * keeps the verb that moves a PRD and the checks that judge where it sits from
+ * disagreeing about which deltas are closed.
+ */
+export const ARCHIVED_PRD_DIR = "docs/prds/archived/";
+
+/** True when a `prd` path names a closed delta (see ARCHIVED_PRD_DIR). */
+export function isArchivedPrdPath(path: string): boolean {
+  return path.startsWith(ARCHIVED_PRD_DIR);
+}
+
+/** Where the live PRD at `path` is archived to — its basename under that dir. */
+export function archivedPrdPath(path: string): string {
+  return `${ARCHIVED_PRD_DIR}${path.split(/[/\\]/).pop() ?? path}`;
+}
+
+/**
+ * One DOCUMENT step of a write-ahead sequence (Phase 4 F10): the file work an
+ * act does OUTSIDE the store's records. Archival has two — the PRD's
+ * move-and-stamp, and the line the product design doc gains — and both ride the
+ * same journal event the record writes ride, which is what makes a process
+ * killed mid-sequence recoverable: the journal ends up ahead of the filesystem
+ * exactly as it ends up ahead of a record, and repair rolls it forward.
+ *
+ * Both ops are stated so that applying them TWICE is applying them once: `move`
+ * is complete when the destination exists and the source does not, and `append`
+ * writes only when `marker` is absent from the document. That idempotence is
+ * what lets repair converge from any interruption point without having to know
+ * how far the original act got.
+ *
+ * `append` keys on a MARKER rather than on the line itself: a product design doc
+ * is permanent and gets rewritten by people (F10), so "has this act landed" must
+ * survive the sentence being reworded. The marker is the archived path — the
+ * pointer the line exists to carry.
+ */
+export const documentEditSchema = z.discriminatedUnion("op", [
+  z.strictObject({
+    op: z.literal("move"),
+    from: repoRelativeDocPathField("document from"),
+    to: repoRelativeDocPathField("document to"),
+    /** The stamped header prepended to the moved document, below any frontmatter. */
+    header: nonEmptyString("document header"),
+  }),
+  z.strictObject({
+    op: z.literal("append"),
+    path: repoRelativeDocPathField("document path"),
+    /** The text whose presence means this append already landed. */
+    marker: nonEmptyString("document marker"),
+    line: nonEmptyString("document line"),
+  }),
+]);
+export type DocumentEdit = z.infer<typeof documentEditSchema>;
+
+/**
  * The `investigation` field (PRD F5.1): a bug item's durable diagnosis
  * document — symptoms, repro status, hypotheses tested, root cause. By the
  * bug-lane workflow convention it lives at `docs/investigations/<item-id>.md`;

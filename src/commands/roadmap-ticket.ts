@@ -11,7 +11,6 @@ import {
 import {
   openStore,
   readMap,
-  readTicket,
   readTickets,
   type StoreLayout,
   type TicketRecord,
@@ -84,7 +83,7 @@ function requireQuestion(value: string | undefined): string {
 }
 
 /** Resolve a ticket ref to its record, or refuse it by name. */
-export async function requireTicket(
+async function requireTicket(
   layout: StoreLayout,
   ref: string,
 ): Promise<TicketRecord> {
@@ -515,7 +514,7 @@ async function ticketDistill(
 }
 
 /** The single-ref argument shape the four lifecycle verbs share. */
-export function onlyRef(args: string[], verb: string): string {
+function onlyRef(args: string[], verb: string): string {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
   if (positionals.length !== 1) {
     throw new UsageError(`roadmap ticket ${verb} takes exactly one <ref> (a ticket id)`);

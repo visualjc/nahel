@@ -259,9 +259,16 @@ describe("the claim is advisory assignment, not the intervention claim (F7)", ()
     expect(released.frontmatter.state).toBe("open");
     expect(released.frontmatter.claimant).toBeUndefined();
 
-    const types = (await journalEvents(layout)).map((e) => e.type);
-    expect(types).toContain("roadmap.ticket-claimed");
-    expect(types).toContain("roadmap.ticket-released");
+    // Every transition journals its own event, attributed to whoever made it.
+    const events = await journalEvents(layout);
+    expect(events.find((e) => e.type === "roadmap.ticket-claimed")!.actor).toEqual({
+      kind: "agent",
+      id: "codex",
+    });
+    expect(events.find((e) => e.type === "roadmap.ticket-released")!.actor).toEqual({
+      kind: "human",
+      id: "jim",
+    });
   });
 
   test("claiming a claimed ticket exits non-zero naming the holder — and changes nothing", async () => {

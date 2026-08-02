@@ -69,6 +69,28 @@ export const IMPORT_PRD_RELOCATED_EVENT_TYPE = "import.prd-relocated";
 export const DISTILLED_EVENT_TYPE = "journal.distilled";
 
 /**
+ * The three OPEN-EXTENSION types the roadmap's event-sourced columns read
+ * (Phase 4 F2). All three are recorded by workflows through `nahel log`, never
+ * self-recorded by a command, so none belongs in SELF_RECORDED_EVENT_TYPES —
+ * a logged event can therefore never masquerade as a record mutation.
+ *
+ * `qa.sweep-completed` is the whole-sweep summary, written exactly once per
+ * sweep (Phase 3 F6, qa-lane.md). The per-case types (`qa.result`,
+ * `qa.finding`, `qa.probe`) are a different SCOPE and are deliberately never
+ * read as a sweep — promoting a per-case event would report one case as if it
+ * were the whole run. The constant lives HERE rather than beside one reader
+ * because two views now key on it: `brief`'s QA line and the roadmap's QA
+ * column.
+ *
+ * `deploy.completed` and `release.announced` are F9's types; F2 owns the
+ * derivation that reads them, so until F9 records any, the deploy and release
+ * columns simply hit their no-event row.
+ */
+export const QA_SWEEP_EVENT_TYPE = "qa.sweep-completed";
+export const DEPLOY_COMPLETED_EVENT_TYPE = "deploy.completed";
+export const RELEASE_ANNOUNCED_EVENT_TYPE = "release.announced";
+
+/**
  * The prototype lane's acts (Phase 2 F5). Two of them are read back by
  * machinery, not just by humans, which is why they are reserved types rather
  * than free-form notes:

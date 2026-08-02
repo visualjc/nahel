@@ -1,4 +1,14 @@
-import type { RoadmapNodeFrontmatter, WorkItemFrontmatter } from "../schema/records";
+import {
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  QA_SWEEP_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+} from "../schema/events";
+import type {
+  JournalEvent,
+  RoadmapNodeFrontmatter,
+  WorkItemFrontmatter,
+} from "../schema/records";
+import { compareEvents } from "../store/journal";
 import type { RoadmapNodeRecord } from "../store/layout";
 import { descendantIds } from "./snapshot";
 
@@ -166,4 +176,111 @@ export function renderProductStatus(statuses: readonly RoadmapDevStatus[]): stri
   return DEV_STATUS_ORDER.map(
     (status) => `${statuses.filter((each) => each === status).length} ${status}`,
   ).join(" · ");
+}
+
+/** The column value for a fact the store does not carry (F2's no-event rows). */
+const NO_VALUE = "—";
+
+/** The three event types the columns read; anything else is not a column fact. */
+const COLUMN_EVENT_TYPES: ReadonlySet<string> = new Set([
+  QA_SWEEP_EVENT_TYPE,
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+]);
+
+/**
+ * A payload value for a column: absent, null, or blank renders `?` — brief's
+ * absent-payload-key convention, widened to blank because a recorded empty
+ * `environment` tells a reader exactly as much as an omitted one, and the
+ * render table spells both cases the same way.
+ */
+function payloadText(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (value === undefined || value === null) return "?";
+  const text = String(value).trim();
+  return text === "" ? "?" : text;
+}
+
+/**
+ * The sweep's `failed` count, or undefined when the payload does not carry a
+ * usable number — the `(? failed)` row. A sweep that journaled an incomplete
+ * summary is itself worth seeing, so a NEGATIVE count is rendered verbatim
+ * rather than hidden behind `?`: it is a recorded number, just an impossible
+ * one, and the render table's `?` row is about absent and non-numeric values.
+ */
+function failedCount(payload: Record<string, unknown>): number | undefined {
+  const value = payload["failed"];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** Every derived column of one feature node (F2). No node record carries any of it. */
+export interface RoadmapFeatureStatus {
+  /** The rollup of the work under the epic. */
+  dev: RoadmapDevStatus;
+  /** The `validate` warning the rollup earned, when it earned one. */
+  anomaly?: RoadmapEpicAnomaly;
+  /** QA / deploy / release, rendered per F2's table — `—` when no event covers. */
+  qa: string;
+  deploy: string;
+  release: string;
+}
+
+/**
+ * Derive every column of one feature node (F2) — the call F3's view and F4's
+ * brief block each make once per feature.
+ *
+ * The event ASSOCIATION rule is stored, not inferred: an event covers this node
+ * iff its `item` ref names the node's epic or a descendant of it in the item
+ * `parent` tree. An event with no `item`, or one pointing outside the subtree,
+ * covers nothing here — it stays store-wide and renders only in `brief`'s QA
+ * line. Coverage is by REF, so an event still covers a node whose epic id has
+ * no item record: the ref is the recorded fact, and the missing epic is its own
+ * warning. (Two feature nodes whose epics nest therefore both see the inner
+ * subtree's events — the honest reading of a tree that names one epic inside
+ * another, which `validate`'s shape checks are what flag.)
+ *
+ * When more than one event of a type covers the node, the winner is the LAST in
+ * the store's canonical total order (`ts` → `seq` → `id`, compareEvents), so
+ * the result does not depend on the order `events` arrives in — the same winner
+ * on every machine and on a fresh clone.
+ */
+export function featureStatus(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): RoadmapFeatureStatus {
+  const rollup = featureDevStatus(node, items);
+  const winners = new Map<string, JournalEvent>();
+  if (node.epic !== undefined) {
+    const covered = descendantIds(items, node.epic);
+    for (const event of events) {
+      if (event.item === undefined || !covered.has(event.item)) continue;
+      if (!COLUMN_EVENT_TYPES.has(event.type)) continue;
+      const current = winners.get(event.type);
+      if (current === undefined || compareEvents(current, event) < 0) {
+        winners.set(event.type, event);
+      }
+    }
+  }
+  const sweep = winners.get(QA_SWEEP_EVENT_TYPE);
+  const deployed = winners.get(DEPLOY_COMPLETED_EVENT_TYPE);
+  const released = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
+  let qa = NO_VALUE;
+  if (sweep !== undefined) {
+    const failed = failedCount(sweep.payload);
+    qa = failed === 0 ? `tested ${sweep.ts}` : `tested ${sweep.ts} (${failed ?? "?"} failed)`;
+  }
+  return {
+    dev: rollup.status,
+    anomaly: rollup.anomaly,
+    qa,
+    deploy:
+      deployed === undefined
+        ? NO_VALUE
+        : `deployed ${payloadText(deployed.payload, "environment")} ${deployed.ts}`,
+    release:
+      released === undefined
+        ? NO_VALUE
+        : `released ${payloadText(released.payload, "version")} ${released.ts}`,
+  };
 }

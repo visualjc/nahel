@@ -5,6 +5,7 @@ import {
   type FoundingSignatureStatus,
   type MergeAuthorityStatus,
 } from "../governance/authority";
+import { QA_SWEEP_EVENT_TYPE } from "../schema/events";
 import type {
   Actor,
   Config,
@@ -327,15 +328,6 @@ function waiversBody(
   }
   return lines.length === 0 ? null : lines.join("\n");
 }
-
-/**
- * The ONE event type the QA section reads (Phase 3 PRD F6, qa-lane.md): the
- * whole-sweep summary, written exactly once per sweep. The per-case types
- * (`qa.result`, `qa.finding`, `qa.probe`) are a different SCOPE and are
- * deliberately never read here — promoting a per-case event to this line
- * would report one case as if it were a whole sweep.
- */
-export const QA_SWEEP_EVENT_TYPE = "qa.sweep-completed";
 
 /** A payload value rendered for a one-line summary; absent reads as `?`. */
 function payloadField(payload: Record<string, unknown>, key: string): string {

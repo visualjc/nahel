@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
+import {
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  QA_SWEEP_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+} from "../../src/schema/events";
 import type {
   JournalEvent,
   RoadmapNodeFrontmatter,
   WorkItemFrontmatter,
 } from "../../src/schema/records";
 import type { RoadmapNodeRecord } from "../../src/store/layout";
-import { QA_SWEEP_EVENT_TYPE } from "../../src/views/brief";
 import {
-  DEPLOY_COMPLETED_EVENT_TYPE,
-  RELEASE_ANNOUNCED_EVENT_TYPE,
   featureDevStatus,
   featureStatus,
   productFeatureNodes,

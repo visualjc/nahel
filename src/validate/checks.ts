@@ -39,6 +39,7 @@ import {
   SESSION_CLOSED_EVENT_TYPE,
   type SegmentScan,
 } from "../store/journal";
+import { featureDevStatus } from "../views/roadmap";
 
 /**
  * `nahel validate`'s check library (PRD F8): pure functions over the raw
@@ -681,6 +682,47 @@ function checkRoadmapRefs(state: ParsedState): Finding[] {
         check: "roadmap.duplicate-name",
         message: `roadmap slug ${JSON.stringify(name)} is held by ${ids.sort().join(" and ")} — slugs are unique per store`,
         fix: "rename all but one with `nahel roadmap node update <id> --name <slug>` — every view addresses nodes by name",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * The two dev-status rows that are also findings (Phase 4 F2). The rule is not
+ * restated here — featureDevStatus IS the rule, and this check reports the
+ * anomaly it already derives, so a warning can never fire on a store whose
+ * status renders clean (or stay silent on one that does not).
+ *
+ * Both are WARNINGS: the rollup still derives a status either way, and neither
+ * shape was refused at write time. `epic-missing` is reported only when NO item
+ * file exists for the id — an epic whose record is on disk but unparseable is
+ * already a `schema.item` error, and calling it missing as well would report
+ * one corruption twice, in a way that reads as two separate defects.
+ */
+function checkRoadmapDerivation(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const items = [...state.items.values()].map((entry) => entry.record);
+  for (const { record, path } of state.roadmapNodes.values()) {
+    const epic = record.epic;
+    if (epic === undefined) continue;
+    const { anomaly } = featureDevStatus(record, items);
+    if (anomaly === "epic-missing" && !state.itemFiles.has(epic)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.epic-missing",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, which is not an item record — its dev status reads unknown`,
+        fix: "the item may arrive by a later merge — otherwise point the node at the right epic with `nahel roadmap node update <ref> --epic <item-id>` or `--clear-epic`",
+      });
+    }
+    if (anomaly === "all-dropped") {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.epic-all-dropped",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, whose every work item was dropped — its dev status reads planned over no live work`,
+        fix: "drop the node's intent too, or plan new work under the epic with `nahel item new` — this is advisory, nothing was refused",
       });
     }
   }
@@ -2216,6 +2258,7 @@ export function validate(input: ValidationInput): Finding[] {
   findings.push(
     ...checkRefs(state),
     ...checkRoadmapRefs(state),
+    ...checkRoadmapDerivation(state),
     ...checkRoadmapAdrRefs(state),
     ...checkRoadmapShape(state),
     ...checkPrdRefs(state),

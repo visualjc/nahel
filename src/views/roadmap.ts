@@ -213,6 +213,13 @@ function failedCount(payload: Record<string, unknown>): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * A feature's single-word stage (F9's precedence table, derived by F2's
+ * machinery). Every dev status is also a stage: the last four rows of the
+ * table ARE the rollup, reached when no event covers the node.
+ */
+export type RoadmapStage = "released" | "deployed" | "tested" | RoadmapDevStatus;
+
 /** Every derived column of one feature node (F2). No node record carries any of it. */
 export interface RoadmapFeatureStatus {
   /** The rollup of the work under the epic. */
@@ -223,6 +230,8 @@ export interface RoadmapFeatureStatus {
   qa: string;
   deploy: string;
   release: string;
+  /** The three columns and the rollup, collapsed to one word by precedence. */
+  stage: RoadmapStage;
 }
 
 /**
@@ -243,6 +252,13 @@ export interface RoadmapFeatureStatus {
  * the store's canonical total order (`ts` → `seq` → `id`, compareEvents), so
  * the result does not depend on the order `events` arrives in — the same winner
  * on every machine and on a fresh clone.
+ *
+ * The `stage` collapses all of it to one word by PRECEDENCE, first match wins:
+ * release, then deploy, then sweep, then the dev rollup. Precedence rather than
+ * recency is what keeps the stage stable — a deploy recorded after a release
+ * must not regress the feature to `deployed`. A covering sweep lifts the stage
+ * to `tested` whatever the sweep FAILED: the word says a sweep ran over this
+ * feature, and the QA column is where the outcome is read.
  */
 export function featureStatus(
   node: RoadmapNodeFrontmatter,
@@ -270,10 +286,17 @@ export function featureStatus(
     const failed = failedCount(sweep.payload);
     qa = failed === 0 ? `tested ${sweep.ts}` : `tested ${sweep.ts} (${failed ?? "?"} failed)`;
   }
+  // First match wins, top-down — the precedence table read literally.
+  let stage: RoadmapStage;
+  if (released !== undefined) stage = "released";
+  else if (deployed !== undefined) stage = "deployed";
+  else if (sweep !== undefined) stage = "tested";
+  else stage = rollup.status;
   return {
     dev: rollup.status,
     anomaly: rollup.anomaly,
     qa,
+    stage,
     deploy:
       deployed === undefined
         ? NO_VALUE

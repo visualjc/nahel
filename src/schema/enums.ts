@@ -62,6 +62,26 @@ export const FOUNDING_MODES = ["guided", "hands-off"] as const;
 export type FoundingMode = (typeof FOUNDING_MODES)[number];
 
 /**
+ * What generation of intent a roadmap node states (glossary: Roadmap node;
+ * Phase 4 F1): `product` — what the product is, pointing at a permanent design
+ * doc; `feature` — one delta, the node the grilling workflow turns into a PRD;
+ * `initiative` — a node linking sideways into several features (a theme, a
+ * campaign), whose rollup semantics stay deliberately undefined until a real
+ * initiative lands. Generation three is the work item itself, unchanged.
+ */
+export const ROADMAP_NODE_KINDS = ["product", "feature", "initiative"] as const;
+export type RoadmapNodeKind = (typeof ROADMAP_NODE_KINDS)[number];
+
+/**
+ * When a roadmap node is meant to be worked (glossary: Horizon; Phase 4 F1).
+ * This is the ONLY sequencing vocabulary the layer has: no rank, no score, no
+ * priority number is ever stored, and multiple parallel `now`s are the
+ * intended shape rather than a defect (F8's anti-waterfall rule).
+ */
+export const ROADMAP_HORIZONS = ["now", "next", "later"] as const;
+export type RoadmapHorizon = (typeof ROADMAP_HORIZONS)[number];
+
+/**
  * Who owns legislation for a governance area (glossary: Delegated
  * governance): `human` — agents propose, the human approves; `delegated` —
  * agent roles decide via consensus. Recorded in Phase 1, enforced later.

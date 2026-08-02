@@ -6,6 +6,8 @@ import {
   INCEPTION_TIERS,
   LANES,
   MERGE_AUTHORITIES,
+  ROADMAP_HORIZONS,
+  ROADMAP_NODE_KINDS,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_TYPES,
@@ -110,6 +112,50 @@ export const workItemFrontmatterSchema = z.strictObject({
   updated: timestampField,
 });
 export type WorkItemFrontmatter = z.infer<typeof workItemFrontmatterSchema>;
+
+/**
+ * Roadmap node frontmatter (Phase 4 F1) — the layer ABOVE work items: one
+ * record type covering all three kinds, tree-shaped by `parent`, with the
+ * node's intent prose in the markdown body (the observation precedent — the
+ * intent IS the body, so a product's paragraph and a feature's one-liner need
+ * no separate field).
+ *
+ * There is deliberately **no status field**, and strict objects are what make
+ * that mechanical: every status a node renders is DERIVED from work items and
+ * journal events (F2), so there is simply no key to hand-set.
+ *
+ * Reference direction is one-way and canonical: the node points at the work
+ * item (`epic`), and no work-item record ever points back. Every ref field is
+ * a plain id — a dangling one is a `validate` finding, never a refused
+ * mutation, because the target may arrive by a later merge (ADR-0012).
+ *
+ * Per-kind fields are all optional on the one record: the per-kind structural
+ * rules are SOFT (F1), so an odd shape is a `validate` warning and nothing is
+ * ever refused at the schema.
+ */
+export const roadmapNodeFrontmatterSchema = z.strictObject({
+  id: idField,
+  name: slugField,
+  kind: z.enum(ROADMAP_NODE_KINDS),
+  horizon: z.enum(ROADMAP_HORIZONS),
+  /** The node's parent in the roadmap tree (a roadmap node id, not an item). */
+  parent: idField.optional(),
+  /** Product: the permanent product design doc (never archived — F10). */
+  design_doc: repoRelativeDocPathField("design_doc").optional(),
+  /** Product: ADR cross-references, kept in RECORDED order (a sequence, not a set). */
+  adrs: z.array(repoRelativeDocPathField("adrs")),
+  /** Feature: the PRD this node's delta is stated in (ADR-0013). */
+  prd: prdPathField.optional(),
+  /** Feature: the epic WORK ITEM this node covers — the one-way node→item ref. */
+  epic: idField.optional(),
+  /** Feature: the released node this one continues (lineage across a closed delta, F10). */
+  predecessor: idField.optional(),
+  /** Initiative: the feature nodes this node links sideways into. */
+  features: z.array(idField),
+  created: timestampField,
+  updated: timestampField,
+});
+export type RoadmapNodeFrontmatter = z.infer<typeof roadmapNodeFrontmatterSchema>;
 
 /** Run — one execution of a work item through its lane; hot state lives here. */
 export const runSchema = z.strictObject({

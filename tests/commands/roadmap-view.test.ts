@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test, describe } from "bun:test";
 import { rm } from "node:fs/promises";
 import { itemCommand } from "../../src/commands/item";
 import { logCommand } from "../../src/commands/log";
+import { progressCommand } from "../../src/commands/progress";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
@@ -585,5 +586,86 @@ describe("nahel roadmap <ref> — refs that miss, and where they point (F3)", ()
     const out = await view(env, root, ["architecture-docs-wiki"]);
     const last = out.split("\n").filter((line) => line !== "").pop();
     expect(last).toBe("↳ nahel roadmap  — back to the product level");
+  });
+});
+
+describe("the zoom hints are the drill path, and they run (F3)", () => {
+  /** Every hint line a rendering ends with. */
+  function hints(out: string): string[] {
+    return out.split("\n").filter((line) => line.startsWith("↳ "));
+  }
+
+  /**
+   * Follow one hint the way a reader does: run exactly the command it names —
+   * the text between the arrow and the dash — and return what it printed.
+   */
+  async function follow(env: Env, root: string, hint: string): Promise<string> {
+    const command = hint.slice("↳ ".length, hint.indexOf("  — "));
+    const [nahel, verb, ...args] = command.split(" ");
+    expect(nahel).toBe("nahel");
+    const before = logs.length;
+    if (verb === "roadmap") {
+      expect(await roadmapCommand.run(args, env, root)).toBe(0);
+    } else if (verb === "progress") {
+      expect(
+        await progressCommand.run(args, {
+          env,
+          cwd: root,
+          stdout: (text: string) => logs.push(text),
+          stderr: (text: string) => errs.push(text),
+        }),
+      ).toBe(0);
+    } else {
+      throw new Error(`hint names a verb no reader can run: ${JSON.stringify(command)}`);
+    }
+    expect(stderr()).toBe("");
+    return logs.slice(before).join("\n");
+  }
+
+  test("every hint printed anywhere in the view is a command that runs verbatim", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+    expect(
+      await roadmapCommand.run(
+        ["map", "new", "--node", "detached-state-repo", "--destination", "Out of the repo"],
+        env,
+        root,
+      ),
+    ).toBe(0);
+
+    const renderings = [
+      await view(env, root),
+      await view(env, root, ["nahel"]),
+      await view(env, root, ["detached-state-repo"]),
+      await view(env, root, ["architecture-docs-wiki"]),
+    ];
+    const followed: string[] = [];
+    for (const rendering of renderings) {
+      const lines = hints(rendering);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const hint of lines) followed.push(await follow(env, root, hint));
+    }
+    expect(followed).toHaveLength(6);
+    for (const output of followed) expect(output).not.toBe("");
+  });
+
+  test("the three orientation questions, three commands, each answer in the output", async () => {
+    const { root, env } = await setup();
+    const { epic, leaf } = await product(env, root);
+
+    // Where are we with the product?
+    const wide = await view(env, root);
+    expect(wide).toContain("nahel  product");
+    expect(wide).toContain("1 built · 0 in-flight · 2 planned · 0 unknown");
+    // Where is feature A? — by the slug the first answer printed.
+    expect(wide).toContain("detached-state-repo");
+    const feature = await view(env, root, ["detached-state-repo"]);
+    expect(feature).toContain("status: built  dev=built");
+    // Where is feature A item 2? — by the hint the second answer printed.
+    const hint = hints(feature).find((line) => line.includes("progress --item"));
+    expect(hint).toBeDefined();
+    const timeline = await follow(env, root, hint!);
+    expect(timeline).toContain(epic);
+    expect(timeline).toContain(leaf);
   });
 });

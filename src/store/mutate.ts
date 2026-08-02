@@ -3,15 +3,19 @@ import { join } from "node:path";
 import type { Env } from "../schema/env";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
 import {
+  mapFrontmatterSchema,
   observationFrontmatterSchema,
   roadmapNodeFrontmatterSchema,
   runSchema,
+  ticketFrontmatterSchema,
   workItemFrontmatterSchema,
   type Actor,
   type JournalEvent,
+  type MapFrontmatter,
   type ObservationFrontmatter,
   type RoadmapNodeFrontmatter,
   type Run,
+  type TicketFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import { resolveActor } from "./actor";
@@ -29,13 +33,17 @@ import {
   openStore,
   readConfig,
   readItem,
+  readMap,
   readObservation,
   readRoadmapNode,
   readRun,
+  readTicket,
   writeItem,
+  writeMap,
   writeObservation,
   writeRoadmapNode,
   writeRun,
+  writeTicket,
   type StoreLayout,
 } from "./layout";
 import { rotateJournal } from "./rotate";
@@ -160,7 +168,36 @@ export type Mutation =
       eventType: string;
       frontmatter: RoadmapNodeFrontmatter;
       body: string;
-    };
+    }
+  /**
+   * Map and decision-ticket writes (`nahel roadmap map` / `ticket`, Phase 4
+   * F7). Like roadmap nodes they carry no item ref: maps and tickets hang off
+   * the intent layer, and a work-item claim never covers one — a ticket's own
+   * `claim` is advisory assignment, a different word that shares a spelling.
+   */
+  | { target: "map"; eventType: string; frontmatter: MapFrontmatter; body: string }
+  | { target: "ticket"; eventType: string; frontmatter: TicketFrontmatter; body: string }
+  /**
+   * A MULTI-RECORD sequence under one write-ahead event (F7): `resolve` writes
+   * the ticket, the decision observation and the map's index line; `close`
+   * writes the ticket and the map's out-of-scope line. One event carrying every
+   * record is what makes the sequence recoverable — a process killed between
+   * any two of the writes leaves the journal ahead of the records, which is the
+   * single crash shape replayPending already heals, rather than a half-applied
+   * sequence nothing could complete without inventing state.
+   *
+   * `eventId` is pre-minted by the caller so a record inside the payload can
+   * cite the event carrying it: the resolution's observation sources the
+   * resolution event id (F7's acceptance criterion), which cannot be read back
+   * from an event that does not exist yet.
+   */
+  | { target: "sequence"; eventType: string; eventId: string; writes: SequenceWrite[] };
+
+/** One record write inside a sequence mutation (see Mutation's `sequence`). */
+export type SequenceWrite =
+  | { target: "ticket"; frontmatter: TicketFrontmatter; body: string }
+  | { target: "observation"; frontmatter: ObservationFrontmatter; body: string }
+  | { target: "map"; frontmatter: MapFrontmatter; body: string };
 
 export interface MutationResult {
   /** The write-ahead journal event recording this mutation. */
@@ -213,14 +250,155 @@ async function findCoveringClaim(
 }
 
 /**
- * The payload keys mutationEventFields writes and replay reads (target,
- * record, body). Reserved at every non-mutation write seam: `nahel log`
- * refuses --data carrying them at top level, so an observation can never
- * masquerade as a mutation payload.
+ * The payload keys mutationEventFields writes and replay reads: `target` plus
+ * either the single-record pair (`record`, `body`) or a sequence's `records`
+ * list. Reserved at every non-mutation write seam: `nahel log` refuses --data
+ * carrying them at top level, so an observation can never masquerade as a
+ * mutation payload.
  */
-export const MUTATION_PAYLOAD_KEYS = ["target", "record", "body"] as const;
+export const MUTATION_PAYLOAD_KEYS = ["target", "record", "body", "records"] as const;
 
-function mutationEventFields(mutation: Mutation): {
+/**
+ * One validated record write — the unit both a single-record mutation and a
+ * sequence's steps reduce to, and the unit replay materializes.
+ */
+interface RecordWrite {
+  target: RecordTarget;
+  record: { id: string };
+  /** Empty for runs, the one record with no markdown body. */
+  body: string;
+}
+
+/** Every record kind a mutation event can carry. */
+export type RecordTarget =
+  | "item"
+  | "run"
+  | "observation"
+  | "roadmap-node"
+  | "map"
+  | "ticket";
+
+/**
+ * How one record kind is parsed from a payload, read back from disk, and
+ * written. The table below is the ONLY place a target maps to its schema and
+ * its store functions, so mutate() and replayPending() cannot drift apart —
+ * and a seventh record kind is one entry, not a seventh copy of both loops.
+ */
+interface RecordKind {
+  /** Validate a payload record; throws when it is not this record type. */
+  parse(value: unknown): { id: string };
+  /** Read the record from disk; throws when it is absent or invalid. */
+  read(layout: StoreLayout, id: string): Promise<RecordWrite["record"] & { body?: string }>;
+  /** Validate and atomically write it. */
+  write(layout: StoreLayout, record: { id: string }, body: string): Promise<void>;
+  /** False for runs — a JSON record with no body to compare or replay. */
+  hasBody: boolean;
+}
+
+const RECORD_KINDS: Record<RecordTarget, RecordKind> = {
+  item: {
+    parse: (value) => workItemFrontmatterSchema.parse(value),
+    read: async (layout, id) => {
+      const { frontmatter, body } = await readItem(layout, id);
+      return { ...frontmatter, body };
+    },
+    write: (layout, record, body) => writeItem(layout, record as WorkItemFrontmatter, body),
+    hasBody: true,
+  },
+  run: {
+    parse: (value) => runSchema.parse(value),
+    read: (layout, id) => readRun(layout, id),
+    write: (layout, record) => writeRun(layout, record as Run),
+    hasBody: false,
+  },
+  observation: {
+    parse: (value) => observationFrontmatterSchema.parse(value),
+    read: async (layout, id) => {
+      const { frontmatter, body } = await readObservation(layout, id);
+      return { ...frontmatter, body };
+    },
+    write: (layout, record, body) =>
+      writeObservation(layout, record as ObservationFrontmatter, body),
+    hasBody: true,
+  },
+  "roadmap-node": {
+    parse: (value) => roadmapNodeFrontmatterSchema.parse(value),
+    read: async (layout, id) => {
+      const { frontmatter, body } = await readRoadmapNode(layout, id);
+      return { ...frontmatter, body };
+    },
+    write: (layout, record, body) =>
+      writeRoadmapNode(layout, record as RoadmapNodeFrontmatter, body),
+    hasBody: true,
+  },
+  map: {
+    parse: (value) => mapFrontmatterSchema.parse(value),
+    read: async (layout, id) => {
+      const { frontmatter, body } = await readMap(layout, id);
+      return { ...frontmatter, body };
+    },
+    write: (layout, record, body) => writeMap(layout, record as MapFrontmatter, body),
+    hasBody: true,
+  },
+  ticket: {
+    parse: (value) => ticketFrontmatterSchema.parse(value),
+    read: async (layout, id) => {
+      const { frontmatter, body } = await readTicket(layout, id);
+      return { ...frontmatter, body };
+    },
+    write: (layout, record, body) => writeTicket(layout, record as TicketFrontmatter, body),
+    hasBody: true,
+  },
+};
+
+/**
+ * The order repair reports and applies records in: creation order of the
+ * record kinds, ids sorted within each. Fixed rather than derived, so a repair
+ * report is byte-identical on every machine.
+ */
+const REPLAY_ORDER: readonly RecordTarget[] = [
+  "item",
+  "run",
+  "observation",
+  "roadmap-node",
+  "map",
+  "ticket",
+];
+
+/** The record writes one mutation carries, in the order they are applied. */
+function mutationWrites(mutation: Mutation): RecordWrite[] {
+  if (mutation.target === "run") {
+    return [{ target: "run", record: runSchema.parse(mutation.run), body: "" }];
+  }
+  if (mutation.target === "sequence") {
+    return mutation.writes.map((write) => ({
+      target: write.target,
+      record: RECORD_KINDS[write.target].parse(write.frontmatter),
+      body: write.body,
+    }));
+  }
+  return [
+    {
+      target: mutation.target,
+      record: RECORD_KINDS[mutation.target].parse(mutation.frontmatter),
+      body: mutation.body,
+    },
+  ];
+}
+
+/** The payload one write contributes: the replay triple, minus a run's body. */
+function writePayload(write: RecordWrite): Record<string, unknown> {
+  return {
+    target: write.target,
+    record: write.record,
+    ...(RECORD_KINDS[write.target].hasBody ? { body: write.body } : {}),
+  };
+}
+
+function mutationEventFields(
+  mutation: Mutation,
+  writes: readonly RecordWrite[],
+): {
   item?: string;
   run?: string;
   payload: Record<string, unknown>;
@@ -228,50 +406,38 @@ function mutationEventFields(mutation: Mutation): {
   if (mutation.target === "item") {
     return {
       item: mutation.frontmatter.id,
-      payload: {
-        ...mutation.extraPayload,
-        target: "item",
-        record: mutation.frontmatter,
-        body: mutation.body,
-      },
+      payload: { ...mutation.extraPayload, ...writePayload(writes[0]!) },
     };
   }
   if (mutation.target === "run") {
     return {
       item: mutation.run.item,
       run: mutation.run.id,
-      payload: { target: "run", record: mutation.run },
+      payload: writePayload(writes[0]!),
     };
   }
-  // Observations and roadmap nodes carry no item/run refs — an observation's
-  // link is its `sources`, a node's is its own `epic` field.
-  return {
-    payload: {
-      target: mutation.target,
-      record: mutation.frontmatter,
-      body: mutation.body,
-    },
-  };
+  if (mutation.target === "sequence") {
+    // One event, every record — see Mutation's `sequence`. The list is the
+    // apply order, and replay reads it as one pending write per entry.
+    return { payload: { target: "sequence", records: writes.map(writePayload) } };
+  }
+  // Observations, roadmap nodes, maps and tickets carry no item/run refs — an
+  // observation's link is its `sources`, a node's is its own `epic` field, and
+  // a map or ticket hangs off the intent layer entirely.
+  return { payload: writePayload(writes[0]!) };
 }
 
 /**
  * Apply one mutation: validate → claim check → write-ahead journal event →
- * record write. Refusals and validation failures write nothing at all.
+ * record write(s). Refusals and validation failures write nothing at all.
  */
 export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<MutationResult> {
-  // Validate the incoming record before anything touches disk.
-  const record =
-    mutation.target === "item"
-      ? workItemFrontmatterSchema.parse(mutation.frontmatter)
-      : mutation.target === "run"
-        ? runSchema.parse(mutation.run)
-        : mutation.target === "roadmap-node"
-          ? roadmapNodeFrontmatterSchema.parse(mutation.frontmatter)
-          : observationFrontmatterSchema.parse(mutation.frontmatter);
+  // Validate every incoming record before anything touches disk.
+  const writes = mutationWrites(mutation);
 
   // Claim enforcement: agents may not mutate a claimed item or anything in a
-  // claimed subtree. Humans pass — the claim is theirs. Observations and
-  // roadmap nodes touch no item, so no claim can cover them.
+  // claimed subtree. Humans pass — the claim is theirs. Observations, roadmap
+  // nodes, maps and tickets touch no item, so no claim can cover them.
   if (ctx.actor.kind === "agent" && (mutation.target === "item" || mutation.target === "run")) {
     const targetItem = mutation.target === "item" ? mutation.frontmatter.id : mutation.run.item;
     const incomingParent =
@@ -287,58 +453,76 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
   }
 
   // Write-ahead: the journal event carries the full mutation and lands first.
-  const fields = mutationEventFields(mutation);
+  const fields = mutationEventFields(mutation, writes);
   const event = await appendEvent(ctx.layout, ctx.env, {
     type: mutation.eventType,
     actor: ctx.actor,
+    ...(mutation.target === "sequence" ? { id: mutation.eventId } : {}),
     ...(fields.item === undefined ? {} : { item: fields.item }),
     ...(fields.run === undefined ? { session: ctx.session } : { run: fields.run }),
     payload: fields.payload,
   });
 
-  // Then the record write. If this dies, the journal is ahead — replayPending
-  // materializes exactly what the event already records.
-  if (mutation.target === "item") {
-    await writeItem(ctx.layout, record as WorkItemFrontmatter, mutation.body);
-  } else if (mutation.target === "run") {
-    await writeRun(ctx.layout, record as Run);
-  } else if (mutation.target === "roadmap-node") {
-    await writeRoadmapNode(ctx.layout, record as RoadmapNodeFrontmatter, mutation.body);
-  } else {
-    await writeObservation(ctx.layout, record as ObservationFrontmatter, mutation.body);
+  // Then the record writes, in the sequence's order. If any dies, the journal
+  // is ahead — replayPending materializes exactly what the event already
+  // records, whichever of the writes had landed.
+  for (const write of writes) {
+    await RECORD_KINDS[write.target].write(ctx.layout, write.record, write.body);
   }
   return { event };
 }
 
 /** One record materialized by replayPending. */
 export interface RepairedRecord {
-  target: "item" | "run" | "observation" | "roadmap-node";
+  target: RecordTarget;
   id: string;
   /** The mutation event whose payload was replayed. */
   eventId: string;
 }
 
-interface PendingItem {
+/** One record write a mutation event records, with the event that carries it. */
+interface PendingWrite extends RecordWrite {
   event: JournalEvent;
-  record: WorkItemFrontmatter;
-  body: string;
 }
 
-interface PendingRun {
-  event: JournalEvent;
-  record: Run;
-}
-
-interface PendingObservation {
-  event: JournalEvent;
-  record: ObservationFrontmatter;
-  body: string;
-}
-
-interface PendingRoadmapNode {
-  event: JournalEvent;
-  record: RoadmapNodeFrontmatter;
-  body: string;
+/**
+ * The record writes one journal event carries, or [] when it is not a
+ * mutation. Mutations are identified by event TYPE (the choke point's core
+ * mutation types), never by payload shape — a mutation-shaped payload under
+ * `note` or any open extension type (a forged `nahel log`, a rogue writer) is
+ * inert data, not a replayable mutation.
+ */
+function eventWrites(event: JournalEvent): PendingWrite[] {
+  if (!MUTATION_EVENT_TYPES.has(event.type)) return [];
+  const entries =
+    event.payload["target"] === "sequence"
+      ? Array.isArray(event.payload["records"])
+        ? (event.payload["records"] as unknown[])
+        : []
+      : [event.payload];
+  const writes: PendingWrite[] = [];
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== "object") continue;
+    const payload = entry as Record<string, unknown>;
+    const target = payload["target"];
+    if (typeof target !== "string" || !(target in RECORD_KINDS)) continue;
+    if (payload["record"] === undefined) continue;
+    const kind = RECORD_KINDS[target as RecordTarget];
+    const record = kind.parse(payload["record"]);
+    const body = payload["body"];
+    if (kind.hasBody && typeof body !== "string") {
+      throw new Error(
+        `mutation event ${event.id} has a ${target} payload without a string body — cannot replay`,
+      );
+    }
+    writes.push({
+      event,
+      target: target as RecordTarget,
+      record,
+      body: typeof body === "string" ? body : "",
+    });
+  }
+  return writes;
 }
 
 /**
@@ -346,6 +530,11 @@ interface PendingRoadmapNode {
  * window) and materialize them deterministically from the event payloads.
  * Never journals anything itself — it only makes real what the journal
  * already records. Consumed by `validate --repair` (PRD F8).
+ *
+ * A multi-record sequence event (F7's `resolve` and `close`) contributes one
+ * pending write per record, so a sequence interrupted between any two of its
+ * writes is healed by the same rule as a single record: whatever the event
+ * records and disk does not carry gets written.
  *
  * "Latest" is segment-aware: within a segment seq is causal, so each
  * segment's LAST mutation event per record supersedes its earlier ones;
@@ -356,10 +545,9 @@ interface PendingRoadmapNode {
  * candidate, identical on every machine.
  */
 export async function replayPending(layout: StoreLayout): Promise<RepairedRecord[]> {
-  const itemFinalists = new Map<string, PendingItem[]>();
-  const runFinalists = new Map<string, PendingRun[]>();
-  const observationFinalists = new Map<string, PendingObservation[]>();
-  const roadmapNodeFinalists = new Map<string, PendingRoadmapNode[]>();
+  // Keyed by target and id: two record kinds may legitimately share an id
+  // space, and the sequence writes of one event span several kinds.
+  const finalists = new Map<string, PendingWrite[]>();
 
   const segments = await listSegments(layout);
   const paths = [
@@ -368,156 +556,55 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
   ];
   for (const path of paths) {
     // Per segment, append order is causal order: later overwrites earlier.
-    const segmentItems = new Map<string, PendingItem>();
-    const segmentRuns = new Map<string, PendingRun>();
-    const segmentObservations = new Map<string, PendingObservation>();
-    const segmentRoadmapNodes = new Map<string, PendingRoadmapNode>();
+    const latest = new Map<string, PendingWrite>();
     for await (const event of mergeSegments([path])) {
-      // Mutations are identified by event TYPE (the choke point's core
-      // mutation types), never by payload shape — a mutation-shaped payload
-      // under `note` or any open extension type (a forged `nahel log`, a
-      // rogue writer) is inert data, not a replayable mutation.
-      if (!MUTATION_EVENT_TYPES.has(event.type)) continue;
-      const payload = event.payload;
-      if (payload["target"] === "item" && payload["record"] !== undefined) {
-        const record = workItemFrontmatterSchema.parse(payload["record"]);
-        const body = payload["body"];
-        if (typeof body !== "string") {
-          throw new Error(
-            `mutation event ${event.id} has an item payload without a string body — cannot replay`,
-          );
-        }
-        segmentItems.set(record.id, { event, record, body });
-      } else if (payload["target"] === "run" && payload["record"] !== undefined) {
-        const record = runSchema.parse(payload["record"]);
-        segmentRuns.set(record.id, { event, record });
-      } else if (payload["target"] === "observation" && payload["record"] !== undefined) {
-        const record = observationFrontmatterSchema.parse(payload["record"]);
-        const body = payload["body"];
-        if (typeof body !== "string") {
-          throw new Error(
-            `mutation event ${event.id} has an observation payload without a string body — cannot replay`,
-          );
-        }
-        segmentObservations.set(record.id, { event, record, body });
-      } else if (payload["target"] === "roadmap-node" && payload["record"] !== undefined) {
-        const record = roadmapNodeFrontmatterSchema.parse(payload["record"]);
-        const body = payload["body"];
-        if (typeof body !== "string") {
-          throw new Error(
-            `mutation event ${event.id} has a roadmap-node payload without a string body — cannot replay`,
-          );
-        }
-        segmentRoadmapNodes.set(record.id, { event, record, body });
+      for (const write of eventWrites(event)) {
+        latest.set(`${write.target}:${write.record.id}`, write);
       }
     }
-    for (const [id, pending] of segmentItems) {
-      itemFinalists.set(id, [...(itemFinalists.get(id) ?? []), pending]);
-    }
-    for (const [id, pending] of segmentRuns) {
-      runFinalists.set(id, [...(runFinalists.get(id) ?? []), pending]);
-    }
-    for (const [id, pending] of segmentObservations) {
-      observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), pending]);
-    }
-    for (const [id, pending] of segmentRoadmapNodes) {
-      roadmapNodeFinalists.set(id, [...(roadmapNodeFinalists.get(id) ?? []), pending]);
+    for (const [key, pending] of latest) {
+      finalists.set(key, [...(finalists.get(key) ?? []), pending]);
     }
   }
 
   const repaired: RepairedRecord[] = [];
-  for (const [id, finalists] of [...itemFinalists.entries()].sort(([a], [b]) =>
-    a < b ? -1 : 1,
-  )) {
-    // An unreadable or schema-invalid current record is simply out of sync:
-    // the journal holds the truth, so repair restores it rather than choking
-    // on the corruption (mirrors the run branch below).
-    let current: Awaited<ReturnType<typeof readItem>> | undefined;
-    try {
-      current = await readItem(layout, id);
-    } catch {
-      current = undefined;
-    }
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      current !== undefined &&
-      candidates.some(
-        (candidate) =>
-          JSON.stringify(current!.frontmatter) === JSON.stringify(candidate.record) &&
-          current!.body === candidate.body,
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      await writeItem(layout, pending.record, pending.body);
-      repaired.push({ target: "item", id, eventId: pending.event.id });
-    }
-  }
-  for (const [id, finalists] of [...runFinalists.entries()].sort(([a], [b]) =>
-    a < b ? -1 : 1,
-  )) {
-    let current: Run | undefined;
-    try {
-      current = await readRun(layout, id);
-    } catch {
-      current = undefined;
-    }
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      current !== undefined &&
-      candidates.some(
-        (candidate) => JSON.stringify(current) === JSON.stringify(candidate.record),
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      await writeRun(layout, pending.record);
-      repaired.push({ target: "run", id, eventId: pending.event.id });
-    }
-  }
-  for (const [id, finalists] of [...observationFinalists.entries()].sort(([a], [b]) =>
-    a < b ? -1 : 1,
-  )) {
-    let current: Awaited<ReturnType<typeof readObservation>> | undefined;
-    try {
-      current = await readObservation(layout, id);
-    } catch {
-      current = undefined;
-    }
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      current !== undefined &&
-      candidates.some(
-        (candidate) =>
-          JSON.stringify(current!.frontmatter) === JSON.stringify(candidate.record) &&
-          current!.body === candidate.body,
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      await writeObservation(layout, pending.record, pending.body);
-      repaired.push({ target: "observation", id, eventId: pending.event.id });
-    }
-  }
-  for (const [id, finalists] of [...roadmapNodeFinalists.entries()].sort(([a], [b]) =>
-    a < b ? -1 : 1,
-  )) {
-    let current: Awaited<ReturnType<typeof readRoadmapNode>> | undefined;
-    try {
-      current = await readRoadmapNode(layout, id);
-    } catch {
-      current = undefined;
-    }
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      current !== undefined &&
-      candidates.some(
-        (candidate) =>
-          JSON.stringify(current!.frontmatter) === JSON.stringify(candidate.record) &&
-          current!.body === candidate.body,
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      await writeRoadmapNode(layout, pending.record, pending.body);
-      repaired.push({ target: "roadmap-node", id, eventId: pending.event.id });
+  for (const target of REPLAY_ORDER) {
+    const kind = RECORD_KINDS[target];
+    const keys = [...finalists.keys()]
+      .filter((key) => key.startsWith(`${target}:`))
+      .sort();
+    for (const key of keys) {
+      const id = key.slice(target.length + 1);
+      // An unreadable or schema-invalid current record is simply out of sync:
+      // the journal holds the truth, so repair restores it rather than choking
+      // on the corruption.
+      let current: (RecordWrite["record"] & { body?: string }) | undefined;
+      try {
+        current = await kind.read(layout, id);
+      } catch {
+        current = undefined;
+      }
+      const candidates = latestCandidates(finalists.get(key)!);
+      const inSync =
+        current !== undefined &&
+        candidates.some((candidate) => sameRecord(kind, current!, candidate));
+      if (!inSync) {
+        const pending = candidates[candidates.length - 1]!;
+        await kind.write(layout, pending.record, pending.body);
+        repaired.push({ target, id, eventId: pending.event.id });
+      }
     }
   }
   return repaired;
+}
+
+/** True when the record on disk already carries what the event records. */
+function sameRecord(
+  kind: RecordKind,
+  current: RecordWrite["record"] & { body?: string },
+  candidate: RecordWrite,
+): boolean {
+  if (!kind.hasBody) return JSON.stringify(current) === JSON.stringify(candidate.record);
+  const { body, ...frontmatter } = current;
+  return JSON.stringify(frontmatter) === JSON.stringify(candidate.record) && body === candidate.body;
 }

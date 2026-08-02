@@ -38,6 +38,15 @@ export function sessionSegmentPath(layout: StoreLayout, sessionId: string): stri
 export interface AppendEventInput {
   type: string;
   actor: Actor;
+  /**
+   * Pre-minted event id, for the one case where the payload must cite the id
+   * of the event carrying it: F7's `resolve` distills an observation whose
+   * `sources` name the resolution event, and that observation record travels
+   * INSIDE the resolution event's payload — so the id has to exist before the
+   * line is serialized. Minted with generateId(env) by the caller, off the same
+   * injected Env this function would have used; omitted everywhere else.
+   */
+  id?: string;
   /** Run ref; when present the event is appended to that run's segment. */
   run?: string;
   /** Work-item ref carried on the event. */
@@ -144,7 +153,7 @@ export async function appendEvent(
 ): Promise<JournalEvent> {
   const path = segmentPathFor(layout, input);
   const event = journalEventSchema.parse({
-    id: generateId(env),
+    id: input.id ?? generateId(env),
     ts: env.now(),
     seq: await nextSeq(path),
     type: input.type,

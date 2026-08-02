@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { configCommand } from "../../src/commands/config";
 import { itemCommand } from "../../src/commands/item";
 import { logCommand } from "../../src/commands/log";
 import { roadmapCommand } from "../../src/commands/roadmap";
@@ -604,6 +605,32 @@ describe("nahel roadmap ack — say seen, change nothing", () => {
     expect(stderr()).toContain("nahel roadmap ack");
     expect(await journalEvents(layout)).toEqual([]);
   });
+});
+
+describe("nahel roadmap node — governance never refuses a scribe (Phase 4 F5)", () => {
+  test.each(["human", "delegated", "agent"] as const)(
+    "under governance.product: %s an AGENT creates and re-horizons freely, journaled as itself",
+    async (product) => {
+      const { root, layout, env } = await setup();
+      expect(
+        await configCommand.run(
+          ["set", "governance", "--data", JSON.stringify({ product, architecture: "human" })],
+          env,
+          root,
+          "human:jim",
+        ),
+      ).toBe(0);
+
+      // The config actor is agent:claude-code — no override anywhere here.
+      const id = await newNode(env, root, ["feature", "alpha", "--horizon", "next", "--intent", "a"]);
+      await ok(env, root, ["node", "update", id, "--horizon", "now"]);
+
+      expect((await readRoadmapNode(layout, id)).frontmatter.horizon).toBe("now");
+      const acts = (await journalEvents(layout)).filter((e) => e.type.startsWith("roadmap.node-"));
+      expect(acts.map((e) => e.type)).toEqual(["roadmap.node-created", "roadmap.node-updated"]);
+      expect(acts.every((e) => e.actor.kind === "agent")).toBe(true);
+    },
+  );
 });
 
 describe("nahel roadmap — usage surface", () => {

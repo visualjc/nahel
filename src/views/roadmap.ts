@@ -541,18 +541,41 @@ const NO_ROADMAP =
   '  nahel roadmap node new product <slug> --horizon now --intent "<what this product is>"';
 
 /**
+ * The words `nahel roadmap` spends on its own verbs. A ref spelled as one is
+ * dispatched as a subcommand and never reaches the zoom, so it is not a
+ * spelling a hint may use. The set lives HERE, beside the hints that break on
+ * it, and the dispatcher reads the same one — the two cannot drift.
+ */
+export const ROADMAP_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "node",
+  "map",
+  "ticket",
+  "ack",
+]);
+
+/**
  * The zoom hint a rendering ends with (F3), so the drill path is discoverable
  * from the output itself rather than from the help.
  *
- * Every hint is `↳ <command>  — <what it shows>`, and the command is REAL: a
- * concrete slug, never a `<node>` placeholder a reader would have to fill in.
- * The one it names is the alphabetically first slug the rendering listed —
- * stable against id churn and re-parenting, so a doc-tested rendering does not
- * wobble when unrelated state moves.
+ * Every hint is `↳ <command>  — <what it shows>`, and the command is REAL and
+ * RUNNABLE: a concrete node, never a `<node>` placeholder a reader would have to
+ * fill in. The one it names is the alphabetically first node the rendering
+ * listed — stable against id churn and re-parenting, so a doc-tested rendering
+ * does not wobble when unrelated state moves.
+ *
+ * A node whose slug is one of the verbs above is spelled by ID instead: the
+ * slug spelling would dispatch that subcommand and exit non-zero, which is a
+ * hint that breaks when followed. The id spelling is always safe because every
+ * reserved word is shorter than ID_LENGTH (8) — an id can never spell one, and
+ * `tests/commands/roadmap-view.test.ts` pins that invariant. It would stop
+ * holding only if a future subcommand were 8 characters drawn entirely from
+ * ID_ALPHABET, and that verb would have to answer this question again.
  */
-function zoomHint(names: readonly string[]): string | undefined {
-  if (names.length === 0) return undefined;
-  return `↳ nahel roadmap ${[...names].sort()[0]!}  — zoom into a node listed above`;
+function zoomHint(nodes: readonly RoadmapNodeFrontmatter[]): string | undefined {
+  const first = [...nodes].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))[0];
+  if (first === undefined) return undefined;
+  const ref = ROADMAP_SUBCOMMANDS.has(first.name) ? first.id : first.name;
+  return `↳ nahel roadmap ${ref}  — zoom into a node listed above`;
 }
 
 /** Close a rendering with its hints; absent ones are dropped, not left blank. */
@@ -618,7 +641,7 @@ export function renderRoadmapOverview(
     lines.push(`outside the product tree (${outside.length}):`);
     for (const { frontmatter } of outside) lines.push(`  ${nodeLine(frontmatter)}`);
   }
-  hintBlock(lines, [zoomHint(nodes.map(({ frontmatter }) => frontmatter.name))]);
+  hintBlock(lines, [zoomHint(nodes.map(({ frontmatter }) => frontmatter))]);
   return lines.join("\n");
 }
 
@@ -766,7 +789,7 @@ export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomF
 
   const children = [...features.map(({ record: child }) => child), ...others];
   const hints = [
-    zoomHint(children.map(({ frontmatter }) => frontmatter.name)),
+    zoomHint(children.map(({ frontmatter }) => frontmatter)),
     node.epic !== undefined && facts.items.some((item) => item.id === node.epic)
       ? `↳ nahel progress --item ${node.epic}  — the work under this feature`
       : undefined,

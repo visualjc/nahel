@@ -21,6 +21,7 @@ import {
 import { closeStoreContext, mutate } from "../store/mutate";
 import {
   isRoadmapColumnEvent,
+  ROADMAP_SUBCOMMANDS,
   renderRoadmapNode,
   renderRoadmapOverview,
   renderRoadmapZoom,
@@ -576,16 +577,17 @@ export const roadmapCommand: Command = {
         console.log(USAGE);
         return 0;
       }
-      // F3: the bare verb IS the view. Every subcommand below is a reserved
-      // word, so a node named `node`, `map`, `ticket` or `ack` is addressed by
+      // F3: the bare verb IS the view. The verbs below are ROADMAP_SUBCOMMANDS,
+      // so a node named `node`, `map`, `ticket` or `ack` is addressed by
       // `nahel roadmap node show <ref>` instead — the verbs win the word.
       if (group === undefined) return overview(cwd);
       if (group === "ack") return ack(rest, env, cwd, actorOverride);
       if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
       if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);
-      // Anything left is a node REF, not an unknown subcommand: `nahel roadmap
-      // <slug-or-id>` is the zoom (F3).
-      if (group !== "node") return zoom(group, rest, cwd);
+      // Anything that is not a reserved verb is a node REF, not an unknown
+      // subcommand: `nahel roadmap <slug-or-id>` is the zoom (F3). The set is
+      // the views' — a hint must never name a word this line swallows.
+      if (!ROADMAP_SUBCOMMANDS.has(group)) return zoom(group, rest, cwd);
       const [sub, ...args] = rest;
       refuseDerivedFlags(args);
       if (sub === "new") return nodeNew(args, env, cwd, actorOverride);

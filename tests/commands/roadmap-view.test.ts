@@ -719,3 +719,23 @@ describe("a hint never names a slug the dispatcher would swallow (F3)", () => {
     },
   );
 });
+
+describe("the reserved set and the help cannot drift apart (F3)", () => {
+  test("every verb the help documents under `nahel roadmap` is in ROADMAP_SUBCOMMANDS", async () => {
+    // A verb added to the help but not to the set would be a word the hints
+    // still think is a free slug — the exact break this cluster fixed.
+    const { root, env } = await setup();
+    const before = logs.length;
+    expect(await roadmapCommand.run(["--help"], env, root)).toBe(0);
+    const documented = new Set(
+      logs
+        .slice(before)
+        .join("\n")
+        .split("\n")
+        .map((line) => /^\s*nahel roadmap ([a-z][a-z-]*)/.exec(line)?.[1])
+        .filter((verb): verb is string => verb !== undefined),
+    );
+
+    expect([...documented].sort()).toEqual([...ROADMAP_SUBCOMMANDS].sort());
+  });
+});

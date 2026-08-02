@@ -961,6 +961,24 @@ function checkWayfinder(state: ParsedState): Finding[] {
           message: `decision ticket ${record.id} is blocked by ${blocker}, which does not exist`,
           fix: "the blocking ticket may arrive by a later merge — otherwise re-wire it with `nahel roadmap ticket update <ref> --blocked-by <ticket-id>` or `--clear-blockers`",
         });
+      } else {
+        // Blocking edges run between SIBLINGS — tickets charting the same
+        // destination. A cross-map edge holds this map's question until another
+        // map's question resolves (F8's frontier eligibility joins on exactly
+        // this list), gating work on a destination it does not share. Reported,
+        // never refused: blocking is advisory everywhere.
+        const target = state.tickets.get(blocker);
+        if (target !== undefined && target.record.map !== record.map) {
+          findings.push({
+            severity: "warning",
+            check: "roadmap.ticket-blocker-cross-map",
+            path,
+            message:
+              `decision ticket ${record.id} (map ${record.map}) is blocked by ${blocker}, which hangs off ` +
+              `map ${target.record.map} — blocking edges run between tickets on the same map`,
+            fix: "re-wire it onto a sibling with `nahel roadmap ticket update <ref> --blocked-by <ticket-id>` or `--clear-blockers`, or chart the shared question on this map — this is advisory, nothing was refused",
+          });
+        }
       }
     }
     // The claimant and the state are one fact spelled twice: `claimed` means

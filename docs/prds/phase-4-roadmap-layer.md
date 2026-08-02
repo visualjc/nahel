@@ -82,7 +82,9 @@ addressed by name, not by bare id.
   grilling workflow turns into a PRD, which the existing pipeline
   (`prd-new` → `prd-parse` → `epic-decompose`) turns into an epic and work
   items. It carries its `prd` path and its epic work-item id once each
-  exists.
+  exists, and may name a **predecessor** feature node: once a feature is
+  released its delta is closed (F10), so further work on it is a new node
+  with a new PRD, linked back for lineage.
 - **Initiative** — a `kind` flag for a node linking sideways into several
   features (a theme, a campaign); rollup semantics deliberately undefined
   until a real initiative lands.
@@ -120,6 +122,10 @@ that should have been a work item) but nothing is ever refused.
 - **Direction is provable**: linking a node to a work item, and the whole F6
   migration, leave every `nahel/items/*.md` record byte-identical — checked
   by `git diff`; a run that touched an item record fails this criterion.
+- A feature node records a **predecessor** feature node and reads it back;
+  `nahel roadmap <feature>` shows the lineage both ways (successor from the
+  predecessor, predecessor from the successor); a predecessor link to a
+  missing node is a `validate` warning.
 - A structurally odd tree (feature parented to a feature; a node with no
   product ancestor) produces a `validate` **warning** with the node named —
   and the mutation that created it was not refused.
@@ -370,11 +376,25 @@ build enumerates the stores at migration time. Migration writes **node
 records only**: the node names the item it covers, per F1's canonical
 direction; **no work-item record is touched at all**.
 
+**"Roadmap-shaped" is a judgment, so it is journaled before it is acted
+on.** Step one of each store's migration is a single event recording the
+**complete selected set**: every included item id, **and** every excluded
+near-miss with a one-line reason (why that backlog item is work, not
+roadmap intent). It is written **before the first node is created**, so a
+reviewer can audit the call from the journal rather than inferring it from
+whatever nodes happen to exist afterwards.
+
 **Acceptance criteria:**
+- The **first** migration event in each store enumerates the complete
+  selected set — included ids and excluded near-misses with reasons — and
+  strictly precedes every node-creation event in that store (journal order
+  proves it; a set event written after the nodes fails this criterion).
+- Every id in that selected set has a node afterwards, and every node traces
+  back to an id in it — the set and the result match exactly, with no
+  orphans and nothing invented.
 - After migration, `nahel roadmap` in each store shows every roadmap-shaped
   backlog item recorded at migration time, enumerated from the store rather
-  than from this document; none is orphaned or invented, and the
-  enumeration is journaled.
+  than from this document.
 - Each migration act is journaled naming the node and the item it covers.
 - `git diff` over `nahel/items/` across the whole migration is **empty** in
   both stores — a single modified item record fails this criterion (F1's
@@ -422,6 +442,13 @@ wayfinder's decisions-are-permanent principle on nahel's existing recall
 design. `distill` then **empties the ticket body through the CLI** — body
 deletion is a state mutation, never a raw file delete.
 
+Both are **multi-record sequences**, so each step rides the existing
+write-ahead choke point (`store/mutate.ts`: journal the event, then apply
+the record write) — no step invents its own write path. A sequence
+interrupted between any two steps is therefore a **recoverable partial
+state**, not corruption: `validate` names it and `validate --repair`
+(`replayPending`) rolls it forward.
+
 - **Two workflow docs** ship: charting a map (name the destination, grill
   breadth-first, create tickets then wire blocking in a second pass, sketch
   the fog) and working a map (claim one ticket, resolve it with the existing
@@ -445,6 +472,12 @@ deletion is a state mutation, never a raw file delete.
   progress` alone — exercised by actually distilling one. A ticket body
   removed by a raw file edit is reported by `validate` as a finding (no
   distill event for an emptied body).
+- **Crash-shape**: with the process killed between **any two** steps of
+  `resolve` (decision event → ticket state → observation → map index line)
+  and of `distill`, `validate` names the partial state, `validate --repair`
+  completes it, and re-running the original verb afterwards is idempotent —
+  no duplicate observation, no second index line. Exercised at every
+  interruption point, not just the first.
 - An out-of-scope ruling `close`s the ticket, adds one line to Out of scope
   with its reason, and never appears in Decisions so far.
 - Both workflow docs pass the workflow-format doc tests and are installed by
@@ -553,6 +586,19 @@ events and F2's dev rollup.
   after archival is a bug, not a warning.
 - **Product design docs are permanent** — updated in place on release, never
   archived. They state what the product is; a PRD stated one delta.
+- **Released means the delta is closed.** An archived PRD is never reopened
+  and never edited. Further development on a released feature is a **new
+  feature node with a new PRD**, which may link the predecessor node for
+  lineage — that is what keeps an archived PRD an honest record of what
+  shipped rather than a document that quietly drifts after the fact.
+- Archival is a **multi-record sequence**, so every step rides the existing
+  write-ahead choke point (`store/mutate.ts`: journal the event, then apply
+  the record write) and an interruption leaves a **recoverable partial
+  state** that `validate --repair` rolls forward. The writes, in order:
+  (1) the archival event plus the PRD file move-and-stamp; (2) the feature
+  node's PRD link; (3) the owning plan item's `prd`; (4) the referencing
+  feature/epic item's `prd`; (5) **each** catch-all record sharing the old
+  path — **N separate writes**, not one; (6) the product design doc update.
 
 **Acceptance criteria:**
 - Archiving a released feature's PRD leaves the file at
@@ -571,7 +617,25 @@ events and F2's dev rollup.
   pointing at a missing file.
 - The product design doc referenced by the product node is updated in the
   same act (diffable), not archived.
-- Zero PRD deletions across the phase — checkable from git history.
+- **Crash-shape**: the process is killed at **every** boundary of the write
+  sequence above — after the event-and-move, after the feature node's link,
+  after the plan item, after the feature/epic item, **after any prefix of
+  the N catch-all updates** (all N+1 sub-boundaries, not just before and
+  after the batch), and after the product design doc update. At each one,
+  `validate` names the partial state — including a `prd` path pointing at
+  neither location, and a design doc left stale while every reference has
+  moved — `validate --repair` completes it, and re-running archival
+  afterwards is idempotent (the header is stamped once, not twice; no
+  reference is rewritten a second time).
+- **Closed delta**: a feature node whose PRD link points **into
+  `docs/prds/archived/`** while the node is **not** released is a `validate`
+  **warning** naming the node and the archived path — the signal that
+  someone is continuing work against a closed delta instead of opening a new
+  feature node. A new feature node linking the predecessor for lineage
+  produces no warning.
+- Zero PRD deletions across the phase, and zero edits to any file under
+  `docs/prds/archived/` after its archival commit — both checkable from git
+  history.
 
 ## Delivery order — three slices, one phase
 

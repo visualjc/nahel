@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
-import type { RoadmapNodeFrontmatter, WorkItemFrontmatter } from "../../src/schema/records";
+import type {
+  JournalEvent,
+  RoadmapNodeFrontmatter,
+  WorkItemFrontmatter,
+} from "../../src/schema/records";
 import type { RoadmapNodeRecord } from "../../src/store/layout";
+import { QA_SWEEP_EVENT_TYPE } from "../../src/views/brief";
 import {
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
   featureDevStatus,
+  featureStatus,
   productFeatureNodes,
   renderProductStatus,
 } from "../../src/views/roadmap";
@@ -303,5 +311,292 @@ describe("renderProductStatus — the count distribution, never one word", () =>
     expect(renderProductStatus(["unknown", "built", "planned", "built"])).toBe(
       renderProductStatus(["built", "planned", "built", "unknown"]),
     );
+  });
+});
+
+/** A journal event; every field a covering-event case needs to control. */
+function makeEvent(overrides: Partial<JournalEvent> = {}): JournalEvent {
+  return {
+    id: "aaaaaaa1",
+    ts: "2026-07-16T12:00:00Z",
+    seq: 0,
+    type: QA_SWEEP_EVENT_TYPE,
+    actor: { kind: "agent", id: "codex" },
+    payload: {},
+    ...overrides,
+  };
+}
+
+/** A feature node over an epic with one done child and one grandchild under it. */
+function featureOverEpic(env: Env) {
+  const { epic, items } = epicWith(env, ["done"]);
+  const child = items[1]!;
+  const grandchild = makeFrontmatter(env, { name: "grandchild", status: "done", parent: child.id });
+  items.push(grandchild);
+  return { epic, child, grandchild, items, node: makeNode(env, { epic: epic.id }) };
+}
+
+describe("featureStatus — the association rule: which events cover a feature", () => {
+  test("an event whose item IS the feature's epic covers it", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const event = makeEvent({ item: epic.id, payload: { failed: 0 } });
+
+    expect(featureStatus(node, items, [event]).qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("an event whose item is a GRANDCHILD of the epic covers it too", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { grandchild, items, node } = featureOverEpic(env);
+    const event = makeEvent({ item: grandchild.id, payload: { failed: 0 } });
+
+    expect(featureStatus(node, items, [event]).qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("an event with NO item ref covers no feature node — it stays store-wide", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { items, node } = featureOverEpic(env);
+    const event = makeEvent({ payload: { failed: 0 } });
+
+    expect(featureStatus(node, items, [event]).qa).toBe("—");
+  });
+
+  test("an event on an item outside every subtree covers nothing", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { items, node } = featureOverEpic(env);
+    const stranger = makeFrontmatter(env, { name: "solo-chore" });
+    const event = makeEvent({ item: stranger.id, payload: { failed: 0 } });
+
+    expect(featureStatus(node, [...items, stranger], [event]).qa).toBe("—");
+  });
+
+  test("an event in ANOTHER feature's subtree changes only the owning feature", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const subject = featureOverEpic(env);
+    const other = featureOverEpic(env);
+    const items = [...subject.items, ...other.items];
+    const event = makeEvent({ item: other.epic.id, payload: { failed: 0 } });
+
+    expect(featureStatus(subject.node, items, [event]).qa).toBe("—");
+    expect(featureStatus(other.node, items, [event]).qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("a node with no epic id is covered by nothing, however the events are attributed", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = featureOverEpic(env);
+    const node = makeNode(env, { name: "uncharted" });
+    const event = makeEvent({ item: epic.id, payload: { failed: 0 } });
+
+    expect(featureStatus(node, items, [event]).qa).toBe("—");
+  });
+
+  test("a dangling epic id still associates by ref: dev unknown, QA column filled", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const node = makeNode(env, { epic: "aaaaaaaa" });
+    const event = makeEvent({ item: "aaaaaaaa", payload: { failed: 0 } });
+
+    const status = featureStatus(node, [], [event]);
+    expect(status.dev).toBe("unknown");
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("only the whole-sweep type feeds the QA column — a per-case qa.result does not", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const event = makeEvent({ item: epic.id, type: "qa.result", payload: { failed: 0 } });
+
+    expect(featureStatus(node, items, [event]).qa).toBe("—");
+  });
+});
+
+describe("featureStatus — the winning event: last in the store's total order", () => {
+  test("a later ts wins", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const older = makeEvent({ id: "aaaaaaa1", item: epic.id, ts: "2026-07-16T12:00:00Z", payload: { failed: 1 } });
+    const newer = makeEvent({ id: "aaaaaaa2", item: epic.id, ts: "2026-07-16T13:00:00Z", payload: { failed: 2 } });
+
+    expect(featureStatus(node, items, [older, newer]).qa).toBe("tested 2026-07-16T13:00:00Z (2 failed)");
+  });
+
+  test("same second: the higher seq wins", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const first = makeEvent({ id: "aaaaaaa1", item: epic.id, seq: 0, payload: { failed: 1 } });
+    const second = makeEvent({ id: "aaaaaaa2", item: epic.id, seq: 7, payload: { failed: 2 } });
+
+    expect(featureStatus(node, items, [first, second]).qa).toBe("tested 2026-07-16T12:00:00Z (2 failed)");
+  });
+
+  test("same second, same seq: the higher id wins — the same winner on every machine", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const lower = makeEvent({ id: "aaaaaaa1", item: epic.id, payload: { failed: 1 } });
+    const higher = makeEvent({ id: "bbbbbbb2", item: epic.id, payload: { failed: 2 } });
+
+    expect(featureStatus(node, items, [lower, higher]).qa).toBe("tested 2026-07-16T12:00:00Z (2 failed)");
+  });
+
+  test("the order the events arrive in does not change the winner", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const events = [
+      makeEvent({ id: "aaaaaaa1", item: epic.id, ts: "2026-07-16T12:00:00Z", payload: { failed: 1 } }),
+      makeEvent({ id: "aaaaaaa2", item: epic.id, ts: "2026-07-16T13:00:00Z", payload: { failed: 2 } }),
+      makeEvent({ id: "aaaaaaa3", item: epic.id, ts: "2026-07-16T11:00:00Z", payload: { failed: 3 } }),
+    ];
+
+    expect(featureStatus(node, items, [...events].reverse()).qa).toBe(
+      featureStatus(node, items, events).qa,
+    );
+  });
+
+  test("each column resolves its own winner independently", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const events = [
+      makeEvent({ id: "aaaaaaa1", item: epic.id, ts: "2026-07-16T12:00:00Z", payload: { failed: 0 } }),
+      makeEvent({
+        id: "aaaaaaa2",
+        item: epic.id,
+        ts: "2026-07-16T13:00:00Z",
+        type: DEPLOY_COMPLETED_EVENT_TYPE,
+        payload: { environment: "staging" },
+      }),
+      makeEvent({
+        id: "aaaaaaa3",
+        item: epic.id,
+        ts: "2026-07-16T14:00:00Z",
+        type: RELEASE_ANNOUNCED_EVENT_TYPE,
+        payload: { version: "0.3.0" },
+      }),
+    ];
+
+    const status = featureStatus(node, items, events);
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+    expect(status.deploy).toBe("deployed staging 2026-07-16T13:00:00Z");
+    expect(status.release).toBe("released 0.3.0 2026-07-16T14:00:00Z");
+  });
+});
+
+describe("featureStatus — every row of the F2 render table", () => {
+  function columns(events: readonly JournalEvent[]) {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    return featureStatus(
+      node,
+      items,
+      events.map((event) => ({ ...event, item: epic.id })),
+    );
+  }
+
+  test("QA, no covering sweep → —", () => {
+    expect(columns([]).qa).toBe("—");
+  });
+
+  test("QA, failed = 0 → tested <ts>", () => {
+    expect(columns([makeEvent({ payload: { failed: 0 } })]).qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("QA, failed > 0 → tested <ts> (N failed)", () => {
+    expect(columns([makeEvent({ payload: { failed: 3 } })]).qa).toBe(
+      "tested 2026-07-16T12:00:00Z (3 failed)",
+    );
+  });
+
+  test("QA, failed absent → tested <ts> (? failed)", () => {
+    expect(columns([makeEvent({ payload: { cases_run: 9 } })]).qa).toBe(
+      "tested 2026-07-16T12:00:00Z (? failed)",
+    );
+  });
+
+  test("QA, failed non-numeric → tested <ts> (? failed)", () => {
+    expect(columns([makeEvent({ payload: { failed: "two" } })]).qa).toBe(
+      "tested 2026-07-16T12:00:00Z (? failed)",
+    );
+  });
+
+  test("QA, failed null → tested <ts> (? failed)", () => {
+    expect(columns([makeEvent({ payload: { failed: null } })]).qa).toBe(
+      "tested 2026-07-16T12:00:00Z (? failed)",
+    );
+  });
+
+  test("deploy, no covering event → —", () => {
+    expect(columns([]).deploy).toBe("—");
+  });
+
+  test("deploy, with environment → deployed <environment> <ts>", () => {
+    expect(
+      columns([makeEvent({ type: DEPLOY_COMPLETED_EVENT_TYPE, payload: { environment: "prod" } })])
+        .deploy,
+    ).toBe("deployed prod 2026-07-16T12:00:00Z");
+  });
+
+  test("deploy, environment absent → deployed ? <ts>", () => {
+    expect(
+      columns([makeEvent({ type: DEPLOY_COMPLETED_EVENT_TYPE, payload: { ref: "abc123" } })]).deploy,
+    ).toBe("deployed ? 2026-07-16T12:00:00Z");
+  });
+
+  test("deploy, environment blank → deployed ? <ts>", () => {
+    expect(
+      columns([makeEvent({ type: DEPLOY_COMPLETED_EVENT_TYPE, payload: { environment: "  " } })])
+        .deploy,
+    ).toBe("deployed ? 2026-07-16T12:00:00Z");
+  });
+
+  test("release, no covering event → —", () => {
+    expect(columns([]).release).toBe("—");
+  });
+
+  test("release, with version → released <version> <ts>", () => {
+    expect(
+      columns([makeEvent({ type: RELEASE_ANNOUNCED_EVENT_TYPE, payload: { version: "0.3.0" } })])
+        .release,
+    ).toBe("released 0.3.0 2026-07-16T12:00:00Z");
+  });
+
+  test("release, version absent → released ? <ts>", () => {
+    expect(
+      columns([makeEvent({ type: RELEASE_ANNOUNCED_EVENT_TYPE, payload: { channel: "stable" } })])
+        .release,
+    ).toBe("released ? 2026-07-16T12:00:00Z");
+  });
+
+  test("release, version blank → released ? <ts>", () => {
+    expect(
+      columns([makeEvent({ type: RELEASE_ANNOUNCED_EVENT_TYPE, payload: { version: "" } })]).release,
+    ).toBe("released ? 2026-07-16T12:00:00Z");
+  });
+
+  test("the ts is the winning event's own, verbatim", () => {
+    expect(columns([makeEvent({ ts: "2031-01-02T03:04:05Z", payload: { failed: 0 } })]).qa).toBe(
+      "tested 2031-01-02T03:04:05Z",
+    );
+  });
+});
+
+describe("featureStatus — the dev rollup it carries", () => {
+  test("dev and anomaly are exactly what featureDevStatus derives", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["dropped"]);
+    const node = makeNode(env, { epic: epic.id });
+
+    const status = featureStatus(node, items, []);
+    expect(status.dev).toBe("planned");
+    expect(status.anomaly).toBe("all-dropped");
+  });
+
+  test("mutates none of its inputs", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items, node } = featureOverEpic(env);
+    const events = [makeEvent({ item: epic.id, payload: { failed: 0 } })];
+    const before = JSON.stringify({ items, events, node });
+
+    featureStatus(node, items, events);
+    featureStatus(node, items, events);
+
+    expect(JSON.stringify({ items, events, node })).toBe(before);
   });
 });

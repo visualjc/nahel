@@ -5,6 +5,10 @@ import {
   type FoundingSignatureStatus,
   type MergeAuthorityStatus,
 } from "../governance/authority";
+import {
+  awaitingRoadmapReview,
+  type AwaitingRoadmapReview,
+} from "../governance/roadmap-review";
 import { QA_SWEEP_EVENT_TYPE } from "../schema/events";
 import type {
   Actor,
@@ -245,11 +249,37 @@ function governanceBody(inputs: BriefInputs): string {
   const governance = resolveGovernance(inputs.governance);
   const area = (label: string, resolved: { mode: string; defaulted: boolean }): string =>
     `${label}: ${resolved.mode}${resolved.defaulted ? " (default)" : ""}`;
-  return [
+  const lines = [
     area("product", governance.product),
     area("architecture", governance.architecture),
     mergeLine(inputs.merge),
-  ].join("\n");
+  ];
+  // The posture's consequence, right under the posture that decides it (F5).
+  const awaiting = awaitingRoadmapReview(inputs.governance, inputs.events);
+  if (awaiting !== undefined) lines.push(awaitingRoadmapLine(awaiting));
+  return lines.join("\n");
+}
+
+/**
+ * The awaiting-your-eyes line (PRD F5): what agents moved on the roadmap since
+ * the human last touched it. ONE line — acts counted, nodes named up to the
+ * cap, remainder stated with the verb that shows the rest, exactly as F4's
+ * block degrades. Rendered only when something waits, so a project whose
+ * roadmap the human keeps up with (and every project under agent-as-PO, which
+ * has no surface at all) carries zero noise.
+ *
+ * No truncation rung touches it: it is one line, and it is the layer's entire
+ * control — a roadmap layer that trusts every agent to write needs the human
+ * to be told what was written.
+ */
+function awaitingRoadmapLine(awaiting: AwaitingRoadmapReview): string {
+  const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  const named = awaiting.nodes.map((node) => node.name).join(", ");
+  const rest = awaiting.more === 0 ? "" : `, +${awaiting.more} more — nahel roadmap`;
+  return (
+    `roadmap changes since your last touch (${awaiting.since}): ` +
+    `${count(awaiting.changes, "agent act")} on ${count(awaiting.nodes.length + awaiting.more, "node")} — ${named}${rest}`
+  );
 }
 
 /** The merge-authority line: what config says, and what is actually in force. */

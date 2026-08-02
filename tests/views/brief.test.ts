@@ -703,10 +703,12 @@ describe("renderBrief — roadmap changes since your last touch (Phase 4 F5)", (
     const brief = renderBrief(
       makeInputs({ governance: { product: "human", architecture: "human" }, events }),
     );
-    expect(brief).toContain("12 agent acts on 12 nodes");
-    expect(brief).toContain("node-9");
-    expect(brief).not.toContain("node-10");
-    expect(brief).toContain("+2 more — nahel roadmap");
+    // Scoped to the line: the activity section quotes every event verbatim.
+    const line = brief.split("\n").find((text) => text.startsWith(AWAITING))!;
+    expect(line).toContain("12 agent acts on 12 nodes");
+    expect(line).toContain("node-9");
+    expect(line).not.toContain("node-10");
+    expect(line).toContain("+2 more — nahel roadmap");
   });
 
   test("composeBrief drives the whole F5 cycle through the real CLI: raise, clear, re-raise", async () => {

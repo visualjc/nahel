@@ -74,9 +74,15 @@ export const TICKET_USAGE = `  nahel roadmap ticket new --map <ref> --type <t> -
     Record the decision: journals it, indexes it on the map, and distills an
     observation citing the resolution event — so \`nahel recall\` finds it.
 
-  nahel roadmap ticket close <ref> --reason <why>
-    Rule the question away (out of scope, or invalidated by another decision):
-    adds one line to the map's Out of scope. It never becomes a decision.
+  nahel roadmap ticket close <ref> --reason <why> (--out-of-scope | --invalidated-by <ref>)
+    Rule the question away, stating WHICH disposition it is. Under either one
+    it never becomes a decision.
+      --out-of-scope: ruled beyond the destination — adds the reason as one
+        line in the map's Out of scope section, which never graduates.
+      --invalidated-by <ticket-or-event-id>: another decision answered the
+        question out of existence — records that ref on the ticket, and the map
+        shows it beside Decisions so far. It was never beyond the destination,
+        so no line is added to the section above.
 
   nahel roadmap ticket distill <ref>
     Empty a resolved or closed ticket's body through the CLI, once the decision

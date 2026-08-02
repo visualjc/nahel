@@ -1,5 +1,5 @@
 import { CORE_EVENT_TYPES, ROADMAP_ACKED_EVENT_TYPE } from "../schema/events";
-import type { Governance, JournalEvent } from "../schema/records";
+import type { Actor, Governance, JournalEvent } from "../schema/records";
 import { resolveGovernance } from "./authority";
 
 /**
@@ -18,18 +18,32 @@ import { resolveGovernance } from "./authority";
  *      not roadmap scribing, and the roadmap layer adds no consensus
  *      requirement of its own.
  *
- *   2. The window opens after the last HUMAN-attributed roadmap act — a node
+ *   2. The window is the READER's ("for the reading actor … since that actor's
+ *      last recorded activity"). It opens at the reader's own latest journaled
+ *      act of ANY type — they were HERE then, whatever they were doing — and
+ *      advances to any later human-attributed ROADMAP act by anyone: a node
  *      created or updated, or `nahel roadmap ack`, which says "seen" and
- *      nothing else. Provenance is read from the JOURNAL, exactly as merge
- *      authority reads the flip that authorizes auto-merge, so an ack run
- *      under an agent actor clears nothing. And acts are identified by event
- *      TYPE, never by payload shape: a `note` carrying a node-shaped payload
- *      is inert data, neither a change nor a clear.
+ *      nothing else.
  *
- *   3. Before a human has EVER touched the roadmap there is no window, so
- *      there is no line — a first-touch human is told nothing rather than
- *      shown an empty header (F5's acceptance criterion). Their first act, or
- *      their first ack, is what sets the baseline.
+ *      Both halves are load-bearing. Keying only on roadmap acts hides the
+ *      very case the surface exists for — a human who works on items and comes
+ *      back to twenty nodes agents built AFK, having never touched a node
+ *      themselves. Keying only on the reader's own acts breaks "any
+ *      human-attributed roadmap act clears it", which is a fact about the
+ *      roadmap, not about who happens to be reading it.
+ *
+ *      Provenance is read from the JOURNAL, exactly as merge authority reads
+ *      the flip that authorizes auto-merge, so an ack run under an agent actor
+ *      clears nothing. And acts are identified by event TYPE, never by payload
+ *      shape: a `note` carrying a node-shaped payload is inert data, neither a
+ *      change nor a clear.
+ *
+ *   3. A reader who has NEVER acted in this store has no window, so there is
+ *      no line — they are told nothing rather than shown an empty header
+ *      (F5's acceptance criterion). Their first act of any kind sets the
+ *      baseline. An AGENT reader gets nothing either: the line is for a
+ *      human's eyes by definition, and an agent reading its own work back as
+ *      "awaiting" would be noise in every AFK brief.
  *
  * Deterministic throughout: config plus journal events in, an answer out. No
  * clock, no network, no judgment.
@@ -53,7 +67,7 @@ export interface AwaitingRoadmapReview {
   nodes: AwaitingRoadmapNode[];
   /** Distinct nodes beyond the cap — stated, never silently dropped. */
   more: number;
-  /** The timestamp of the human roadmap act the window opens after. */
+  /** The timestamp of the act the window opens at — the reader's last touch. */
   since: string;
 }
 
@@ -89,37 +103,57 @@ function touchedNode(event: JournalEvent): AwaitingRoadmapNode {
 }
 
 /**
- * Resolve what awaits the human's eyes. `events` may arrive in any order and
+ * Resolve what awaits the reader's eyes. `events` may arrive in any order and
  * is read once; only agent roadmap mutations are retained, so memory stays
  * proportional to roadmap history rather than to the journal.
  *
  * The window is decided by TIMESTAMP alone, and inclusively at its lower edge:
- * an agent act sharing the clearing act's second stays raised. Every CLI
- * invocation mints its own
- * session segment, so same-second acts from different sessions all carry seq 0
- * and the total order falls through to the random event id — a lottery that
- * could otherwise hide a change behind an ack that never saw it. Merge
- * authority fails safe by withholding authority; the safe direction HERE is
- * the opposite one, showing the change, because the cost of the fail-safe is
- * one line a human reads twice.
+ * an agent act sharing the baseline act's second stays raised. Every CLI
+ * invocation mints its own session segment, so same-second acts from different
+ * sessions all carry seq 0 and the total order falls through to the random
+ * event id — a lottery that could otherwise hide a change behind an ack that
+ * never saw it. Merge authority fails safe by withholding authority; the safe
+ * direction HERE is the opposite one, showing the change, because the cost of
+ * the fail-safe is one line a human reads twice.
+ *
+ * `reader` is matched by kind AND id, never by kind alone: another human's
+ * ordinary work says nothing about where THIS reader last was. (Its `session`
+ * is deliberately ignored — sessions are per-invocation, and a human is the
+ * same human across them.)
  */
 export function awaitingRoadmapReview(
   governance: Partial<Governance> | undefined,
+  reader: Actor,
   events: Iterable<JournalEvent>,
 ): AwaitingRoadmapReview | undefined {
   if (resolveGovernance(governance).product.mode === "agent") return undefined;
+  if (reader.kind !== "human") return undefined;
 
-  let cutoff: string | undefined;
+  // Tracked apart, because they answer different questions: the reader's own
+  // presence is what makes a window EXIST, and any human's roadmap act only
+  // moves one that already does. A reader who has never been here gets no line
+  // from someone else's act.
+  let readerLatest: string | undefined;
+  let roadmapLooked: string | undefined;
   const agentActs: JournalEvent[] = [];
   for (const event of events) {
+    if (event.actor.kind === reader.kind && event.actor.id === reader.id) {
+      if (readerLatest === undefined || event.ts > readerLatest) readerLatest = event.ts;
+    }
     if (event.actor.kind === "human") {
-      if (!CLEARING_EVENT_TYPES.has(event.type)) continue;
-      if (cutoff === undefined || event.ts > cutoff) cutoff = event.ts;
+      if (
+        CLEARING_EVENT_TYPES.has(event.type) &&
+        (roadmapLooked === undefined || event.ts > roadmapLooked)
+      ) {
+        roadmapLooked = event.ts;
+      }
     } else if (CHANGE_EVENT_TYPES.has(event.type)) {
       agentActs.push(event);
     }
   }
-  if (cutoff === undefined) return undefined;
+  if (readerLatest === undefined) return undefined;
+  const cutoff =
+    roadmapLooked !== undefined && roadmapLooked > readerLatest ? roadmapLooked : readerLatest;
 
   // First-touch order, latest name per node: a node renamed inside the window
   // is listed as it now stands, which is what `nahel roadmap` will show.

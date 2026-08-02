@@ -335,13 +335,19 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
     expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
   });
 
-  test("a human `note` carrying a node payload clears nothing — types, not payload shapes", () => {
+  test("ANOTHER human's `note` carrying a node payload clears nothing — types, not payload shapes", () => {
+    // The reader's OWN acts move their baseline whatever the type — they were
+    // here. Somebody else's act only clears when it is a real roadmap act, so
+    // a note dressed up as one advances nothing.
+    const ana: Actor = { kind: "human", id: "ana" };
     const events = [
       nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
-      nodeEvent("2026-08-01T12:00:00Z", HUMAN, { id: "n1", name: "alpha" }, "note"),
+      nodeEvent("2026-08-01T12:00:00Z", ana, { id: "n1", name: "alpha" }, "note"),
     ];
-    expect(awaitingRoadmapReview(undefined, HUMAN, events)!.changes).toBe(1);
+    const status = awaitingRoadmapReview(undefined, HUMAN, events)!;
+    expect(status.changes).toBe(1);
+    expect(status.since).toBe("2026-08-01T10:00:00Z");
   });
 
   test("an act with an unreadable payload is still surfaced, keyed by its own act id", () => {

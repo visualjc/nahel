@@ -17,6 +17,7 @@ import type {
   ObservationFrontmatter,
   WorkItemFrontmatter,
 } from "../schema/records";
+import { resolveActor } from "../store/actor";
 import {
   knowledgePaths,
   listObservations,
@@ -81,6 +82,13 @@ export interface BriefInputs {
   governance?: Config["governance"];
   /** Merge authority in force, with its journal provenance (F3.4). */
   merge: MergeAuthorityStatus;
+  /**
+   * The actor this brief is rendered FOR (Phase 4 F5). The awaiting-your-eyes
+   * line is measured from THIS actor's own last recorded act, so the brief has
+   * to know whose eyes it is addressing — a resolved actor, exactly as every
+   * mutation resolves the one it acts as.
+   */
+  reader: Actor;
   /** Responsibility routing map from config, or undefined when unconfigured. */
   routing?: Config["routing"];
   /**
@@ -255,7 +263,7 @@ function governanceBody(inputs: BriefInputs): string {
     mergeLine(inputs.merge),
   ];
   // The posture's consequence, right under the posture that decides it (F5).
-  const awaiting = awaitingRoadmapReview(inputs.governance, inputs.events);
+  const awaiting = awaitingRoadmapReview(inputs.governance, inputs.reader, inputs.events);
   if (awaiting !== undefined) lines.push(awaitingRoadmapLine(awaiting));
   return lines.join("\n");
 }
@@ -549,11 +557,19 @@ export function renderBrief(inputs: BriefInputs): string {
  * Compose the brief for a repo: ONE store read pass (the same snapshot the
  * other views load, the merged journal, PRODUCT.md through the store's text
  * read) plus the injected warnings source, then the pure renderer.
+ *
+ * The READER is resolved here, the one way identity is ever resolved (PRD F9,
+ * store/actor.ts): the config actor entry, overridden by the NAHEL_ACTOR value
+ * the entry point read. The brief is rendered FOR somebody — F5's
+ * awaiting-your-eyes line is measured from that somebody's last act — and a
+ * view that guessed at identity where mutations resolve it would be a second
+ * answer to a settled question.
  */
 export async function composeBrief(
   layout: StoreLayout,
   config: Config,
   warningsSource: BriefWarningsSource = NO_WARNINGS,
+  actorOverride?: string,
 ): Promise<string> {
   const snapshot = await loadSnapshot(layout);
   const events = await collectProgress(layout);
@@ -576,6 +592,7 @@ export async function composeBrief(
     founding: config.founding,
     governance: config.governance,
     merge: await readMergeAuthority(layout, config),
+    reader: resolveActor(config.actor, actorOverride),
     routing: config.routing,
     observations,
     warnings,

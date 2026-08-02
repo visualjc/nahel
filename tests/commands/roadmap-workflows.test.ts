@@ -184,10 +184,30 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("own segment");
     expect(body).toContain("no provable order");
     expect(body).toContain("Do not batch");
-    // And the check that catches it having happened anyway: the reviewer's own
-    // read, with the ordering stated as the thing to look for.
+    // "Do not batch" GUARANTEES nothing on its own — two separate invocations
+    // share a second easily — so the doc must name the deliberate wait, and
+    // what skipping it costs.
+    expect(body).toContain("share a second");
+    expect(body).toContain("Wait until the clock has left");
+    expect(body).toContain("fails the migration");
+    expect(body).toContain("repaired by an explanatory note");
+  });
+
+  test("the acceptance is strict timestamp inequality, not rendered position", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
     expect(body).toContain("nahel progress");
+    // Rendered position stays, demoted to what it is: a same-second tie breaks
+    // by random event id, so the wrong order can render as the right one and
+    // an eyeballed timeline would accept a migration that proves nothing.
+    expect(body).toContain("quick look");
     expect(body).toContain("above every");
+    expect(body).toContain("random event id");
+    // The acceptance itself — the same comparison tests/e2e asserts.
+    expect(body).toContain("strict timestamp inequality");
+    expect(body).toContain("strictly later");
+    expect(body).toContain("fails the migration");
+    // And a tie is terminal: an explanatory note is not a repair.
+    expect(body).not.toContain("say so plainly in step 7");
   });
 
   test("the type the doc teaches is one `nahel log` accepts, not a reserved self-recorded type", async () => {

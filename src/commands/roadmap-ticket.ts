@@ -477,6 +477,43 @@ async function ticketClose(
   return 0;
 }
 
+/**
+ * `distill`: empty a decided ticket's body THROUGH the CLI (F7). Body deletion
+ * is a state mutation like any other — journaled, replayable, attributable —
+ * so a body emptied by a raw file edit is a `validate` finding, not a distill.
+ *
+ * Only the body goes: the decision, the reason and the resolution ref all stay
+ * on the record, and the decision's full text lives on in the journal event and
+ * in the observation the resolution distilled. An already-empty body is refused
+ * rather than journaled again, which is what makes re-running it after a crash
+ * repair a no-op instead of a second act.
+ */
+async function ticketDistill(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
+  const ref = onlyRef(args, "distill");
+  const ctx = await commandContext(cwd, env, actorOverride);
+  const current = await requireTicket(ctx.layout, ref);
+  requireState(current.frontmatter, ["resolved", "closed"], "distill");
+  if (current.body === "") {
+    throw new UsageError(
+      `ticket ${current.frontmatter.id} is already distilled — its body is empty and nothing was changed ` +
+        "(the decision reads back from `nahel recall` and `nahel progress`)",
+    );
+  }
+  await mutate(ctx, {
+    target: "ticket",
+    eventType: CORE_EVENT_TYPES.ticketDistilled,
+    frontmatter: { ...current.frontmatter, updated: ctx.env.now() },
+    body: "",
+  });
+  await closeStoreContext(ctx);
+  return 0;
+}
+
 /** The single-ref argument shape the four lifecycle verbs share. */
 export function onlyRef(args: string[], verb: string): string {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
@@ -501,6 +538,7 @@ export async function runTicketSubcommand(
   if (sub === "release") return ticketRelease(args, env, cwd, actorOverride);
   if (sub === "resolve") return ticketResolve(args, env, cwd, actorOverride);
   if (sub === "close") return ticketClose(args, env, cwd, actorOverride);
+  if (sub === "distill") return ticketDistill(args, env, cwd, actorOverride);
   throw new UsageError(
     sub === undefined
       ? "missing subcommand — expected `roadmap ticket new`, `update`, `show`, `claim`, `release`, `resolve`, `close`, or `distill`"

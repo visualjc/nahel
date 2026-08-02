@@ -11,7 +11,9 @@ import {
 import { appendEvent, readJournal } from "../store/journal";
 import {
   openStore,
+  readMaps,
   readRoadmapNodes,
+  readTickets,
   resolveRoadmapNode,
   type StoreLayout,
 } from "../store/layout";
@@ -20,6 +22,7 @@ import {
   isRoadmapColumnEvent,
   renderRoadmapNode,
   renderRoadmapOverview,
+  renderRoadmapZoom,
   roadmapNodeLinks,
 } from "../views/roadmap";
 import { loadSnapshot } from "../views/snapshot";
@@ -63,6 +66,12 @@ const USAGE = `usage:
     The product level: every product node with the derived distribution of its
     feature children, those children grouped by horizon with their derived
     columns, and the zoom hint. Reads only — nothing is written.
+
+  nahel roadmap <ref>
+    Zoom to one node: its ancestors, its own fields and intent, its derived
+    status, its chart, its children, and — for a feature — the work items
+    under its epic. <ref> is the node's slug or its id.
+    (A node named after a subcommand below is reached by \`roadmap node show\`.)
 
   nahel roadmap node new <kind> <name> --horizon <h> --intent <text>
                          [--parent <ref>] [--design-doc <path>] [--adr <path>]...
@@ -455,6 +464,41 @@ async function overview(cwd: string): Promise<number> {
 }
 
 /**
+ * `nahel roadmap <ref>` (F3): zoom to one node. The whole tree is already in
+ * hand for the breadcrumb and the reverse links, so the ref is matched against
+ * it rather than read a second time — id first, then slug, exactly the
+ * precedence resolveRoadmapNode uses.
+ */
+async function zoom(ref: string, args: string[], cwd: string): Promise<number> {
+  if (args.length > 0) {
+    throw new UsageError(
+      `roadmap takes one ref (a node slug or id) — got ${JSON.stringify([ref, ...args].join(" "))}`,
+    );
+  }
+  const layout = await openStore(cwd);
+  const nodes = await readRoadmapNodes(layout);
+  const record =
+    nodes.find(({ frontmatter }) => frontmatter.id === ref) ??
+    nodes.find(({ frontmatter }) => frontmatter.name === ref);
+  if (record === undefined) {
+    throw new UsageError(
+      `${JSON.stringify(ref)} does not name a roadmap node — run \`nahel roadmap\` to list them`,
+    );
+  }
+  const { items } = await loadSnapshot(layout);
+  console.log(
+    renderRoadmapZoom(record, {
+      nodes,
+      items,
+      events: await columnEvents(layout),
+      maps: await readMaps(layout),
+      tickets: await readTickets(layout),
+    }),
+  );
+  return 0;
+}
+
+/**
  * `nahel roadmap ack` (F5): record that a human has looked at the roadmap. The
  * act IS the whole verb — it carries no ref, no payload, and touches no record,
  * so there is nothing to parse and nothing to name. Under an AGENT actor it is
@@ -492,7 +536,7 @@ async function ack(
 export const roadmapCommand: Command = {
   name: "roadmap",
   description:
-    "create, update, and read roadmap nodes — the intent layer above work items (roadmap node new | update | show, roadmap ack)",
+    "read the roadmap and zoom into it, and create or update its nodes — the intent layer above work items (roadmap [ref], roadmap node new | update | show, roadmap ack)",
   run: (argv, env, cwd, actorOverride) =>
     execute("run `nahel roadmap --help` for usage", async () => {
       const [group, ...rest] = argv;
@@ -512,13 +556,9 @@ export const roadmapCommand: Command = {
       if (group === "ack") return ack(rest, env, cwd, actorOverride);
       if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
       if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);
-      if (group !== "node") {
-        throw new UsageError(
-          group === undefined
-            ? "missing subcommand — expected `roadmap node`, `roadmap map`, `roadmap ticket`, or `roadmap ack`"
-            : `unknown subcommand ${JSON.stringify(group)} — expected \`roadmap node\`, \`roadmap map\`, \`roadmap ticket\`, or \`roadmap ack\``,
-        );
-      }
+      // Anything left is a node REF, not an unknown subcommand: `nahel roadmap
+      // <slug-or-id>` is the zoom (F3).
+      if (group !== "node") return zoom(group, rest, cwd);
       const [sub, ...args] = rest;
       refuseDerivedFlags(args);
       if (sub === "new") return nodeNew(args, env, cwd, actorOverride);

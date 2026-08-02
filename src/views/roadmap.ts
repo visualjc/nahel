@@ -1,4 +1,4 @@
-import { ROADMAP_HORIZONS } from "../schema/enums";
+import { DECISION_TICKET_STATES, ROADMAP_HORIZONS } from "../schema/enums";
 import {
   DEPLOY_COMPLETED_EVENT_TYPE,
   QA_SWEEP_EVENT_TYPE,
@@ -12,6 +12,7 @@ import type {
 import { compareEvents } from "../store/journal";
 import type { MapRecord, RoadmapNodeRecord, TicketRecord } from "../store/layout";
 import { descendantIds } from "./snapshot";
+import { renderItemTree } from "./status";
 
 /**
  * The roadmap node renderer and its derived statuses (Phase 4 F1 + F2): PURE
@@ -487,16 +488,25 @@ function featureStatuses(
  * `status`'s `parent=<id> (missing)` already follows.
  */
 function featureLine(record: RoadmapNodeRecord, status: RoadmapFeatureStatus): string {
-  const node = record.frontmatter;
+  return [record.frontmatter.name, ...statusFields(status), `id=${record.frontmatter.id}`].join(
+    "  ",
+  );
+}
+
+/** The derived columns as fields — the same words in the list and in the zoom. */
+function statusFields(status: RoadmapFeatureStatus): string[] {
   return [
-    node.name,
     status.stage,
     `dev=${status.dev}`,
     `qa=${status.qa}`,
     `deploy=${status.deploy}`,
     `release=${status.release}`,
-    `id=${node.id}`,
-  ].join("  ");
+  ];
+}
+
+/** One node as a plain listing line — no derivation, for the kinds that have none. */
+function nodeLine(node: RoadmapNodeFrontmatter): string {
+  return `${node.name}  ${node.kind}  horizon=${node.horizon}  id=${node.id}`;
 }
 
 /**
@@ -531,16 +541,21 @@ const NO_ROADMAP =
   '  nahel roadmap node new product <slug> --horizon now --intent "<what this product is>"';
 
 /**
- * The zoom hint every rendering ends with (F3), so the drill path is
- * discoverable from the output itself rather than from the help. The example is
- * the alphabetically first slug among the nodes the rendering named: stable
- * against id churn and against re-parenting, so a doc-tested rendering does not
- * wobble when unrelated state moves.
+ * The zoom hint a rendering ends with (F3), so the drill path is discoverable
+ * from the output itself rather than from the help. The example is the
+ * alphabetically first slug among the nodes the rendering named: stable against
+ * id churn and against re-parenting, so a doc-tested rendering does not wobble
+ * when unrelated state moves.
  */
-function zoomHint(names: readonly string[]): string[] {
-  if (names.length === 0) return [];
-  const example = [...names].sort()[0]!;
-  return ["", `↳ nahel roadmap <node>  — zoom in (e.g. nahel roadmap ${example})`];
+function zoomHint(names: readonly string[]): string | undefined {
+  if (names.length === 0) return undefined;
+  return `↳ nahel roadmap <node>  — zoom in (e.g. nahel roadmap ${[...names].sort()[0]!})`;
+}
+
+/** Close a rendering with its hints; absent ones are dropped, not left blank. */
+function hintBlock(lines: string[], hints: readonly (string | undefined)[]): void {
+  const present = hints.filter((hint): hint is string => hint !== undefined);
+  if (present.length > 0) lines.push("", ...present);
 }
 
 /**
@@ -591,12 +606,161 @@ export function renderRoadmapOverview(
   if (outside.length > 0) {
     if (lines.length > 0) lines.push("");
     lines.push(`outside the product tree (${outside.length}):`);
-    for (const { frontmatter } of outside) {
-      lines.push(
-        `  ${frontmatter.name}  ${frontmatter.kind}  horizon=${frontmatter.horizon}  id=${frontmatter.id}`,
-      );
-    }
+    for (const { frontmatter } of outside) lines.push(`  ${nodeLine(frontmatter)}`);
   }
-  lines.push(...zoomHint(nodes.map(({ frontmatter }) => frontmatter.name)));
+  hintBlock(lines, [zoomHint(nodes.map(({ frontmatter }) => frontmatter.name))]);
+  return lines.join("\n");
+}
+
+/** Everything one zoom renders from — five store reads, no derivation done yet. */
+export interface RoadmapZoomFacts {
+  nodes: readonly RoadmapNodeRecord[];
+  items: readonly WorkItemFrontmatter[];
+  events: readonly JournalEvent[];
+  maps: readonly MapRecord[];
+  tickets: readonly TicketRecord[];
+}
+
+/**
+ * The path down to this node, `product › feature`, or undefined at the top —
+ * a one-crumb trail would only repeat the header line below it. A parent no
+ * record carries ends the trail as `<id> (missing)` rather than silently
+ * shortening it (the record may arrive by a later merge, ADR-0012), and a
+ * parent cycle ends it as `<name> (cycle)`: both are `validate` findings, and
+ * neither may hang the render.
+ */
+function breadcrumb(
+  nodes: readonly RoadmapNodeRecord[],
+  node: RoadmapNodeFrontmatter,
+): string | undefined {
+  const byId = new Map(nodes.map(({ frontmatter }) => [frontmatter.id, frontmatter]));
+  const trail: string[] = [];
+  const seen = new Set<string>([node.id]);
+  let parent = node.parent;
+  while (parent !== undefined) {
+    const found = byId.get(parent);
+    if (found === undefined) {
+      trail.unshift(`${parent} (missing)`);
+      break;
+    }
+    if (seen.has(found.id)) {
+      trail.unshift(`${found.name} (cycle)`);
+      break;
+    }
+    seen.add(found.id);
+    trail.unshift(found.name);
+    parent = found.parent;
+  }
+  return trail.length === 0 ? undefined : [...trail, node.name].join(" › ");
+}
+
+/**
+ * The chart hanging off this node (F7), summarised to one line: where the effort
+ * is going, its tickets by state — every state, at zero too, so the shape is
+ * fixed — and how much fog is left. An unfinished map is stated as the ordinary
+ * case and never flagged: mapping and building run concurrently by design (F8),
+ * so a feature may carry an in-flight epic and open questions at once.
+ */
+function mapLine(map: MapRecord | undefined, tickets: readonly TicketRecord[]): string {
+  if (map === undefined) return "map: none charted";
+  const own = tickets.filter(({ frontmatter }) => frontmatter.map === map.frontmatter.id);
+  const states = DECISION_TICKET_STATES.map(
+    (state) => `${own.filter(({ frontmatter }) => frontmatter.state === state).length} ${state}`,
+  ).join(" · ");
+  return [
+    `map: ${JSON.stringify(map.frontmatter.destination)}`,
+    `tickets: ${states}`,
+    `not yet specified (${map.frontmatter.fog.length})`,
+    `id=${map.frontmatter.id}`,
+  ].join("  ");
+}
+
+/**
+ * The third generation, reachable without a second command (F3): the epic's
+ * whole subtree, rendered by the ONE item-line renderer `nahel status` uses.
+ *
+ * The two "none" cases are stated, never errors: a feature with no epic yet is
+ * the ordinary shape of intent recorded before work exists, and an epic id no
+ * record carries is a `validate` finding whose record may still arrive by merge.
+ */
+function workItemsSection(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  lines: string[],
+): void {
+  lines.push("");
+  if (node.epic === undefined) {
+    lines.push(
+      "work items: none — no epic recorded yet " +
+        `(link one with \`nahel roadmap node update ${node.name} --epic <item-id>\`)`,
+    );
+    return;
+  }
+  if (!items.some((item) => item.id === node.epic)) {
+    lines.push(
+      `work items: none — epic ${node.epic} has no item record here ` +
+        "(`nahel validate` names it; the record may arrive by a later merge)",
+    );
+    return;
+  }
+  const covered = descendantIds(items, node.epic);
+  const subtree = items.filter((item) => covered.has(item.id));
+  lines.push(`work items (${subtree.length}):`);
+  // knownIds is every item in the store, so the epic's own parent — which sits
+  // outside this slice — is not reported as missing.
+  lines.push(...renderItemTree(subtree, new Set(items.map((item) => item.id))));
+}
+
+/**
+ * `nahel roadmap <ref>` (F3): the zoom. A breadcrumb of the node's ancestors,
+ * the node itself exactly as `roadmap node show` prints it (one renderer, so the
+ * two verbs cannot drift), then what the node's kind makes derivable — a
+ * feature's columns and the work under its epic, a product's distribution — its
+ * chart, its children, and the hints that carry the reader further down.
+ *
+ * An initiative gets no derived line of its own: its rollup semantics are
+ * deliberately undefined until a real initiative lands (F1's non-goal), and a
+ * number invented here would be exactly the judgment the layer refuses to make.
+ */
+export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomFacts): string {
+  const node = record.frontmatter;
+  const lines: string[] = [];
+  const trail = breadcrumb(facts.nodes, node);
+  if (trail !== undefined) lines.push(trail);
+  lines.push(renderRoadmapNode(record, roadmapNodeLinks(facts.nodes, node.id)));
+
+  if (node.kind === "feature") {
+    lines.push("", `status: ${statusFields(featureStatus(node, facts.items, facts.events)).join("  ")}`);
+  }
+
+  const features = featureStatuses(productFeatureNodes(facts.nodes, node.id), facts.items, facts.events);
+  if (node.kind === "product") {
+    lines.push("", `features: ${renderProductStatus(features.map(({ status }) => status.dev))}`);
+  }
+  if (features.length > 0) {
+    if (node.kind !== "product") lines.push("");
+    horizonGroups(features, "  ", lines);
+  }
+  const others = facts.nodes.filter(
+    ({ frontmatter }) => frontmatter.parent === node.id && frontmatter.kind !== "feature",
+  );
+  if (others.length > 0) {
+    lines.push("", `other children (${others.length}):`);
+    for (const { frontmatter } of others) lines.push(`  ${nodeLine(frontmatter)}`);
+  }
+
+  const map = facts.maps.find(({ frontmatter }) => frontmatter.node === node.id);
+  lines.push("", mapLine(map, facts.tickets));
+
+  if (node.kind === "feature") workItemsSection(node, facts.items, lines);
+
+  const children = [...features.map(({ record: child }) => child), ...others];
+  hintBlock(lines, [
+    zoomHint(children.map(({ frontmatter }) => frontmatter.name)),
+    node.epic !== undefined && facts.items.some((item) => item.id === node.epic)
+      ? `↳ nahel progress --item ${node.epic}  — the work under this feature`
+      : undefined,
+    map === undefined ? undefined : `↳ nahel roadmap map show ${node.name}  — the chart`,
+  ]);
   return lines.join("\n");
 }

@@ -1,3 +1,4 @@
+import type { WorkItemFrontmatter } from "../schema/records";
 import { buildItemTree, type ItemNode, type RunSnapshot, type Snapshot } from "./snapshot";
 
 /**
@@ -62,6 +63,26 @@ function renderNodes(
   }
 }
 
+/**
+ * The work-item tree as lines, each already indented by its depth — the one
+ * item-line renderer in the codebase. `renderStatus` prints it for the whole
+ * store; the roadmap's feature zoom (Phase 4 F3) prints it for one epic's
+ * subtree, so the third generation reads the same everywhere.
+ *
+ * `knownIds` is deliberately separate from `items`: a subtree's own root has a
+ * parent OUTSIDE the slice, and marking that parent `(missing)` would report a
+ * gap the store does not have. Callers pass every id the store carries.
+ */
+export function renderItemTree(
+  items: readonly WorkItemFrontmatter[],
+  knownIds: ReadonlySet<string>,
+  options: RenderStatusOptions = {},
+): string[] {
+  const lines: string[] = [];
+  renderNodes(buildItemTree(items), 0, knownIds, options, lines);
+  return lines;
+}
+
 function runLine(entry: RunSnapshot): string {
   const { run } = entry;
   return [
@@ -82,7 +103,7 @@ export function renderStatus(snapshot: Snapshot, options: RenderStatusOptions = 
   } else {
     lines.push("work items:");
     const knownIds = new Set(snapshot.items.map((item) => item.id));
-    renderNodes(buildItemTree(snapshot.items), 0, knownIds, options, lines);
+    lines.push(...renderItemTree(snapshot.items, knownIds, options));
   }
 
   lines.push("");

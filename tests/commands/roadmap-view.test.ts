@@ -408,7 +408,7 @@ describe("nahel roadmap <ref> — zooming a node (F3)", () => {
     const { root, env } = await setup();
     const { epic } = await product(env, root);
     expect(await itemCommand.run(["update", epic, "--status", "in-progress"], env, root)).toBe(0);
-    const child = await newItem(env, root, ["task", "half-done", "direct", "--parent", epic]);
+    const child = await newItem(env, root, ["chore", "half-done", "direct", "--parent", epic]);
     expect(await itemCommand.run(["update", child, "--status", "in-progress"], env, root)).toBe(0);
     expect(
       await roadmapCommand.run(

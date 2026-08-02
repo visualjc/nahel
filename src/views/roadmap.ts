@@ -125,12 +125,39 @@ export function featureDevStatus(
   node: RoadmapNodeFrontmatter,
   items: readonly WorkItemFrontmatter[],
 ): RoadmapDevRollup {
-  const epic = node.epic;
+  return devRollup(node.epic, items, epicCoverage(node, items));
+}
+
+/** A node with no epic covers nothing — no walk, and no event can associate. */
+const NO_COVERAGE: ReadonlySet<string> = new Set();
+
+/**
+ * The item ids a feature node's epic covers: the epic plus its descendants, the
+ * ONE walk of the item tree per node. Callers that need both the rollup and the
+ * event association compute it once and pass it to each — they are asking the
+ * same question of the same subtree.
+ */
+function epicCoverage(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+): ReadonlySet<string> {
+  return node.epic === undefined ? NO_COVERAGE : descendantIds(items, node.epic);
+}
+
+/**
+ * The rollup over an ALREADY-computed coverage set — the single place every row
+ * of the truth table lives, so `validate`'s reading and the views' reading
+ * cannot drift apart.
+ */
+function devRollup(
+  epic: string | undefined,
+  items: readonly WorkItemFrontmatter[],
+  covered: ReadonlySet<string>,
+): RoadmapDevRollup {
   if (epic === undefined) return { status: "planned" };
   if (!items.some((item) => item.id === epic)) {
     return { status: "unknown", anomaly: "epic-missing" };
   }
-  const covered = descendantIds(items, epic);
   const children = items.filter((item) => item.id !== epic && covered.has(item.id));
   const live = children.filter((item) => item.status !== "dropped");
   if (live.length === 0) {
@@ -265,17 +292,17 @@ export function featureStatus(
   items: readonly WorkItemFrontmatter[],
   events: readonly JournalEvent[],
 ): RoadmapFeatureStatus {
-  const rollup = featureDevStatus(node, items);
+  // One walk, shared by the rollup and the association below. A node with no
+  // epic yields the empty coverage, so the loop simply matches nothing.
+  const covered = epicCoverage(node, items);
+  const rollup = devRollup(node.epic, items, covered);
   const winners = new Map<string, JournalEvent>();
-  if (node.epic !== undefined) {
-    const covered = descendantIds(items, node.epic);
-    for (const event of events) {
-      if (event.item === undefined || !covered.has(event.item)) continue;
-      if (!COLUMN_EVENT_TYPES.has(event.type)) continue;
-      const current = winners.get(event.type);
-      if (current === undefined || compareEvents(current, event) < 0) {
-        winners.set(event.type, event);
-      }
+  for (const event of events) {
+    if (event.item === undefined || !covered.has(event.item)) continue;
+    if (!COLUMN_EVENT_TYPES.has(event.type)) continue;
+    const current = winners.get(event.type);
+    if (current === undefined || compareEvents(current, event) < 0) {
+      winners.set(event.type, event);
     }
   }
   const sweep = winners.get(QA_SWEEP_EVENT_TYPE);

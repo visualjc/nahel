@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { rm, writeFile } from "node:fs/promises";
 import { configCommand } from "../../src/commands/config";
+import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
-import type { JournalEvent } from "../../src/schema/records";
-import { knowledgePaths, readConfig, readItem, writeItem } from "../../src/store/layout";
+import type { JournalEvent, RoadmapNodeFrontmatter } from "../../src/schema/records";
+import {
+  knowledgePaths,
+  readConfig,
+  readItem,
+  writeItem,
+  type RoadmapNodeRecord,
+} from "../../src/store/layout";
 import { GOAL_HEADING, HARD_CONSTRAINTS_HEADING } from "../../src/templates/product";
 import {
   BRIEF_BUDGET_BYTES,
@@ -1392,5 +1399,119 @@ describe("brief — PRD success-criterion-1 rubric coverage", () => {
     ]) {
       expect(brief).toContain(location);
     }
+  });
+});
+
+describe("renderBrief — the roadmap block (Phase 4 F4)", () => {
+  /** A node record for the block, minimal and deterministic. */
+  function node(
+    env: Env,
+    overrides: Partial<RoadmapNodeFrontmatter> = {},
+  ): RoadmapNodeRecord {
+    const ts = env.now();
+    return {
+      frontmatter: {
+        id: generateId(env),
+        name: "a-feature",
+        kind: "feature",
+        horizon: "now",
+        created: ts,
+        updated: ts,
+        ...overrides,
+      },
+      body: "",
+    };
+  }
+
+  /** The `roadmap.node-created` event mutate() writes for a node. */
+  function creation(env: Env, record: RoadmapNodeRecord, ts: string): JournalEvent {
+    return {
+      id: generateId(env),
+      ts,
+      seq: 0,
+      type: "roadmap.node-created",
+      actor: { kind: "agent", id: "claude-code" },
+      payload: { target: "roadmap-node", record: record.frontmatter, body: "" },
+    };
+  }
+
+  test("a store with no roadmap nodes carries NO roadmap section — zero noise", () => {
+    expect(renderBrief(makeInputs())).not.toContain("== roadmap ==");
+    expect(renderBrief(makeInputs({ nodes: [] }))).not.toContain("== roadmap ==");
+  });
+
+  test("nodes present → the block renders, between routing and item statuses", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const charted = node(env, { name: "detached-state-repo" });
+    const brief = renderBrief(
+      makeInputs({
+        nodes: [charted],
+        events: [creation(env, charted, "2026-07-16T12:00:01Z")],
+        routing: { implementation: { agent: "codex" } },
+      }),
+    );
+
+    const routing = brief.indexOf("== responsibility routing ==");
+    const roadmap = brief.indexOf("== roadmap ==");
+    const statuses = brief.indexOf("== item statuses ==");
+    expect(routing).toBeGreaterThanOrEqual(0);
+    expect(roadmap).toBeGreaterThan(routing);
+    expect(statuses).toBeGreaterThan(roadmap);
+    const section = brief.split("== roadmap ==\n")[1]!.split("\n\n")[0]!;
+    expect(section).toBe(
+      `detached-state-repo  feature  planned  id=${charted.frontmatter.id}\nnext: none\nlater: none`,
+    );
+  });
+
+  test("the awaiting-your-eyes line stays with governance — the posture decides it", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const charted = node(env, { name: "agent-charted" });
+    const brief = renderBrief(
+      makeInputs({
+        nodes: [charted],
+        reader: { kind: "human", id: "jim" },
+        events: [
+          {
+            id: generateId(env),
+            ts: "2026-07-16T12:00:00Z",
+            seq: 0,
+            type: "note",
+            actor: { kind: "human", id: "jim" },
+            payload: {},
+          },
+          creation(env, charted, "2026-07-16T12:00:05Z"),
+        ],
+      }),
+    );
+
+    const governance = brief.split("== governance & merge authority ==")[1]!.split("\n\n")[0]!;
+    expect(governance).toContain("roadmap changes since your last touch");
+    const roadmapBlock = brief.split("== roadmap ==\n")[1]!.split("\n\n")[0]!;
+    expect(roadmapBlock).not.toContain("roadmap changes since your last touch");
+    expect(roadmapBlock.split("\n").length).toBeLessThanOrEqual(13);
+  });
+
+  test("composeBrief reads the store's roadmap nodes and renders them", async () => {
+    const store = await populatedWithProduct();
+    expect(
+      await roadmapCommand.run(
+        [
+          "node",
+          "new",
+          "product",
+          "nahel",
+          "--horizon",
+          "now",
+          "--intent",
+          "Durable, tool-agnostic project state.",
+        ],
+        store.env,
+        store.root,
+      ),
+    ).toBe(0);
+
+    const brief = await composeBrief(store.layout, await readConfig(store.layout));
+    expect(brief).toContain("== roadmap ==");
+    expect(brief).toContain("nahel  product  no features");
   });
 });

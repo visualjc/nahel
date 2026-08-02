@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
 import {
+  CORE_EVENT_TYPES,
   DEPLOY_COMPLETED_EVENT_TYPE,
   QA_SWEEP_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
@@ -13,9 +14,12 @@ import type {
 } from "../../src/schema/records";
 import type { RoadmapNodeRecord } from "../../src/store/layout";
 import {
+  BRIEF_ROADMAP_MAX_LINES,
+  BRIEF_ROADMAP_NOW_CAP,
   featureDevStatus,
   featureStatus,
   productFeatureNodes,
+  renderBriefRoadmap,
   renderProductStatus,
 } from "../../src/views/roadmap";
 import { makeFrontmatter, seededEnv } from "../store/helpers";
@@ -780,5 +784,323 @@ describe("featureStatus — the epic's subtree is walked once", () => {
     expect(status.dev).toBe("unknown");
     expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
     expect(counted.reads()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The brief's roadmap block (Phase 4 F4): DETERMINISTIC ELISION, not a
+ * completeness promise the cap cannot keep. Many parallel `now`s are doctrine
+ * (F8), so the block degrades predictably — at most ten `now` nodes in
+ * horizon-entry order, the remainder counted, and one summary line per further
+ * horizon, inside a hard thirteen-line budget.
+ */
+
+/** A node RECORD (frontmatter plus its intent prose) for the block renderer. */
+function makeNodeRecord(
+  env: Env,
+  overrides: Partial<RoadmapNodeFrontmatter> = {},
+): RoadmapNodeRecord {
+  return { frontmatter: makeNode(env, overrides), body: "" };
+}
+
+/**
+ * A `roadmap.node-created` / `roadmap.node-updated` event carrying the node
+ * record, exactly as mutate() journals one (`{target, record, body}`).
+ */
+function nodeEvent(
+  env: Env,
+  node: RoadmapNodeFrontmatter,
+  type: string,
+  ts: string,
+  seq = 0,
+): JournalEvent {
+  return {
+    id: generateId(env),
+    ts,
+    seq,
+    type,
+    actor: { kind: "agent", id: "claude-code" },
+    payload: { target: "roadmap-node", record: node, body: "" },
+  };
+}
+
+/** The creation event that put a node on its (unchanged) horizon. */
+function created(env: Env, node: RoadmapNodeFrontmatter, ts: string): JournalEvent {
+  return nodeEvent(env, node, CORE_EVENT_TYPES.roadmapNodeCreated, ts);
+}
+
+/** A re-horizoning event: the same node, recorded carrying a new horizon. */
+function rehorizoned(
+  env: Env,
+  node: RoadmapNodeFrontmatter,
+  horizon: RoadmapNodeFrontmatter["horizon"],
+  ts: string,
+): JournalEvent {
+  return nodeEvent(env, { ...node, horizon }, CORE_EVENT_TYPES.roadmapNodeUpdated, ts);
+}
+
+/** A timestamp n seconds into 2026-07-16T12:00:00Z, the fixtures' epoch. */
+function at(second: number): string {
+  return `2026-07-16T12:${String(Math.floor(second / 60)).padStart(2, "0")}:${String(
+    second % 60,
+  ).padStart(2, "0")}Z`;
+}
+
+describe("renderBriefRoadmap — the block's presence", () => {
+  test("a store with no nodes renders NOTHING — absent, not empty scaffolding", () => {
+    expect(renderBriefRoadmap([], [], [])).toBeNull();
+  });
+
+  test("a store whose only nodes sit on later still renders: the horizons speak", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const node = makeNodeRecord(env, { name: "someday", horizon: "later" });
+
+    const block = renderBriefRoadmap([node], [], [created(env, node.frontmatter, at(1))]);
+
+    expect(block).not.toBeNull();
+    expect(block!.split("\n")).toEqual(["now: none", "next: none", "later: 1 node"]);
+  });
+});
+
+describe("renderBriefRoadmap — deterministic elision at the cap", () => {
+  /** `count` now-nodes, each created one second later than the last. */
+  function manyNow(count: number): { nodes: RoadmapNodeRecord[]; events: JournalEvent[] } {
+    const env = seededEnv({ tickSeconds: 1 });
+    const nodes: RoadmapNodeRecord[] = [];
+    const events: JournalEvent[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const node = makeNodeRecord(env, { name: `feature-${String(i).padStart(2, "0")}` });
+      nodes.push(node);
+      events.push(created(env, node.frontmatter, at(i)));
+    }
+    return { nodes, events };
+  }
+
+  test("40 now nodes → exactly 10 lines, a +30 more line, and the two summaries", () => {
+    const { nodes, events } = manyNow(40);
+
+    const lines = renderBriefRoadmap(nodes, [], events)!.split("\n");
+
+    expect(lines.length).toBe(13);
+    expect(lines.length).toBeLessThanOrEqual(BRIEF_ROADMAP_MAX_LINES);
+    expect(lines.slice(0, 10).map((line) => line.split("  ")[0])).toEqual([
+      "feature-00",
+      "feature-01",
+      "feature-02",
+      "feature-03",
+      "feature-04",
+      "feature-05",
+      "feature-06",
+      "feature-07",
+      "feature-08",
+      "feature-09",
+    ]);
+    expect(lines[10]).toBe("+30 more — nahel roadmap");
+    expect(lines[11]).toBe("next: none");
+    expect(lines[12]).toBe("later: none");
+  });
+
+  test("re-rendering after an unrelated mutation returns the same 10 in the same order", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { nodes, events } = manyNow(40);
+    const first = renderBriefRoadmap(nodes, [], events);
+
+    const unrelated: JournalEvent = {
+      id: generateId(env),
+      ts: at(300),
+      seq: 0,
+      type: "item.created",
+      actor: { kind: "agent", id: "claude-code" },
+      payload: { target: "item", record: makeFrontmatter(env), body: "" },
+    };
+
+    expect(renderBriefRoadmap(nodes, [], [...events, unrelated])).toBe(first!);
+  });
+
+  test("exactly at the cap there is no remainder line at all", () => {
+    const { nodes, events } = manyNow(10);
+
+    const lines = renderBriefRoadmap(nodes, [], events)!.split("\n");
+
+    expect(lines.length).toBe(12);
+    expect(lines.some((line) => line.includes("more — nahel roadmap"))).toBe(false);
+  });
+
+  test("one over the cap counts the one", () => {
+    const { nodes, events } = manyNow(11);
+
+    expect(renderBriefRoadmap(nodes, [], events)!.split("\n")[10]).toBe(
+      "+1 more — nahel roadmap",
+    );
+  });
+});
+
+describe("renderBriefRoadmap — horizon-entry order", () => {
+  test("oldest entry first, and it is the act that set the CURRENT horizon", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    // Charted first, but re-horizoned away and back: it entered `now` LAST.
+    const returned = makeNodeRecord(env, { name: "returned" });
+    const steady = makeNodeRecord(env, { name: "steady" });
+    const events = [
+      created(env, returned.frontmatter, at(1)),
+      rehorizoned(env, returned.frontmatter, "next", at(2)),
+      created(env, steady.frontmatter, at(3)),
+      rehorizoned(env, returned.frontmatter, "now", at(4)),
+    ];
+
+    const lines = renderBriefRoadmap([returned, steady], [], events)!.split("\n");
+
+    expect(lines.slice(0, 2).map((line) => line.split("  ")[0])).toEqual(["steady", "returned"]);
+  });
+
+  test("an update that leaves the horizon alone does not restart the clock", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const renamed = makeNodeRecord(env, { name: "renamed" });
+    const later = makeNodeRecord(env, { name: "later-chartered" });
+    const events = [
+      created(env, renamed.frontmatter, at(1)),
+      created(env, later.frontmatter, at(2)),
+      // Same horizon, new intent — the node never left `now`.
+      nodeEvent(env, renamed.frontmatter, CORE_EVENT_TYPES.roadmapNodeUpdated, at(9)),
+    ];
+
+    const lines = renderBriefRoadmap([renamed, later], [], events)!.split("\n");
+
+    expect(lines.slice(0, 2).map((line) => line.split("  ")[0])).toEqual([
+      "renamed",
+      "later-chartered",
+    ]);
+  });
+
+  test("same-second entries fall through to seq, then to the event id", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const second = makeNodeRecord(env, { name: "zzz-second" });
+    const first = makeNodeRecord(env, { name: "aaa-first" });
+    const events = [
+      nodeEvent(env, first.frontmatter, CORE_EVENT_TYPES.roadmapNodeCreated, at(1), 0),
+      nodeEvent(env, second.frontmatter, CORE_EVENT_TYPES.roadmapNodeCreated, at(1), 1),
+    ];
+
+    // seq decides, NOT the slug: the journal's own total order is the rule.
+    const lines = renderBriefRoadmap([second, first], [], events)!.split("\n");
+    expect(lines.slice(0, 2).map((line) => line.split("  ")[0])).toEqual([
+      "aaa-first",
+      "zzz-second",
+    ]);
+  });
+
+  test("a node no journaled act explains sorts LAST, and those tie by slug", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const journaled = makeNodeRecord(env, { name: "journaled" });
+    const orphanB = makeNodeRecord(env, { name: "b-orphan" });
+    const orphanA = makeNodeRecord(env, { name: "a-orphan" });
+
+    const lines = renderBriefRoadmap(
+      [orphanB, orphanA, journaled],
+      [],
+      [created(env, journaled.frontmatter, at(5))],
+    )!.split("\n");
+
+    expect(lines.slice(0, 3).map((line) => line.split("  ")[0])).toEqual([
+      "journaled",
+      "a-orphan",
+      "b-orphan",
+    ]);
+  });
+
+  test("a record whose horizon the journal never reached is unexplained, not misdated", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    // The record says `now`; the journal only ever recorded it on `next` — a
+    // hand-edit or a compacted history. No act set THIS horizon.
+    const drifted = makeNodeRecord(env, { name: "drifted" });
+    const explained = makeNodeRecord(env, { name: "explained" });
+    const events = [
+      nodeEvent(
+        env,
+        { ...drifted.frontmatter, horizon: "next" },
+        CORE_EVENT_TYPES.roadmapNodeCreated,
+        at(1),
+      ),
+      created(env, explained.frontmatter, at(9)),
+    ];
+
+    const lines = renderBriefRoadmap([drifted, explained], [], events)!.split("\n");
+
+    expect(lines.slice(0, 2).map((line) => line.split("  ")[0])).toEqual([
+      "explained",
+      "drifted",
+    ]);
+  });
+});
+
+describe("renderBriefRoadmap — what each line says", () => {
+  test("a feature carries F2's single-word stage; a product carries its distribution", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const product = makeNodeRecord(env, { name: "nahel", kind: "product" });
+    const feature = makeNodeRecord(env, {
+      name: "detached-state-repo",
+      parent: product.frontmatter.id,
+      epic: epic.id,
+    });
+    const events = [
+      created(env, product.frontmatter, at(1)),
+      created(env, feature.frontmatter, at(2)),
+    ];
+
+    const lines = renderBriefRoadmap([product, feature], items, events)!.split("\n");
+
+    expect(lines[0]).toBe(
+      `nahel  product  1 built · 0 in-flight · 0 planned · 0 unknown  id=${product.frontmatter.id}`,
+    );
+    expect(lines[1]).toBe(
+      `detached-state-repo  feature  built  id=${feature.frontmatter.id}`,
+    );
+  });
+
+  test("an initiative claims no derived status — the layer refuses to invent one", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const initiative = makeNodeRecord(env, { name: "q3-push", kind: "initiative" });
+
+    const lines = renderBriefRoadmap(
+      [initiative],
+      [],
+      [created(env, initiative.frontmatter, at(1))],
+    )!.split("\n");
+
+    expect(lines[0]).toBe(`q3-push  initiative  id=${initiative.frontmatter.id}`);
+  });
+
+  test("the summary lines count the other two horizons, singular and plural", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const nodes = [
+      makeNodeRecord(env, { name: "a-now" }),
+      makeNodeRecord(env, { name: "b-next", horizon: "next" }),
+      makeNodeRecord(env, { name: "c-next", horizon: "next" }),
+      makeNodeRecord(env, { name: "d-later", horizon: "later" }),
+    ];
+    const events = nodes.map((node, i) => created(env, node.frontmatter, at(i)));
+
+    const lines = renderBriefRoadmap(nodes, [], events)!.split("\n");
+
+    expect(lines[1]).toBe("next: 2 nodes");
+    expect(lines[2]).toBe("later: 1 node");
+  });
+
+  test("the block never exceeds its budget, whatever the store holds", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const nodes: RoadmapNodeRecord[] = [];
+    const events: JournalEvent[] = [];
+    for (let i = 0; i < 60; i += 1) {
+      const horizon = (["now", "next", "later"] as const)[i % 3]!;
+      const node = makeNodeRecord(env, { name: `node-${String(i).padStart(2, "0")}`, horizon });
+      nodes.push(node);
+      events.push(created(env, node.frontmatter, at(i)));
+    }
+
+    expect(renderBriefRoadmap(nodes, [], events)!.split("\n").length).toBeLessThanOrEqual(
+      BRIEF_ROADMAP_MAX_LINES,
+    );
+    expect(BRIEF_ROADMAP_NOW_CAP).toBe(10);
   });
 });

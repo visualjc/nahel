@@ -9,6 +9,7 @@ import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
 import { readJournal } from "../../src/store/journal";
 import { ensureLayout, writeConfig, type StoreLayout } from "../../src/store/layout";
+import { ROADMAP_SUBCOMMANDS } from "../../src/views/roadmap";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
@@ -670,4 +671,51 @@ describe("the zoom hints are the drill path, and they run (F3)", () => {
     expect(timeline).toContain(epic);
     expect(timeline).toContain(leaf);
   });
+});
+
+describe("a hint never names a slug the dispatcher would swallow (F3)", () => {
+  /** The reserved words can never be spelled as ids, which is what makes the fix total. */
+  test("every roadmap subcommand word fails ID_PATTERN — an id can never be one", () => {
+    for (const word of ROADMAP_SUBCOMMANDS) {
+      expect(ID_PATTERN.test(word)).toBe(false);
+    }
+  });
+
+  test.each([...ROADMAP_SUBCOMMANDS])(
+    "a node named %s is hinted by id, and following the hint renders its zoom",
+    async (reserved) => {
+      const { root, env } = await setup();
+      // `zz-product` sorts last, so the reserved slug is the one the hint picks.
+      await newNode(env, root, [
+        "product",
+        "zz-product",
+        "--horizon",
+        "now",
+        "--intent",
+        "the product",
+      ]);
+      const id = await newNode(env, root, [
+        "feature",
+        reserved,
+        "--horizon",
+        "now",
+        "--intent",
+        "an awkward slug",
+        "--parent",
+        "zz-product",
+      ]);
+
+      const hint = (await view(env, root)).split("\n").find((line) => line.startsWith("↳ "));
+      expect(hint).toBeDefined();
+      expect(hint).toContain(`nahel roadmap ${id}`);
+      // …and it is followed, not merely read: the slug spelling would dispatch
+      // the subcommand and exit 1.
+      const command = hint!.slice("↳ ".length, hint!.indexOf("  — "));
+      const [, , ...args] = command.split(" ");
+      logs = [];
+      expect(await roadmapCommand.run(args, env, root)).toBe(0);
+      expect(stderr()).toBe("");
+      expect(logs.join("\n")).toContain(`${reserved}  feature  horizon=now  id=${id}`);
+    },
+  );
 });

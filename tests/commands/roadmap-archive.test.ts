@@ -215,6 +215,67 @@ async function released(
   return { root, layout, env, plan, epic, others: [other1, other2], node, nodeName };
 }
 
+/**
+ * A SECOND released feature whose PRD reuses a basename — the shape that makes
+ * two live documents want the same archive path. Its own epic, its own release,
+ * and the released node named as its predecessor: lineage done correctly, which
+ * is exactly when the collision bites.
+ */
+async function releasedSuccessor(
+  fixture: Released,
+  prdPath: string,
+  name: string,
+  body: string,
+): Promise<{ epic: string; node: string }> {
+  await mkdir(join(fixture.root, "docs", "prds"), { recursive: true });
+  await writeFile(join(fixture.root, prdPath), body, "utf8");
+  const epic = await newItem(fixture.env, fixture.root, [
+    "feature",
+    `${name}-epic`,
+    "full",
+    "--prd",
+    prdPath,
+  ]);
+  const leaf = await newItem(fixture.env, fixture.root, [
+    "feature",
+    `${name}-leaf`,
+    "direct",
+    "--parent",
+    epic,
+  ]);
+  expect(await itemCommand.run(["update", leaf, "--status", "done"], fixture.env, fixture.root)).toBe(
+    0,
+  );
+  const node = lastId(
+    await ok(fixture.env, fixture.root, [
+      "node",
+      "new",
+      "feature",
+      name,
+      "--horizon",
+      "now",
+      "--intent",
+      "The next delta on the same feature.",
+      "--parent",
+      "nahel",
+      "--epic",
+      epic,
+      "--prd",
+      prdPath,
+      "--predecessor",
+      fixture.nodeName,
+    ]),
+  );
+  await log(fixture.env, fixture.root, [
+    RELEASE_ANNOUNCED_EVENT_TYPE,
+    "--item",
+    epic,
+    "--data",
+    "version=0.4.0",
+  ]);
+  return { epic, node };
+}
+
 /** The `prd` field of every record that could hold one, keyed by id. */
 async function prdRefs(fixture: Released): Promise<Record<string, string | undefined>> {
   const refs: Record<string, string | undefined> = {};
@@ -727,5 +788,78 @@ describe("the closed-delta doctrine (F10)", () => {
     expect(report.out).toContain("zzzzzzzz");
     // Both are warnings: neither was refused at write time, and validate passes.
     expect(report.code).toBe(0);
+  });
+});
+
+/**
+ * The archive destination is a real path with a real document in it, and a PRD
+ * basename is not unique across time: a successor feature that reuses the name
+ * its predecessor shipped under points at an archive slot that is already
+ * taken. Nothing about "move" may treat an occupied destination as "already
+ * done" — that reading unlinks a LIVE document into a stranger's file, which is
+ * the one thing F10 forbids outright ("no PRD is ever deleted").
+ */
+describe("an archive destination that is already occupied (F10)", () => {
+  const SUCCESSOR_TEXT = `---
+name: detached-state
+created: 2026-08-01T00:00:00Z
+---
+
+# Detached state, again
+
+The NEXT delta this PRD states.
+`;
+  const FOREIGN_TEXT = `> **Archived — the delta this PRD stated is closed.**
+>
+> - Journal: archived by event aaaaaaaa
+
+# Somebody else's closed delta
+`;
+
+  test("the verb refuses a destination collision outright, naming both paths — the live PRD is untouched", async () => {
+    const fixture = await released();
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    // The successor reuses the basename its predecessor shipped under.
+    await releasedSuccessor(fixture, PRD_PATH, "detached-state-repo-v2", SUCCESSOR_TEXT);
+
+    const said = await fails(fixture.env, fixture.root, ["archive", "detached-state-repo-v2"]);
+    expect(said).toContain(PRD_PATH);
+    expect(said).toContain(ARCHIVED_PATH);
+    expect(said).toContain("rename");
+
+    // Nothing was deleted and nothing was overwritten: the successor's live PRD
+    // is where it was, and the predecessor's archive still holds ITS document.
+    expect(await text(fixture.root, PRD_PATH)).toBe(SUCCESSOR_TEXT);
+    expect(await text(fixture.root, ARCHIVED_PATH)).toContain("The delta this PRD states.");
+    expect(
+      (await events(fixture.layout)).filter(
+        (event) => event.type === CORE_EVENT_TYPES.prdArchived,
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("repair never unlinks a source into an archive this event did not stamp", async () => {
+    const fixture = await released();
+    // Kill the move: the event lands, the source stays, the destination is absent.
+    await withFrozen(join(fixture.root, "docs", "prds"), async () => {
+      expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).not.toBe("");
+    });
+    // Then a same-named archived PRD arrives from somewhere else — a merge, a
+    // predecessor's archive — carrying a DIFFERENT act's stamp.
+    await mkdir(join(fixture.root, "docs", "prds", "archived"), { recursive: true });
+    await writeFile(join(fixture.root, ARCHIVED_PATH), FOREIGN_TEXT, "utf8");
+
+    const before = await validate(fixture.root);
+    expect(before.code).toBe(1);
+    expect(before.out).toContain("roadmap.document-collision");
+    expect(before.out).toContain(ARCHIVED_PATH);
+
+    const repaired = await validate(fixture.root, ["--repair"]);
+    // Repair completes what it can and REFUSES the move: the live PRD is still
+    // there, and the stranger's document is byte-identical.
+    expect(await text(fixture.root, PRD_PATH)).not.toBeNull();
+    expect(await text(fixture.root, ARCHIVED_PATH)).toBe(FOREIGN_TEXT);
+    expect(repaired.code).toBe(1);
+    expect((await validate(fixture.root)).out).toContain("roadmap.document-collision");
   });
 });

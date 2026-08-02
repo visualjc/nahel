@@ -7,6 +7,7 @@ import {
   roadmapNodeFrontmatterSchema,
   type JournalEvent,
   type RoadmapNodeFrontmatter,
+  type WorkItemFrontmatter,
 } from "../schema/records";
 import { appendEvent, readJournal } from "../store/journal";
 import {
@@ -16,6 +17,8 @@ import {
   readRoadmapNodes,
   readTickets,
   resolveRoadmapNode,
+  type MapRecord,
+  type RoadmapNodeRecord,
   type StoreLayout,
 } from "../store/layout";
 import { closeStoreContext, mutate } from "../store/mutate";
@@ -27,8 +30,9 @@ import {
   renderRoadmapOverview,
   renderRoadmapZoom,
   roadmapNodeLinks,
+  type FrontierScope,
 } from "../views/roadmap";
-import { loadSnapshot } from "../views/snapshot";
+import { descendantIds, loadSnapshot } from "../views/snapshot";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
 import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
 import { nearMissNames, resolveNodeRef } from "./roadmap-ref";
@@ -107,12 +111,13 @@ const USAGE = `usage:
     Print one node — its fields, its lineage both ways, and its intent prose.
     <ref> is the node's slug or its id; both address the same node.
 
-  nahel roadmap frontier
+  nahel roadmap frontier [ref]
     The takeable edge, across both kinds: the decision tickets that can be
     answered now (open, unclaimed, every blocker settled) and the work items
     that can be built now (backlog, unclaimed, every dependency done or
-    dropped). Reads only — it refuses nothing, and an entry it does not list
-    can still be started deliberately.
+    dropped). With <ref> — a node slug or id, or a map id — just that node's.
+    Reads only — it refuses nothing, and an entry it does not list can still
+    be started deliberately.
 
   nahel roadmap ack
     Say "seen": records a human-attributed acknowledgement that clears the
@@ -535,24 +540,63 @@ async function zoom(ref: string, args: string[], cwd: string): Promise<number> {
 }
 
 /**
- * `nahel roadmap frontier` (F8): the takeable edge. A pure read of the same
- * three collections the zoom's chart line reads, handed to the renderer that
- * applies F8's per-kind predicate — nothing here writes, and nothing anywhere
- * refuses work because a blocker is open.
+ * Narrow the frontier to one node (F8's `[ref]` form). Three spellings address
+ * the same node, exactly as `roadmap map show` accepts: the node's slug, the
+ * node's id, and the id of the map charting it — a reader holding a map id is
+ * asking about the node that map belongs to.
+ *
+ * A node with no chart scopes to NO map (null, never "the whole store"), and one
+ * with no epic scopes to no items: both are ordinary shapes — intent recorded
+ * before the work exists — and both render as a stated empty section.
+ */
+function frontierScope(
+  nodes: readonly RoadmapNodeRecord[],
+  maps: readonly MapRecord[],
+  items: readonly WorkItemFrontmatter[],
+  ref: string,
+): FrontierScope | undefined {
+  const viaMap = maps.find(({ frontmatter }) => frontmatter.id === ref)?.frontmatter.node;
+  const record =
+    nodes.find(({ frontmatter }) => frontmatter.id === ref) ??
+    nodes.find(({ frontmatter }) => frontmatter.name === ref) ??
+    nodes.find(({ frontmatter }) => frontmatter.id === viaMap);
+  if (record === undefined) return undefined;
+  const node = record.frontmatter;
+  return {
+    name: node.name,
+    map: maps.find(({ frontmatter }) => frontmatter.node === node.id)?.frontmatter.id ?? null,
+    items: node.epic === undefined ? new Set<string>() : descendantIds(items, node.epic),
+  };
+}
+
+/**
+ * `nahel roadmap frontier [ref]` (F8): the takeable edge. A pure read of the
+ * four collections F8's per-kind predicates join on, handed to the renderer
+ * that applies them — nothing here writes, and nothing anywhere refuses work
+ * because a blocker is open.
  */
 async function frontier(args: string[], cwd: string): Promise<number> {
-  if (args.length > 0) {
+  const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
+  if (positionals.length > 1) {
     throw new UsageError(
-      `roadmap frontier takes no arguments — it lists the whole store's takeable edge (got ${JSON.stringify(args[0])})`,
+      "roadmap frontier takes at most one <ref> — the whole store's edge, or one node's " +
+        `(got ${JSON.stringify(positionals.join(" "))})`,
     );
   }
   const layout = await openStore(cwd);
+  const nodes = await readRoadmapNodes(layout);
+  const maps = await readMaps(layout);
+  const { items } = await loadSnapshot(layout);
+  const ref = positionals[0];
+  const scope = ref === undefined ? undefined : frontierScope(nodes, maps, items, ref);
+  if (ref !== undefined && scope === undefined) throw await missedRef(layout, nodes, ref);
   console.log(
     renderFrontier({
       tickets: await readTickets(layout),
-      maps: await readMaps(layout),
-      nodes: await readRoadmapNodes(layout),
-      items: (await loadSnapshot(layout)).items,
+      maps,
+      nodes,
+      items,
+      ...(scope === undefined ? {} : { scope }),
     }),
   );
   return 0;

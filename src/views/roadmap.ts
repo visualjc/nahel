@@ -1014,8 +1014,15 @@ export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomF
 const SETTLED_TICKET_STATES: ReadonlySet<string> = new Set(["resolved", "closed"]);
 
 /**
- * True when a ticket is takeable (F8): state `open`, no claimant, and every
- * blocking ticket already `resolved` or `closed`.
+ * Where one ticket stands relative to the frontier — total over F7's four
+ * states, so every ticket in the store lands in exactly one bucket:
+ *
+ * - `takeable` — F8's predicate: `open`, no claimant, every blocker settled.
+ * - `claimed` — someone is already working the question.
+ * - `blocked` — open and unclaimed, but a blocking ticket is still live.
+ * - `decided` — `resolved` or `closed`; not held back at all, and deliberately
+ *   never counted as a near miss, which would make the frontier read as a
+ *   backlog of everything ever asked.
  *
  * A blocker no record carries is NOT settled: the ticket it names may arrive by
  * a later merge (ADR-0012) and `validate` reports the dangling edge, so "still
@@ -1023,34 +1030,35 @@ const SETTLED_TICKET_STATES: ReadonlySet<string> = new Set(["resolved", "closed"
  * conservative call — blocking is advisory, so the ticket can be claimed and
  * worked regardless; only this LISTING holds it back.
  */
-function ticketTakeable(
+type TicketStanding = "takeable" | "claimed" | "blocked" | "decided";
+
+function ticketStanding(
   record: TicketRecord,
   byId: ReadonlyMap<string, TicketRecord>,
-): boolean {
+): TicketStanding {
   const ticket = record.frontmatter;
-  if (ticket.state !== "open" || ticket.claimant !== undefined) return false;
-  return ticket.blockers.every((id) => {
+  if (SETTLED_TICKET_STATES.has(ticket.state)) return "decided";
+  // The claimant is checked as well as the state: an `open` ticket carrying one
+  // is a merge shape `validate` reports, and it is plainly in someone's hands.
+  if (ticket.state === "claimed" || ticket.claimant !== undefined) return "claimed";
+  const waiting = ticket.blockers.some((id) => {
     const blocker = byId.get(id);
-    return blocker !== undefined && SETTLED_TICKET_STATES.has(blocker.frontmatter.state);
+    return blocker === undefined || !SETTLED_TICKET_STATES.has(blocker.frontmatter.state);
   });
+  return waiting ? "blocked" : "takeable";
 }
 
 /**
- * The takeable tickets, in a deterministic total order: by the map they hang
- * off, then by id. Map order groups one destination's questions together, and
- * both keys are IDS rather than slugs — a rename must not reorder a rendering,
- * and duplicate slugs are a merge shape `validate` reports rather than one an
- * order may depend on.
+ * The order takeable tickets are listed in: by the map they hang off, then by
+ * id. Map order groups one destination's questions together, and both keys are
+ * IDS rather than slugs — a rename must not reorder a rendering, and duplicate
+ * slugs are a merge shape `validate` reports rather than one an order may
+ * depend on. Total, so the listing cannot wobble between two renders.
  */
-export function ticketFrontier(tickets: readonly TicketRecord[]): TicketRecord[] {
-  const byId = new Map(tickets.map((record) => [record.frontmatter.id, record]));
-  return tickets
-    .filter((record) => ticketTakeable(record, byId))
-    .sort((a, b) => {
-      const maps = [a.frontmatter.map, b.frontmatter.map];
-      if (maps[0] !== maps[1]) return maps[0]! < maps[1]! ? -1 : 1;
-      return a.frontmatter.id < b.frontmatter.id ? -1 : a.frontmatter.id > b.frontmatter.id ? 1 : 0;
-    });
+function byMapThenId(a: TicketRecord, b: TicketRecord): number {
+  const maps = [a.frontmatter.map, b.frontmatter.map];
+  if (maps[0] !== maps[1]) return maps[0]! < maps[1]! ? -1 : 1;
+  return a.frontmatter.id < b.frontmatter.id ? -1 : a.frontmatter.id > b.frontmatter.id ? 1 : 0;
 }
 
 /** The work-item statuses that stop an item blocking its dependents (F8). */
@@ -1074,37 +1082,50 @@ function claimCoverage(items: readonly WorkItemFrontmatter[]): Set<string> {
 }
 
 /**
- * True when a work item is takeable (F8): status `backlog`, not covered by an
- * intervention claim, and every `depends_on` target already `done` or
- * `dropped`.
+ * Where one work item stands relative to the frontier — the ticket standing's
+ * counterpart, total over the six statuses:
  *
- * A dependency no record carries is NOT settled, for ticketTakeable's reason:
+ * - `takeable` — F8's predicate: `backlog`, unclaimed, every dependency settled.
+ * - `claimed` — covered by an intervention claim, its own or an ancestor's.
+ * - `blocked` — backlog, but a `depends_on` target is still live.
+ * - `moved` — anything that has left the backlog, closed or not. Like a decided
+ *   ticket it is not a near miss: counting started and finished work as held
+ *   back would report the whole store every time.
+ *
+ * A dependency no record carries is NOT settled, for ticketStanding's reason:
  * the item may arrive by a later merge (ADR-0012), `validate` reports the
- * dangling edge, and nothing is refused either way — the listing is all that
- * holds back.
+ * dangling edge, and nothing is refused either way.
  */
-function itemTakeable(
+type ItemStanding = "takeable" | "claimed" | "blocked" | "moved";
+
+function itemStanding(
   item: WorkItemFrontmatter,
   byId: ReadonlyMap<string, WorkItemFrontmatter>,
   claimed: ReadonlySet<string>,
-): boolean {
-  if (item.status !== "backlog" || claimed.has(item.id)) return false;
-  return item.depends_on.every((id) => {
+): ItemStanding {
+  if (item.status !== "backlog") return "moved";
+  if (claimed.has(item.id)) return "claimed";
+  const waiting = item.depends_on.some((id) => {
     const dependency = byId.get(id);
-    return dependency !== undefined && SETTLED_ITEM_STATUSES.has(dependency.status);
+    return dependency === undefined || !SETTLED_ITEM_STATUSES.has(dependency.status);
   });
+  return waiting ? "blocked" : "takeable";
 }
 
 /**
- * The takeable work items, in the order they arrive — the snapshot's canonical
- * `created` → `id` order, which every other item view already renders in.
+ * What one rendering is narrowed to (F8's `[ref]` form) — one roadmap node: the
+ * map whose tickets belong to it (null when it carries no chart), and the item
+ * ids under its epic (empty when it has none).
+ *
+ * Only the RESULT is narrowed, never the predicates: both are evaluated over the
+ * whole store above, so a blocker, a dependency, or a claiming ancestor outside
+ * the node still holds an entry inside it back.
  */
-export function workItemFrontier(
-  items: readonly WorkItemFrontmatter[],
-): WorkItemFrontmatter[] {
-  const byId = new Map(items.map((item) => [item.id, item]));
-  const claimed = claimCoverage(items);
-  return items.filter((item) => itemTakeable(item, byId, claimed));
+export interface FrontierScope {
+  /** The node's slug — what the rendering names itself after. */
+  name: string;
+  map: string | null;
+  items: ReadonlySet<string>;
 }
 
 /** Everything one frontier rendering reads from — four store reads, underived. */
@@ -1113,6 +1134,8 @@ export interface FrontierFacts {
   maps: readonly MapRecord[];
   nodes: readonly RoadmapNodeRecord[];
   items: readonly WorkItemFrontmatter[];
+  /** Absent for the whole store's frontier; one node's when a ref was given. */
+  scope?: FrontierScope;
 }
 
 /**
@@ -1133,15 +1156,53 @@ function mapLabels(facts: FrontierFacts): Map<string, string> {
 }
 
 /**
- * `nahel roadmap frontier` (F8): what can be started now, per kind. Pure over
- * records already read, so two reads of an unchanged store are byte-identical
- * (HC1) and the verb writes nothing at all.
+ * The `(none) — …` tail an empty section earns: how many entries were held
+ * back, and by what. An empty section with nothing behind it earns no tail at
+ * all — a store that has simply not charted anything yet has no WHY to state,
+ * and inventing one would report zeros as if they were obstacles.
+ */
+function heldTail(counts: readonly (readonly [string, number])[]): string {
+  const named = counts.filter(([, count]) => count > 0).map(([what, count]) => `${count} ${what}`);
+  return named.length === 0 ? "" : ` — ${named.join(", ")}`;
+}
+
+/**
+ * `nahel roadmap frontier [ref]` (F8): what can be started now, per kind. Pure
+ * over records already read, so two reads of an unchanged store are
+ * byte-identical (HC1) and the verb writes nothing at all.
+ *
+ * An EMPTY section still prints its heading and says why it is empty, the rule
+ * every roadmap section follows: a section that vanished when it emptied would
+ * read as one nobody has charted, which is a different fact from one whose
+ * every entry is claimed or waiting.
  */
 export function renderFrontier(facts: FrontierFacts): string {
+  const scope = facts.scope;
+  const lines: string[] = [];
+  if (scope !== undefined) lines.push(`frontier of ${scope.name}`, "");
+
+  // Both standings are read against the WHOLE store's records — `ticketsById`
+  // and `claimed` below — and only the scoped slice is classified, so a blocker
+  // or a claiming ancestor outside the node still holds an entry inside it back.
   const labels = mapLabels(facts);
-  const tickets = ticketFrontier(facts.tickets);
-  const lines = [`tickets (${tickets.length}):`];
-  if (tickets.length === 0) lines.push("  (none)");
+  const ticketsById = new Map(facts.tickets.map((record) => [record.frontmatter.id, record]));
+  const scopedTickets =
+    scope === undefined
+      ? facts.tickets
+      : facts.tickets.filter(({ frontmatter }) => frontmatter.map === scope.map);
+  const standings = scopedTickets.map((record) => ticketStanding(record, ticketsById));
+  const tickets = scopedTickets
+    .filter((_, at) => standings[at] === "takeable")
+    .sort(byMapThenId);
+  lines.push(`tickets (${tickets.length}):`);
+  if (tickets.length === 0) {
+    lines.push(
+      `  (none)${heldTail([
+        ["blocked", standings.filter((each) => each === "blocked").length],
+        ["claimed", standings.filter((each) => each === "claimed").length],
+      ])}`,
+    );
+  }
   for (const record of tickets) {
     const ticket = record.frontmatter;
     lines.push(`  ${ticket.id}  ${ticket.type}  map=${labels.get(ticket.map) ?? ticket.map}`);
@@ -1153,9 +1214,21 @@ export function renderFrontier(facts: FrontierFacts): string {
   // — takeable items may nest (a backlog parent with a backlog child are both
   // takeable), and knownIds is every item in the store so a parent left off the
   // frontier is never reported missing.
-  const items = workItemFrontier(facts.items);
+  const itemsById = new Map(facts.items.map((item) => [item.id, item]));
+  const claimed = claimCoverage(facts.items);
+  const scopedItems =
+    scope === undefined ? facts.items : facts.items.filter((item) => scope.items.has(item.id));
+  const itemStandings = scopedItems.map((item) => itemStanding(item, itemsById, claimed));
+  const items = scopedItems.filter((_, at) => itemStandings[at] === "takeable");
   lines.push("", `work items (${items.length}):`);
-  if (items.length === 0) lines.push("  (none)");
+  if (items.length === 0) {
+    lines.push(
+      `  (none)${heldTail([
+        ["blocked by a dependency", itemStandings.filter((each) => each === "blocked").length],
+        ["claimed", itemStandings.filter((each) => each === "claimed").length],
+      ])}`,
+    );
+  }
   lines.push(...renderItemTree(items, new Set(facts.items.map((item) => item.id))));
 
   const hints = [

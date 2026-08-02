@@ -387,10 +387,11 @@ whatever nodes happen to exist afterwards.
 **Acceptance criteria:**
 - The **first** migration event in each store enumerates the complete
   selected set — included ids and excluded near-misses with reasons — and
-  strictly precedes every node-creation event in that store (journal order
-  proves it; a set event written after the nodes fails this criterion).
+  strictly precedes every node-creation event in that store (a set event
+  written after the nodes fails this criterion — and so does one written in
+  the same second; rendered journal order is a quick look, never the proof).
   **Strict precedence means strict timestamp inequality**: the selection
-  event's `ts` is earlier than every node-creation event's `ts`, and a
+  event's `ts` is strictly earlier than every node-creation event's `ts`, and a
   same-second tie fails migration — segments are per-invocation and a
   same-second tie breaks on random event id, so rendered order alone proves
   nothing.

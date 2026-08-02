@@ -75,10 +75,13 @@ nothing is ever written back onto the item; never hand-edit anything under
          --data excluded='[{"id":"<item-id>","reason":"<why this one is work, not roadmap intent>"}]'
 
    `included` is every id that gets a node; `excluded` is every near-miss with
-   its reason. Write it **before the first node exists** — **journal order**
-   is what proves the call was made rather than reverse-engineered. A set
-   logged after the nodes proves nothing: a reviewer can no longer tell the
-   judgment from its result.
+   its reason. Write it **before the first node exists**, and what proves the
+   call was made rather than reverse-engineered is one comparison: this event's
+   `ts` **strictly earlier** than every `roadmap.node-created` `ts`. A set
+   logged after the nodes proves nothing — a reviewer can no longer tell the
+   judgment from its result — and a set logged in the **same second** proves
+   nothing either, so it fails the migration exactly as a late one does (step 6
+   is where you check it, and why rendered order is not the check).
 
    So get it complete before you log it. Re-read step 1's output one last
    time; a set you have to correct afterwards is a set the first event got
@@ -135,7 +138,7 @@ nothing is ever written back onto the item; never hand-edit anything under
    and **nothing invented** that the logged set never selected. If the two
    disagree, the nodes are what you fix; the set is already journaled.
 
-   Then accept — or fail — the migration on its journal order:
+   Then accept — or fail — the migration on the one comparison step 3 named:
 
        nahel progress
 

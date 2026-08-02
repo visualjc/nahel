@@ -11,7 +11,6 @@ import { validateCommand } from "../../src/commands/validate";
 import type { Env } from "../../src/schema/env";
 import {
   CORE_EVENT_TYPES,
-  ITEM_STARTED_BLOCKED_EVENT_TYPE,
   MUTATION_EVENT_TYPES,
   SELF_RECORDED_EVENT_TYPES,
 } from "../../src/schema/events";
@@ -554,7 +553,7 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     expect(stderr()).toBe("");
 
     const started = (await journalEvents(layout)).filter(
-      (event) => event.type === ITEM_STARTED_BLOCKED_EVENT_TYPE,
+      (event) => event.type === CORE_EVENT_TYPES.itemStartedBlocked,
     );
     expect(started).toHaveLength(1);
     expect(started[0]!.item).toBe(blocked);
@@ -581,7 +580,7 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     expect(
       events.filter((event) => event.type === CORE_EVENT_TYPES.itemUpdated).length,
     ).toBe(before);
-    const started = events.find((event) => event.type === ITEM_STARTED_BLOCKED_EVENT_TYPE)!;
+    const started = events.find((event) => event.type === CORE_EVENT_TYPES.itemStartedBlocked)!;
     // …carrying the choke point's replay fields, so the record is materializable
     // from this event alone.
     expect(started.payload["target"]).toBe("item");
@@ -590,10 +589,10 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
   });
 
   test("replay and divergence know the type — it is a MUTATION type, not an open extension", () => {
-    expect(MUTATION_EVENT_TYPES.has(ITEM_STARTED_BLOCKED_EVENT_TYPE)).toBe(true);
+    expect(MUTATION_EVENT_TYPES.has(CORE_EVENT_TYPES.itemStartedBlocked)).toBe(true);
     // Every mutation type is self-recorded by construction; `nahel log`'s
     // refusal is pinned over the whole map in tests/commands/log.test.ts.
-    expect(SELF_RECORDED_EVENT_TYPES.get(ITEM_STARTED_BLOCKED_EVENT_TYPE)).toBe("`nahel item`");
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.itemStartedBlocked)).toBe("`nahel item`");
   });
 
   test("the move is still MOVEMENT: standup reads the transition off the renamed event", async () => {
@@ -648,7 +647,7 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     // 3. …and the annotation survived intact, because it was never a separate
     //    append that the kill could drop.
     const started = (await journalEvents(layout)).filter(
-      (event) => event.type === ITEM_STARTED_BLOCKED_EVENT_TYPE,
+      (event) => event.type === CORE_EVENT_TYPES.itemStartedBlocked,
     );
     expect(started).toHaveLength(1);
     expect(started[0]!.payload["blockers"]).toEqual([dependency]);
@@ -676,7 +675,7 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     await item(env, root, ["update", free, "--status", "in-progress"]);
 
     expect(
-      (await journalEvents(layout)).filter((e) => e.type === ITEM_STARTED_BLOCKED_EVENT_TYPE),
+      (await journalEvents(layout)).filter((e) => e.type === CORE_EVENT_TYPES.itemStartedBlocked),
     ).toEqual([]);
   });
 
@@ -689,7 +688,7 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     await item(env, root, ["update", blocked, "--status", "in-progress", "--lane", "epic-lite"]);
 
     expect(
-      (await journalEvents(layout)).filter((e) => e.type === ITEM_STARTED_BLOCKED_EVENT_TYPE),
+      (await journalEvents(layout)).filter((e) => e.type === CORE_EVENT_TYPES.itemStartedBlocked),
     ).toHaveLength(1);
   });
 

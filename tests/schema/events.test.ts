@@ -20,6 +20,10 @@ describe("schema/events", () => {
     expect(CORE_EVENT_TYPES).toEqual({
       itemCreated: "item.created",
       itemUpdated: "item.updated",
+      // Phase 4 F8: the write-ahead event of a deliberately blocked start. A
+      // CORE mutation type, because it REPLACES `item.updated` for that one
+      // transition rather than annotating one after the fact.
+      itemStartedBlocked: "item.started-with-open-blocker",
       runStarted: "run.started",
       runUpdated: "run.updated",
       runEnded: "run.ended",

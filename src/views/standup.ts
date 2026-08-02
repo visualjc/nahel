@@ -120,10 +120,18 @@ export interface StandupInputs {
   events: readonly JournalEvent[];
 }
 
-/** The item-record mutations whose payload carries a status a standup reads. */
+/**
+ * The item-record mutations whose payload carries a status a standup reads.
+ *
+ * `item.started-with-open-blocker` (Phase 4 F8) is one of them: it REPLACES
+ * `item.updated` as the write-ahead event of a deliberately blocked start, so a
+ * set that named only the generic type would make exactly those moves — the
+ * ones a reader most wants to see — vanish from the window.
+ */
 const ITEM_RECORD_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.itemCreated,
   CORE_EVENT_TYPES.itemUpdated,
+  CORE_EVENT_TYPES.itemStartedBlocked,
   CORE_EVENT_TYPES.itemClaimed,
   CORE_EVENT_TYPES.itemHandback,
 ]);

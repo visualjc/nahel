@@ -2,11 +2,7 @@ import { parseArgs } from "node:util";
 import type { z } from "zod";
 import { LANES, WORK_ITEM_STATUSES, WORK_ITEM_TYPES, type WorkItemStatus } from "../schema/enums";
 import type { Env } from "../schema/env";
-import {
-  CORE_EVENT_TYPES,
-  ITEM_STARTED_BLOCKED_EVENT_TYPE,
-  PROTOTYPE_MERGE_REFUSED_EVENT_TYPE,
-} from "../schema/events";
+import { CORE_EVENT_TYPES, PROTOTYPE_MERGE_REFUSED_EVENT_TYPE } from "../schema/events";
 import { generateId } from "../schema/id";
 import {
   workItemFrontmatterSchema,
@@ -445,23 +441,32 @@ async function itemUpdate(
   const starting = next.status === "in-progress" && current.status !== "in-progress";
   const blockers = starting ? await openBlockers(ctx.layout, next) : [];
 
+  // A deliberate start is journaled under its OWN type — the WRITE-AHEAD event
+  // for this transition, not a note appended after one. The blockers ride that
+  // same event through extraPayload, exactly as `item.claimed` carries its git
+  // baseline: an annotation needing a second append is an annotation a kill can
+  // drop, and what it would leave behind — a blocked start recorded as an
+  // ordinary one — is undetectable, because the `item.updated` already matches
+  // disk. As the mutation event itself it inherits the one crash shape the
+  // store heals. Everything that learns mutation types by NAME therefore has to
+  // know this one: MUTATION_EVENT_TYPES (replay and divergence) and
+  // views/standup.ts's item-record set (movement).
   await mutate(ctx, {
     target: "item",
-    eventType: CORE_EVENT_TYPES.itemUpdated,
+    eventType:
+      blockers.length > 0 ? CORE_EVENT_TYPES.itemStartedBlocked : CORE_EVENT_TYPES.itemUpdated,
     frontmatter: next,
     body,
+    ...(blockers.length === 0
+      ? {}
+      : {
+          extraPayload: {
+            from: current.status,
+            blockers: blockers.map((blocker) => blocker.id),
+          },
+        }),
   });
   if (blockers.length > 0) {
-    // Journaled AFTER the mutation, deliberately: the event annotates a start
-    // that HAPPENED, and mutate()'s claim check can still refuse an agent here —
-    // a note written first would record a start the store never took.
-    await appendEvent(ctx.layout, ctx.env, {
-      type: ITEM_STARTED_BLOCKED_EVENT_TYPE,
-      actor: ctx.actor,
-      session: ctx.session,
-      item: id,
-      payload: { from: current.status, blockers: blockers.map((blocker) => blocker.id) },
-    });
     // Said out loud as well as recorded: the point of the rule is that the
     // choice is VISIBLE, and a journal nobody reads until later is not that.
     console.log(

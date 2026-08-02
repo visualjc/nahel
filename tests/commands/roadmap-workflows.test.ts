@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { parseWorkflowDoc } from "../../src/install/workflow";
-import {
-  CORE_EVENT_TYPES,
-  ITEM_STARTED_BLOCKED_EVENT_TYPE,
-  SELF_RECORDED_EVENT_TYPES,
-} from "../../src/schema/events";
+import { CORE_EVENT_TYPES, SELF_RECORDED_EVENT_TYPES } from "../../src/schema/events";
 import { readFrontmatterFile } from "../../src/store/frontmatter";
 
 /**
@@ -167,7 +163,7 @@ describe("the vocabulary the takeable edge is named in (F8)", () => {
     const defined = await entry("Anti-waterfall rule");
     expect(defined).toContain("advisory");
     expect(defined).toContain("refuse");
-    expect(defined).toContain(`\`${ITEM_STARTED_BLOCKED_EVENT_TYPE}\``);
+    expect(defined).toContain(`\`${CORE_EVENT_TYPES.itemStartedBlocked}\``);
     // The three things the rule permits, all of them stated as correct rather
     // than tolerated.
     expect(defined).toContain("before");

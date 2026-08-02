@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { configCommand, SETTABLE_CONFIG_SECTIONS } from "../../src/commands/config";
 import { readMergeAuthority } from "../../src/governance/authority";
@@ -192,6 +192,59 @@ describe("nahel config set — writing optional sections", () => {
       product: "human",
       architecture: "delegated",
     });
+  });
+
+  test("governance.product: agent is accepted, committed, and validate-clean (Phase 4 F5)", async () => {
+    const { root, layout, env } = await setup();
+    const code = await configCommand.run(
+      ["set", "governance", "--data", '{"product": "agent", "architecture": "human"}'],
+      env,
+      root,
+    );
+    expect(errs.join("\n")).toBe("");
+    expect(code).toBe(0);
+    expect((await readConfig(layout)).governance).toEqual({
+      product: "agent",
+      architecture: "human",
+    });
+    expect((await validateStore(layout)).filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  test("governance.architecture: agent is REFUSED — config untouched, nothing journaled", async () => {
+    const { root, layout, env } = await setup();
+    const before = await configBytes(layout);
+    // The product side taking `agent` in the SAME payload rescues nothing.
+    const code = await configCommand.run(
+      ["set", "governance", "--data", '{"product": "agent", "architecture": "agent"}'],
+      env,
+      root,
+    );
+    expect(code).not.toBe(0);
+    const reason = errs.join("\n");
+    expect(reason).toContain("governance.architecture");
+    expect(reason).toContain("human");
+    expect(reason).toContain("delegated");
+    expect(reason).not.toContain("governance.product");
+    expect(await configBytes(layout)).toBe(before);
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("a hand-written governance.architecture: agent is a validate ERROR naming the field", async () => {
+    // The schema is the only gate the CLI has against a hand-edited config
+    // (HC3 says agents never hand-edit, and validate is what catches it anyway).
+    const { layout } = await setup();
+    await writeFile(
+      layout.configPath,
+      `${await configBytes(layout)}governance:\n  product: agent\n  architecture: agent\n`,
+    );
+    const findings = await validateStore(layout);
+    const error = findings.find((f) => f.check === "schema.config")!;
+    expect(error).toBeDefined();
+    expect(error.severity).toBe("error");
+    expect(error.message).toContain("governance.architecture");
+    expect(error.message).toContain("human");
+    expect(error.message).toContain("delegated");
+    expect(error.message).not.toContain("governance.product");
   });
 
   test("key=val entries JSON-parse values (numbers stay numbers) and merge left to right", async () => {

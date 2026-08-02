@@ -7,6 +7,7 @@ import {
   INCEPTION_TIERS,
   LANES,
   MERGE_AUTHORITIES,
+  PRODUCT_GOVERNANCE_MODES,
   ROADMAP_HORIZONS,
   ROADMAP_NODE_KINDS,
   ROUTING_RESPONSIBILITIES,
@@ -16,6 +17,7 @@ import {
 } from "../../src/schema/enums";
 import {
   dispatchSchema,
+  governanceSchema,
   mergeSchema,
   roadmapNodeFrontmatterSchema,
   routingSchema,
@@ -60,8 +62,34 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
     expect([...INCEPTION_TIERS]).toEqual(["seed", "standard", "full"]);
   });
 
-  test("governance modes are exactly human|delegated", () => {
+  test("governance modes stay exactly human|delegated — the ARCHITECTURE side's set", () => {
+    // Phase 4 F5 widened the product side only; widening this enum in place
+    // would have made `governance.architecture: agent` valid, which
+    // docs/roadmap.md §7 does not permit until Phase 5 decides otherwise.
     expect([...GOVERNANCE_MODES]).toEqual(["human", "delegated"]);
+  });
+
+  test("product governance modes are exactly human|delegated|agent (ADR-0008 amendment 2026-08-01)", () => {
+    expect([...PRODUCT_GOVERNANCE_MODES]).toEqual(["human", "delegated", "agent"]);
+  });
+
+  test("the two governance fields carry SEPARATE enums: product takes agent, architecture refuses it", () => {
+    // The refusal falls out of the field's own z.enum — no cross-field
+    // predicate — so the issue names the offending field and its legal values.
+    expect(governanceSchema.parse({ product: "agent", architecture: "human" })).toEqual({
+      product: "agent",
+      architecture: "human",
+    });
+
+    const refused = governanceSchema.safeParse({ product: "agent", architecture: "agent" });
+    expect(refused.success).toBe(false);
+    // The product side accepting `agent` in the SAME config rescues nothing.
+    expect(refused.error!.issues).toHaveLength(1);
+    const issue = refused.error!.issues[0]!;
+    expect(issue.path).toEqual(["architecture"]);
+    expect(issue.message).toContain("human");
+    expect(issue.message).toContain("delegated");
+    expect(issue.message).not.toContain("agent");
   });
 
   test("founding modes are exactly guided|hands-off — interaction modes of ONE workflow (F9.4)", () => {

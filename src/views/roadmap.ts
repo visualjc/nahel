@@ -26,7 +26,9 @@ export function roadmapNodeLinks(
   const initiatives: string[] = [];
   for (const { frontmatter } of nodes) {
     if (frontmatter.predecessor === id) successors.push(frontmatter.id);
-    if (frontmatter.features.includes(id)) initiatives.push(frontmatter.id);
+    // An absent link list means no links: the schema leaves it optional so an
+    // omitted key reaches validate as a soft judgment, not a parse failure.
+    if ((frontmatter.features ?? []).includes(id)) initiatives.push(frontmatter.id);
   }
   return { successors, initiatives };
 }
@@ -47,12 +49,12 @@ export function renderRoadmapNode(record: RoadmapNodeRecord, links: RoadmapNodeL
   };
   field("parent", node.parent);
   field("design_doc", node.design_doc);
-  field("adrs", node.adrs.join(", "));
+  field("adrs", (node.adrs ?? []).join(", "));
   field("prd", node.prd);
   field("epic", node.epic);
   field("predecessor", node.predecessor);
   field("successors", links.successors.join(", "));
-  field("features", node.features.join(", "));
+  field("features", (node.features ?? []).join(", "));
   field("initiatives", links.initiatives.join(", "));
   lines.push(`  created=${node.created}  updated=${node.updated}`);
   const intent = record.body.trimEnd();

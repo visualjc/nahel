@@ -41,7 +41,9 @@ const KIND_FIELD = roadmapNodeFrontmatterSchema.shape.kind;
 const NAME_FIELD = roadmapNodeFrontmatterSchema.shape.name;
 const HORIZON_FIELD = roadmapNodeFrontmatterSchema.shape.horizon;
 const DESIGN_DOC_FIELD = roadmapNodeFrontmatterSchema.shape.design_doc;
-const ADR_FIELD = roadmapNodeFrontmatterSchema.shape.adrs.element;
+// The lists are optional on the record (omission is validate's judgment, not
+// the schema's), so the ENTRY validator comes from inside the optional.
+const ADR_FIELD = roadmapNodeFrontmatterSchema.shape.adrs.unwrap().element;
 const PRD_FIELD = roadmapNodeFrontmatterSchema.shape.prd;
 const EPIC_FIELD = roadmapNodeFrontmatterSchema.shape.epic;
 
@@ -305,11 +307,10 @@ async function nodeUpdate(
     body = requireIntent(values.intent);
   }
   if (values.parent !== undefined) {
-    const parent = await resolveNodeRef(ctx.layout, values.parent, "--parent");
-    if (parent === next.id) {
-      throw new UsageError(`roadmap node ${next.id} cannot be its own parent`);
-    }
-    next.parent = parent;
+    // A self-parent is a well-formed id link and an odd SHAPE, so it is
+    // recorded and reported by `nahel validate` — a duplicate slug stays the
+    // only structural refusal (F1: nothing else is ever refused).
+    next.parent = await resolveNodeRef(ctx.layout, values.parent, "--parent");
   }
   if (values["design-doc"] !== undefined) {
     next.design_doc = requireValid(DESIGN_DOC_FIELD, values["design-doc"], "--design-doc");
@@ -324,11 +325,8 @@ async function nodeUpdate(
     next.epic = requireValid(EPIC_FIELD, values.epic, "--epic");
   }
   if (values.predecessor !== undefined) {
-    const predecessor = await resolveNodeRef(ctx.layout, values.predecessor, "--predecessor");
-    if (predecessor === next.id) {
-      throw new UsageError(`roadmap node ${next.id} cannot be its own predecessor`);
-    }
-    next.predecessor = predecessor;
+    // Same rule as --parent: a self-predecessor is recorded and warned about.
+    next.predecessor = await resolveNodeRef(ctx.layout, values.predecessor, "--predecessor");
   }
   if (values.feature !== undefined) {
     const features: string[] = [];

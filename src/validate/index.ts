@@ -103,7 +103,8 @@ async function collectAdrPresence(
   layout: StoreLayout,
   input: ValidationInput,
 ): Promise<Record<string, boolean>> {
-  const adrField = roadmapNodeFrontmatterSchema.shape.adrs.element;
+  // The list is optional on the record; the ENTRY validator lives inside it.
+  const adrField = roadmapNodeFrontmatterSchema.shape.adrs.unwrap().element;
   const presence: Record<string, boolean> = {};
   for (const raw of input.roadmapNodes) {
     const adrs = raw.frontmatter?.["adrs"];

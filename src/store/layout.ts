@@ -503,11 +503,22 @@ export async function writeRoadmapNode(
 
 /**
  * Ids of every roadmap node record on disk, sorted; [] when the directory is
- * absent (nothing charted yet — the dir appears with the first node, the same
+ * ABSENT (nothing charted yet — the dir appears with the first node, the same
  * on-demand shape `nahel/journal/distilled/` has).
+ *
+ * Absence means ENOENT and nothing else. A permission error, an I/O error, or
+ * a non-directory sitting at `nahel/roadmap` all propagate: "no nodes" and
+ * "could not look" are different facts and only the first is safe to render —
+ * a swallowed failure would let the roadmap views state that a store has no
+ * roadmap when it has one nahel could not read. (listDistilledMarkers also
+ * treats ENOTDIR as absence, because there the missing directory may be an
+ * ANCESTOR of the path; here the path itself is the store's own directory.)
  */
 export async function listRoadmapNodes(layout: StoreLayout): Promise<string[]> {
-  const entries = await readdir(layout.roadmapDir).catch(() => [] as string[]);
+  const entries = await readdir(layout.roadmapDir).catch((error) => {
+    if ((error as { code?: unknown }).code === "ENOENT") return [] as string[];
+    throw error;
+  });
   return entries
     .filter((name) => name.endsWith(".md"))
     .map((name) => name.slice(0, -3))

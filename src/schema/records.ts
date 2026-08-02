@@ -129,9 +129,12 @@ export type WorkItemFrontmatter = z.infer<typeof workItemFrontmatterSchema>;
  * a plain id — a dangling one is a `validate` finding, never a refused
  * mutation, because the target may arrive by a later merge (ADR-0012).
  *
- * Per-kind fields are all optional on the one record: the per-kind structural
- * rules are SOFT (F1), so an odd shape is a `validate` warning and nothing is
- * ever refused at the schema.
+ * Per-kind fields are all optional on the one record — INCLUDING the two link
+ * lists: the per-kind structural rules are SOFT (F1), so WHICH kind carries
+ * which field, and how many links an initiative needs, are `validate`
+ * judgments. A required list would make an omitted key a schema ERROR before
+ * the soft rules could speak. Readers normalize an absent list to empty; a
+ * PRESENT list is still validated entry by entry.
  */
 export const roadmapNodeFrontmatterSchema = z.strictObject({
   id: idField,
@@ -143,7 +146,7 @@ export const roadmapNodeFrontmatterSchema = z.strictObject({
   /** Product: the permanent product design doc (never archived — F10). */
   design_doc: repoRelativeDocPathField("design_doc").optional(),
   /** Product: ADR cross-references, kept in RECORDED order (a sequence, not a set). */
-  adrs: z.array(repoRelativeDocPathField("adrs")),
+  adrs: z.array(repoRelativeDocPathField("adrs")).optional(),
   /** Feature: the PRD this node's delta is stated in (ADR-0013). */
   prd: prdPathField.optional(),
   /** Feature: the epic WORK ITEM this node covers — the one-way node→item ref. */
@@ -151,7 +154,7 @@ export const roadmapNodeFrontmatterSchema = z.strictObject({
   /** Feature: the released node this one continues (lineage across a closed delta, F10). */
   predecessor: idField.optional(),
   /** Initiative: the feature nodes this node links sideways into. */
-  features: z.array(idField),
+  features: z.array(idField).optional(),
   created: timestampField,
   updated: timestampField,
 });

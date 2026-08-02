@@ -649,7 +649,9 @@ function checkRoadmapRefs(state: ParsedState): Finding[] {
         fix: "the predecessor node may arrive by a later merge — otherwise fix it with `nahel roadmap node update <ref> --predecessor <ref>` or `--clear-predecessor`",
       });
     }
-    for (const linked of record.features) {
+    // An absent link list is an empty one: the schema keeps both lists
+    // optional so kind and cardinality are judged HERE, not at parse time.
+    for (const linked of record.features ?? []) {
       const target = state.roadmapNodes.get(linked);
       if (!state.roadmapNodeFiles.has(linked)) {
         findings.push({
@@ -697,7 +699,7 @@ function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
   const presence = state.input.adrPresence;
   if (presence === undefined) return findings;
   for (const { record, path } of state.roadmapNodes.values()) {
-    for (const adr of record.adrs) {
+    for (const adr of record.adrs ?? []) {
       if (presence[adr] === false) {
         findings.push({
           severity: "warning",
@@ -714,18 +716,56 @@ function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
 
 /**
  * Structural shape (F1): the per-kind rules are SOFT — the authoring agent
- * infers placement and nothing is ever refused — so an odd tree is a WARNING
- * with the node named. Two shapes are reported: a feature parented to a
- * feature (which is usually a work item, not a roadmap node), and a non-product
- * node with no product ancestor (intent hanging off nothing). The ancestor walk
- * carries a seen-set, so a parent cycle terminates and its members simply read
- * as having no product ancestor — which is exactly what they have.
+ * infers placement, the CLI refuses nothing but a duplicate slug — so every
+ * odd shape is a WARNING with the node named. Reported here:
+ *
+ * - a node that is its own parent or its own predecessor (a self-loop is a
+ *   well-formed id link, so the write is recorded and reported, not refused);
+ * - a feature parented to a feature (usually a work item, not a roadmap node);
+ * - a non-product node with no product ancestor (intent hanging off nothing);
+ * - an initiative linking fewer than two features — the cardinality judgment,
+ *   which lives here rather than in the schema so an initiative can be created
+ *   and wired up in two acts.
+ *
+ * The ancestor walk carries a seen-set, so a self-loop or a longer parent cycle
+ * terminates and its members simply read as having no product ancestor — which
+ * is exactly what they have.
  */
 function checkRoadmapShape(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
   for (const { record, path } of state.roadmapNodes.values()) {
     const parent = record.parent === undefined ? undefined : state.roadmapNodes.get(record.parent);
-    if (record.kind === "feature" && parent?.record.kind === "feature") {
+    const selfParented = record.parent === record.id;
+    if (selfParented) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) is its own parent — the tree closes on itself here`,
+        fix: "re-parent it with `nahel roadmap node update <ref> --parent <ref>` or `--clear-parent` — this is advisory, nothing was refused",
+      });
+    }
+    if (record.predecessor === record.id) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) is its own predecessor — lineage cannot start at itself`,
+        fix: "point it at the released node it continues with `nahel roadmap node update <ref> --predecessor <ref>`, or `--clear-predecessor` — this is advisory, nothing was refused",
+      });
+    }
+    if (record.kind === "initiative" && (record.features ?? []).length < 2) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is an initiative linking ` +
+          `${(record.features ?? []).length} feature(s) sideways — an initiative links several`,
+        fix: "link the features it spans with `nahel roadmap node update <ref> --feature <ref> --feature <ref>` — this is advisory, nothing was refused",
+      });
+    }
+    if (!selfParented && record.kind === "feature" && parent?.record.kind === "feature") {
       findings.push({
         severity: "warning",
         check: "roadmap.shape",

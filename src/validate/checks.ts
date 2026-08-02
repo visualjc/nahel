@@ -2200,11 +2200,16 @@ function checkArchival(state: ParsedState): Finding[] {
         continue;
       }
       if (presence[edit.path] !== true) {
+        // An ERROR, like every other journal-ahead-of-disk state: the act was
+        // recorded, the document it names is not there, and repair cannot
+        // converge until it is. A warning would let a store where an act is
+        // permanently half-done exit 0.
         findings.push({
-          severity: "warning",
+          severity: "error",
           check: "roadmap.design-doc-missing",
-          message: `event ${event.id} appended to ${edit.path}, which does not exist on disk — the product design doc is permanent, never archived and never deleted`,
-          fix: "restore the document from git, or point the product node at the right one with `nahel roadmap node update <ref> --design-doc <path>`",
+          path: edit.path,
+          message: `event ${event.id} recorded a line for ${edit.path}, which does not exist on disk — the product design doc is permanent, never archived and never deleted, so the journal is ahead of nothing`,
+          fix: "restore the document from git and run `nahel validate --repair` (it appends the recorded line), or point the product node at the right one with `nahel roadmap node update <ref> --design-doc <path>`",
         });
         continue;
       }

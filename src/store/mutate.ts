@@ -518,12 +518,27 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
   // for the RECORDS, replayDocuments for the documents, whichever had landed.
   for (const write of writes) {
     if (write.target === "document") {
-      await applyDocumentEdit(ctx.layout, write.edit);
+      // A document step that cannot be applied FAILS the mutation, exactly as
+      // a failed record write does: the journal already records what should
+      // have happened, so the honest outcome is a loud error over a store the
+      // journal is ahead of — never a success reporting a file nobody touched.
+      if ((await applyDocumentEdit(ctx.layout, write.edit)) === "unrepairable") {
+        throw new Error(
+          `document ${documentPath(write.edit)} could not be written, and event ${event.id} already ` +
+            "records that it should be — `nahel validate` names the pending state and " +
+            "`nahel validate --repair` completes it once the document is there",
+        );
+      }
     } else {
       await RECORD_KINDS[write.target].write(ctx.layout, write.record, write.body);
     }
   }
   return { event };
+}
+
+/** The path a document step writes — its destination, or its append target. */
+function documentPath(edit: DocumentEdit): string {
+  return edit.op === "move" ? edit.to : edit.path;
 }
 
 /** What applying a document edit did — repair reports only what it changed. */
@@ -646,12 +661,12 @@ export async function replayDocuments(layout: StoreLayout): Promise<RepairedReco
   const repaired: RepairedRecord[] = [];
   for await (const event of readJournal(layout)) {
     for (const edit of eventDocuments(event).edits) {
+      // `unrepairable` is not an error here: repair completes what it can and
+      // leaves what it cannot to `validate`, which names it rather than
+      // inventing a document (a lost PRD, an occupied archive slot, a design
+      // doc that is not on disk).
       if ((await applyDocumentEdit(layout, edit)) === "applied") {
-        repaired.push({
-          target: "document",
-          id: edit.op === "move" ? edit.to : edit.path,
-          eventId: event.id,
-        });
+        repaired.push({ target: "document", id: documentPath(edit), eventId: event.id });
       }
     }
   }

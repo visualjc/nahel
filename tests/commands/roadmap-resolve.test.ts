@@ -205,6 +205,31 @@ describe("nahel roadmap ticket resolve — decision, observation, index line", (
     expect(await listObservations(layout)).toEqual([]);
   });
 
+  test("--decision and --reason refuse an embedded newline — an index line is ONE line", async () => {
+    // Both texts render as single lines (the map's Decisions so far and Out of
+    // scope index, `ticket show`'s fields, the observation's first line), so a
+    // smuggled CR or LF would forge extra rows in every one of them.
+    const { root, layout, env, map, ticket } = await charted();
+    for (const [flag, verb] of [
+      ["--decision", "resolve"],
+      ["--reason", "close"],
+    ] as const) {
+      for (const text of [
+        `${DECISION}\nand a forged second line`,
+        `${DECISION}\rand a forged second line`,
+      ]) {
+        const message = await fails(env, root, ["ticket", verb, ticket, flag, text]);
+        expect(message).toContain(flag);
+        expect(message).toContain("one line");
+      }
+    }
+    // Nothing moved: four refusals, no state, no observation, no index line.
+    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
+    expect((await readMap(layout, map)).frontmatter.decisions).toEqual([]);
+    expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([]);
+    expect(await listObservations(layout)).toEqual([]);
+  });
+
   test("re-resolving is refused: no duplicate observation, no second index line", async () => {
     const { root, layout, env, map, ticket } = await charted();
     await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION]);

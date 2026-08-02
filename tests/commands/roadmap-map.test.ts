@@ -238,6 +238,22 @@ describe("nahel roadmap map update — the sections move through the CLI", () =>
     );
   });
 
+  test("the single-line sections refuse an embedded newline — one entry is ONE line", async () => {
+    // The same guard `--decision` and `--reason` carry: destination, fog and
+    // out-of-scope entries all render one per line, so a smuggled CR or LF
+    // would forge extra entries in the chart.
+    const { root, layout, env, map } = await charted();
+    const before = await readMap(layout, map);
+    for (const flag of ["--destination", "--fog", "--out-of-scope"]) {
+      for (const text of ["first\nsecond", "first\rsecond"]) {
+        const message = await fails(env, root, ["map", "update", map, flag, text]);
+        expect(message).toContain(flag);
+        expect(message).toContain("one line");
+      }
+    }
+    expect(await readMap(layout, map)).toEqual(before);
+  });
+
   test("an update with no flags is refused rather than journaling a no-op", async () => {
     const { root, env, map } = await charted();
     expect(await fails(env, root, ["map", "update", map])).toContain("nothing to update");

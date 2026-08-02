@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { parseWorkflowDoc } from "../../src/install/workflow";
 import {
+  CORE_EVENT_TYPES,
   ITEM_STARTED_BLOCKED_EVENT_TYPE,
   SELF_RECORDED_EVENT_TYPES,
 } from "../../src/schema/events";
@@ -171,6 +172,17 @@ describe("the vocabulary the takeable edge is named in (F8)", () => {
     // than tolerated.
     expect(defined).toContain("before");
     expect(defined).toContain("parallel");
+  });
+
+  test("the glossary says the deliberate start IS the write-ahead mutation, not a note beside one", async () => {
+    const defined = await entry("Anti-waterfall rule");
+    // Advisory means the start is permitted, NOT that its provenance may be
+    // lost: the type REPLACES `item.updated` for that transition, so a kill
+    // between the journal and the record leaves the ordinary write-ahead crash
+    // shape that `validate --repair` already heals.
+    expect(defined).toContain("write-ahead");
+    expect(defined).toContain(`\`${CORE_EVENT_TYPES.itemUpdated}\``);
+    expect(defined).toContain("--repair");
   });
 });
 

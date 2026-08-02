@@ -1,16 +1,24 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { CommandContext } from "../../src/cli";
 import { claimCommand } from "../../src/commands/intervene";
 import { itemCommand } from "../../src/commands/item";
 import { roadmapCommand } from "../../src/commands/roadmap";
+import { standupCommand } from "../../src/commands/standup";
+import { validateCommand } from "../../src/commands/validate";
 import type { Env } from "../../src/schema/env";
-import { ITEM_STARTED_BLOCKED_EVENT_TYPE } from "../../src/schema/events";
+import {
+  CORE_EVENT_TYPES,
+  ITEM_STARTED_BLOCKED_EVENT_TYPE,
+  MUTATION_EVENT_TYPES,
+  SELF_RECORDED_EVENT_TYPES,
+} from "../../src/schema/events";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
 import { readJournal } from "../../src/store/journal";
-import { ensureLayout, writeConfig, type StoreLayout } from "../../src/store/layout";
+import { ensureLayout, readItem, writeConfig, type StoreLayout } from "../../src/store/layout";
 import { validateStore } from "../../src/validate";
 import { ROADMAP_SUBCOMMANDS } from "../../src/views/roadmap";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
@@ -82,6 +90,19 @@ async function frontier(env: Env, root: string, args: string[] = []): Promise<st
 
 async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
   return Array.fromAsync(readJournal(layout));
+}
+
+/** `nahel validate` through its real command object (the crash suite's harness). */
+async function validate(root: string, args: string[] = []): Promise<{ code: number; out: string }> {
+  const out: string[] = [];
+  const ctx: CommandContext = {
+    env: seededEnv(),
+    cwd: root,
+    stdout: (text) => out.push(text),
+    stderr: (text) => out.push(text),
+  };
+  const code = await validateCommand.run(args, ctx);
+  return { code, out: out.join("\n") };
 }
 
 /** Every file under a directory, path → bytes — the store's exact state. */
@@ -503,6 +524,14 @@ describe("an empty frontier says WHY, and never reads as an empty store (F8)", (
  * refuses work because a blocker is open — an agent may deliberately start a
  * blocked item, and doing so journals the choice, naming every open blocker, so
  * it is visible rather than prevented.
+ *
+ * Advisory means "permit the start", NOT "the provenance may disappear": the
+ * deliberate start IS the transition, so `item.started-with-open-blocker` is the
+ * WRITE-AHEAD mutation event for it — the one the choke point journals before
+ * the record write — and not a second append that a kill could drop. A second
+ * append would leave an unannotated blocked start that `validate --repair`
+ * cannot even detect, because the `item.updated` it followed already matches
+ * disk (the write-ahead invariant, CONTEXT.md).
  */
 describe("starting a blocked item is recorded, never refused (F8)", () => {
   test("the start succeeds and journals the deliberate-start event naming EVERY open blocker", async () => {
@@ -531,7 +560,99 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     expect(started[0]!.item).toBe(blocked);
     expect(started[0]!.actor).toEqual({ kind: "agent", id: "claude-code" });
     // Every OPEN blocker, and only those: the dropped one has settled.
-    expect(started[0]!.payload).toEqual({ from: "backlog", blockers: [first, second] });
+    expect(started[0]!.payload["from"]).toBe("backlog");
+    expect(started[0]!.payload["blockers"]).toEqual([first, second]);
+  });
+
+  test("it IS the write-ahead mutation event: no `item.updated` rides alongside it", async () => {
+    const { root, layout, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    const blocked = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+    const before = (await journalEvents(layout)).filter(
+      (event) => event.type === CORE_EVENT_TYPES.itemUpdated,
+    ).length;
+
+    await item(env, root, ["update", blocked, "--status", "in-progress"]);
+
+    const events = await journalEvents(layout);
+    // Exactly ONE event records the transition, and it is the named one — the
+    // generic type would say nothing about the choice, and both together would
+    // journal the same state change twice.
+    expect(
+      events.filter((event) => event.type === CORE_EVENT_TYPES.itemUpdated).length,
+    ).toBe(before);
+    const started = events.find((event) => event.type === ITEM_STARTED_BLOCKED_EVENT_TYPE)!;
+    // …carrying the choke point's replay fields, so the record is materializable
+    // from this event alone.
+    expect(started.payload["target"]).toBe("item");
+    expect(started.payload["record"]).toMatchObject({ id: blocked, status: "in-progress" });
+    expect(typeof started.payload["body"]).toBe("string");
+  });
+
+  test("replay and divergence know the type — it is a MUTATION type, not an open extension", () => {
+    expect(MUTATION_EVENT_TYPES.has(ITEM_STARTED_BLOCKED_EVENT_TYPE)).toBe(true);
+    // Every mutation type is self-recorded by construction; `nahel log`'s
+    // refusal is pinned over the whole map in tests/commands/log.test.ts.
+    expect(SELF_RECORDED_EVENT_TYPES.get(ITEM_STARTED_BLOCKED_EVENT_TYPE)).toBe("`nahel item`");
+  });
+
+  test("the move is still MOVEMENT: standup reads the transition off the renamed event", async () => {
+    const { root, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    const blocked = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+    await item(env, root, ["update", blocked, "--status", "in-progress"]);
+
+    // An item-record mutation carrying a status is what standup reads. Renaming
+    // the type for this ONE transition must not make a deliberately started
+    // item's move vanish from the window.
+    const out: string[] = [];
+    const code = await standupCommand.run(["--since", "30d"], {
+      env,
+      cwd: root,
+      stdout: (text: string) => out.push(text),
+      stderr: (text: string) => out.push(text),
+    });
+    expect(code).toBe(0);
+    const rendered = out.join("\n");
+    expect(rendered).toContain("add-refunds");
+    expect(rendered).toContain("in-progress");
+  });
+
+  test("killed at the record write: validate names the journal-ahead state, --repair lands the start WITH its annotation", async () => {
+    const { root, layout, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    const blocked = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+
+    // The kill: the item record's directory is read-only, so every READ in the
+    // verb still succeeds and only the record write at the end dies. What is
+    // left on disk is byte-for-byte what a SIGKILL at that instant leaves —
+    // the journal ahead, the record behind.
+    await chmod(layout.itemsDir, 0o555);
+    errs = [];
+    expect(await itemCommand.run(["update", blocked, "--status", "in-progress"], env, root)).toBe(1);
+    errs = [];
+    await chmod(layout.itemsDir, 0o755);
+
+    // 1. The record never moved, and validate names the divergence.
+    expect((await readItem(layout, blocked)).frontmatter.status).toBe("backlog");
+    const before = await validate(root);
+    expect(before.code).toBe(1);
+    expect(before.out).toContain("journal.divergence");
+
+    // 2. --repair materializes the start from the one event that holds it…
+    const repaired = await validate(root, ["--repair"]);
+    expect(repaired.out).toContain("repaired");
+    expect(repaired.code).toBe(0);
+    expect((await readItem(layout, blocked)).frontmatter.status).toBe("in-progress");
+
+    // 3. …and the annotation survived intact, because it was never a separate
+    //    append that the kill could drop.
+    const started = (await journalEvents(layout)).filter(
+      (event) => event.type === ITEM_STARTED_BLOCKED_EVENT_TYPE,
+    );
+    expect(started).toHaveLength(1);
+    expect(started[0]!.payload["blockers"]).toEqual([dependency]);
+    expect((await validate(root)).code).toBe(0);
   });
 
   test("the caller is told, in the same breath as the recording", async () => {

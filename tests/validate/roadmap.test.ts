@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CORE_EVENT_TYPES } from "../../src/schema/events";
+import { CORE_EVENT_TYPES, RELEASE_ANNOUNCED_EVENT_TYPE } from "../../src/schema/events";
+import { appendEvent } from "../../src/store/journal";
 import { generateId } from "../../src/schema/id";
 import type { RoadmapNodeFrontmatter } from "../../src/schema/records";
 import { mutate } from "../../src/store/mutate";
@@ -487,5 +488,117 @@ describe("validate — the F2 derivation warnings", () => {
     // The unreadable epic is reported ONCE, as what it is: a corrupt record.
     expect(findingsFor(findings, "schema.item").length).toBeGreaterThan(0);
     expect(findingsFor(findings, "roadmap.epic-missing")).toEqual([]);
+  });
+});
+
+/**
+ * The PRD lifecycle (Phase 4 F10): a PRD is live until its feature is
+ * released, and archived after. Both halves of that sentence are `validate`
+ * warnings when they come apart — a released feature still pointing at a live
+ * document, and a node still being built pointing into the archive, which is
+ * the signal that someone is working against a CLOSED delta instead of
+ * opening a new node.
+ */
+describe("validate — the PRD lifecycle (F10)", () => {
+  /** A feature node covering an epic, with a `release.announced` over it. */
+  async function releasedFeature(fixture: ValidateFixture, prd: string) {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "shipped-epic", type: "plan", lane: "full" });
+    const node = await createNode(fixture, {
+      name: "detached-state-repo",
+      parent: product.id,
+      epic: epic.id,
+      prd,
+    });
+    await appendEvent(fixture.layout, fixture.env, {
+      type: RELEASE_ANNOUNCED_EVENT_TYPE,
+      actor: { kind: "agent", id: "claude-code" },
+      item: epic.id,
+      payload: { version: "0.3.0" },
+      session: fixture.agent.session,
+    });
+    return { product, epic, node };
+  }
+
+  async function writeDoc(fixture: ValidateFixture, path: string): Promise<void> {
+    await mkdir(join(fixture.root, path, ".."), { recursive: true });
+    await writeFile(join(fixture.root, path), "# a document\n");
+  }
+
+  test("a released feature whose PRD is still live is a WARNING naming the node and the path", async () => {
+    const fixture = await setup();
+    const { node } = await releasedFeature(fixture, "docs/prds/detached-state.md");
+    await writeDoc(fixture, "docs/prds/detached-state.md");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.prd-unarchived");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(node.id);
+    expect(findings[0]!.message).toContain("docs/prds/detached-state.md");
+    expect(findings[0]!.fix).toContain("nahel roadmap archive");
+  });
+
+  test("the same feature, archived, reports nothing at all", async () => {
+    const fixture = await setup();
+    await releasedFeature(fixture, "docs/prds/archived/detached-state.md");
+    await writeDoc(fixture, "docs/prds/archived/detached-state.md");
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.prd-unarchived")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.closed-delta")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.prd-missing")).toEqual([]);
+  });
+
+  test("a node that is NOT released pointing into the archive is the closed-delta WARNING", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const node = await createNode(fixture, {
+      name: "detached-state-repo-again",
+      parent: product.id,
+      prd: "docs/prds/archived/detached-state.md",
+    });
+    await writeDoc(fixture, "docs/prds/archived/detached-state.md");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.closed-delta");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(node.id);
+    expect(findings[0]!.message).toContain("docs/prds/archived/detached-state.md");
+    // The fix is the doctrine: a new node with a new PRD, not a reopened one.
+    expect(findings[0]!.fix).toContain("predecessor");
+  });
+
+  test("a successor node with its OWN live PRD, naming the released one as predecessor, is clean", async () => {
+    const fixture = await setup();
+    const { node } = await releasedFeature(fixture, "docs/prds/archived/detached-state.md");
+    await writeDoc(fixture, "docs/prds/archived/detached-state.md");
+    await createNode(fixture, {
+      name: "detached-state-repo-v2",
+      parent: node.parent!,
+      predecessor: node.id,
+      prd: "docs/prds/detached-state-v2.md",
+    });
+    await writeDoc(fixture, "docs/prds/detached-state-v2.md");
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.closed-delta")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.prd-unarchived")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.predecessor-missing")).toEqual([]);
+  });
+
+  test("a node whose `prd` names no file on disk is a WARNING — the item-side rule, node side", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const node = await createNode(fixture, {
+      name: "unwritten",
+      parent: product.id,
+      prd: "docs/prds/never-written.md",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.prd-missing");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(node.id);
+    expect(findings[0]!.message).toContain("docs/prds/never-written.md");
   });
 });

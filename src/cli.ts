@@ -25,6 +25,7 @@ import { recallCommand } from "./commands/recall";
 import { roadmapCommand } from "./commands/roadmap";
 import { runCommand } from "./commands/run";
 import { skillsCommand } from "./commands/skills";
+import { standupCommand } from "./commands/standup";
 import { statusCommand } from "./commands/status";
 import { validateCommand } from "./commands/validate";
 import { systemEnv, type Env } from "./schema/env";
@@ -120,6 +121,7 @@ export const COMMANDS: Record<string, Command> = {
   roadmap: adapt(roadmapCommand),
   run: adapt(runCommand),
   skills: skillsCommand,
+  standup: standupCommand,
   status: statusCommand,
   validate: validateCommand,
 };

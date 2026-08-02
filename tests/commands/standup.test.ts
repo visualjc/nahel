@@ -183,10 +183,11 @@ describe("nahel standup — a real window over a real store", () => {
 
     // Header, node group, item group, then one line per act.
     const lines = out.split("\n");
-    expect(lines[0]).toMatch(/^standup since 2026-07-26T09:15:0[0-9]Z$/);
-    expect(lines.some((line) => line.startsWith(`detached-state-repo  feature  built  id=${node}`))).toBe(
-      true,
-    );
+    // Seven days back from whatever second the ticking Env had reached.
+    expect(lines[0]).toMatch(/^standup since 2026-07-26T09:15:[0-9]{2}Z$/);
+    // The node header is F2's own derivation: the deploy below lifts the stage
+    // past `built`, exactly as `nahel roadmap` reports it.
+    expect(lines).toContain(`detached-state-repo  feature  deployed  id=${node}`);
     expect(lines.some((line) => line === `  leaf-work  id=${child}`)).toBe(true);
     expect(out).toContain("opened  backlog  act=");
     expect(out).toContain("moved  backlog → in-progress  act=");
@@ -195,7 +196,8 @@ describe("nahel standup — a real window over a real store", () => {
 
     // Every `act=` names an event that really exists in the journal.
     const acts = [...out.matchAll(/act=([0-9a-z]{8})/g)].map((match) => match[1]!);
-    expect(acts.length).toBe(4);
+    // Both items opened, the child moved then closed, and the deploy shipped.
+    expect(acts.length).toBe(5);
     const journal = await readdir(layout.journalDir, { recursive: true });
     const text = (
       await Promise.all(

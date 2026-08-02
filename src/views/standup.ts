@@ -82,6 +82,28 @@ const ITEM_RECORD_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.itemHandback,
 ]);
 
+/** The lifecycle acts that carry a feature past its own development (F2/F9). */
+const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  QA_SWEEP_EVENT_TYPE,
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+]);
+
+/**
+ * True for every act a standup can read: the item mutations whose payload
+ * carries a status, the run pause, and the three lifecycle types. Exported so
+ * the command can KEEP only these while streaming the journal — the
+ * isRoadmapColumnEvent precedent, so a store whose journal outgrows memory
+ * still renders a standup. Anything else is not movement and is dropped.
+ */
+export function isStandupEvent(event: JournalEvent): boolean {
+  return (
+    ITEM_RECORD_EVENT_TYPES.has(event.type) ||
+    event.type === CORE_EVENT_TYPES.runPaused ||
+    LIFECYCLE_EVENT_TYPES.has(event.type)
+  );
+}
+
 /** One rendered act: what it says, and which act said it. */
 interface Movement {
   /** The item it groups under; undefined when the act carries no item ref. */

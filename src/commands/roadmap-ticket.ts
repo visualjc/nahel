@@ -19,6 +19,7 @@ import { closeStoreContext, mutate, type StoreContext } from "../store/mutate";
 import { renderTicket } from "../views/roadmap";
 import { commandContext, requireValid, UsageError } from "./item";
 import { requireMap } from "./roadmap-map";
+import { requireSingleLine } from "./roadmap-ref";
 
 /**
  * `nahel roadmap ticket` (Phase 4 F7): the decision ticket and the six verbs
@@ -370,7 +371,7 @@ function requireText(args: string[], flag: "decision" | "reason", verb: string):
         : "a close states why the question was ruled away — pass a non-empty --reason <why> (it becomes the map's Out of scope line)",
     );
   }
-  return { ref: positionals[0]!, text: text.trim() };
+  return { ref: positionals[0]!, text: requireSingleLine(text.trim(), `--${flag}`) };
 }
 
 /**

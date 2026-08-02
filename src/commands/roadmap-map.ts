@@ -14,7 +14,7 @@ import {
 import { closeStoreContext, mutate } from "../store/mutate";
 import { renderMap } from "../views/roadmap";
 import { commandContext, requireValid, UsageError } from "./item";
-import { resolveNodeRef } from "./roadmap-ref";
+import { requireSingleLine, resolveNodeRef } from "./roadmap-ref";
 
 /**
  * `nahel roadmap map` (Phase 4 F7): the wayfinder map — one chart per roadmap
@@ -130,10 +130,18 @@ async function mapNew(
       "a map states where the effort is going — pass --destination <text> (a map that charts nowhere charts nothing)",
     );
   }
-  const destination = requireValid(DESTINATION_FIELD, values.destination, "--destination");
-  const fog = (values.fog ?? []).map((line) => requireValid(FOG_FIELD, line, "--fog"));
+  const destination = requireSingleLine(
+    requireValid(DESTINATION_FIELD, values.destination, "--destination"),
+    "--destination",
+  );
+  const fog = (values.fog ?? []).map((line) =>
+    requireSingleLine(requireValid(FOG_FIELD, line, "--fog"), "--fog"),
+  );
   const outOfScope = (values["out-of-scope"] ?? []).map((line) => ({
-    reason: requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"),
+    reason: requireSingleLine(
+      requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"),
+      "--out-of-scope",
+    ),
   }));
 
   const ctx = await commandContext(cwd, env, actorOverride);
@@ -218,18 +226,26 @@ async function mapUpdate(
   const next: MapFrontmatter = { ...current.frontmatter };
   let body = current.body;
   if (values.destination !== undefined) {
-    next.destination = requireValid(DESTINATION_FIELD, values.destination, "--destination");
+    next.destination = requireSingleLine(
+      requireValid(DESTINATION_FIELD, values.destination, "--destination"),
+      "--destination",
+    );
   }
   if (values.notes !== undefined) body = notesBody(values.notes);
   if (values.fog !== undefined) {
-    next.fog = values.fog.map((line) => requireValid(FOG_FIELD, line, "--fog"));
+    next.fog = values.fog.map((line) =>
+      requireSingleLine(requireValid(FOG_FIELD, line, "--fog"), "--fog"),
+    );
   }
   if (values["out-of-scope"] !== undefined) {
     // Re-authoring the section keeps the ticket refs the closes recorded: an
     // entry whose reason is re-stated verbatim keeps its ticket, so re-writing
     // the section does not orphan the lines `ticket close` earned.
     next.out_of_scope = values["out-of-scope"].map((line) => {
-      const reason = requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope");
+      const reason = requireSingleLine(
+        requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"),
+        "--out-of-scope",
+      );
       const previous = current.frontmatter.out_of_scope.find((entry) => entry.reason === reason);
       return previous ?? { reason };
     });

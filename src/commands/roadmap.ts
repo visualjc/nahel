@@ -92,6 +92,47 @@ const LINK_OPTIONS = {
   feature: { type: "string", multiple: true },
 } as const;
 
+/**
+ * Every column a node renders is DERIVED (F2), so there is no field to set and
+ * no flag that could set one. parseArgs already refuses an unknown option, but
+ * "Unknown option '--status'" reads like an omission the next release might
+ * fix. These refusals name the rule that owns the column instead, so the answer
+ * to "how do I set it" is the act that actually moves it.
+ */
+const DERIVED_FLAGS: ReadonlyMap<string, string> = new Map([
+  [
+    "--status",
+    "a feature node's dev status is derived from the statuses of the work items under its epic — move the work with `nahel item update`",
+  ],
+  [
+    "--stage",
+    "a feature node's stage is derived by precedence from its release, deploy, and QA events and its epic rollup — record the act with `nahel log`",
+  ],
+  [
+    "--qa",
+    "a feature node's QA column is derived from the latest `qa.sweep-completed` covering its epic — record the sweep with `nahel log`",
+  ],
+  [
+    "--deploy",
+    "a feature node's deploy column is derived from the latest `deploy.completed` covering its epic — record the deploy with `nahel log`",
+  ],
+  [
+    "--release",
+    "a feature node's release column is derived from the latest `release.announced` covering its epic — record the release with `nahel log`",
+  ],
+]);
+
+/** Refuse a derived-status flag by name, before parseArgs calls it merely unknown. */
+function refuseDerivedFlags(args: readonly string[]): void {
+  for (const arg of args) {
+    const flag = arg.split("=")[0]!;
+    const rule = DERIVED_FLAGS.get(flag);
+    if (rule !== undefined) {
+      throw new UsageError(`${flag} is not a flag and never will be: ${rule}`);
+    }
+  }
+}
+
 /** The intent IS the record body, so it must say something. */
 function requireIntent(value: string | undefined): string {
   if (value === undefined || value.trim() === "") {
@@ -400,6 +441,7 @@ export const roadmapCommand: Command = {
         );
       }
       const [sub, ...args] = rest;
+      refuseDerivedFlags(args);
       if (sub === "new") return nodeNew(args, env, cwd, actorOverride);
       if (sub === "update") return nodeUpdate(args, env, cwd, actorOverride);
       if (sub === "show") return nodeShow(args, cwd);

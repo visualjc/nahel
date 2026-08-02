@@ -262,3 +262,76 @@ describe("nahel standup — determinism and purity", () => {
     expect(await snapshotTree(layout.nahelDir)).toEqual(before);
   });
 });
+
+/**
+ * `nahel standup` is DOCUMENTED VOCABULARY, not just a renderer: the glossary
+ * is where this project's terms live (F1's roadmap node, F7's decision ticket,
+ * F9's lifecycle events all landed there), and a verb whose words nobody wrote
+ * down is a verb a reader has to reverse-engineer from its output. The words
+ * are asserted so that renaming one in code fails the glossary still teaching
+ * the old spelling.
+ */
+describe("nahel standup — documented vocabulary", () => {
+  /** One glossary entry, by its bolded term — the line is the definition. */
+  async function entry(term: string): Promise<string> {
+    const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
+    const line = glossary.split("\n").find((each) => each.startsWith(`- **${term}** —`));
+    expect(line).toBeDefined();
+    return line!;
+  }
+
+  test("the glossary defines the verb, its window forms, and its zero-state promise", async () => {
+    const defined = await entry("Standup");
+    expect(defined).toContain("`nahel standup --since");
+    expect(defined).toContain("7d");
+    expect(defined).toContain("24h");
+    expect(defined).toContain("zero new state");
+  });
+
+  test("the glossary lists every word a standup line can carry", async () => {
+    const defined = await entry("Standup");
+    for (const verb of [
+      "opened",
+      "moved",
+      "blocked",
+      "parked",
+      "closed",
+      "tested",
+      "shipped",
+    ]) {
+      expect(defined).toContain(`\`${verb}\``);
+    }
+    expect(defined).toContain("act=");
+    expect(defined).toContain("outside the roadmap");
+  });
+
+  test("every documented verb is one the command can actually print", async () => {
+    const { root, env } = await setup("2026-08-02T09:15:00Z", 1);
+    const { child } = await moved(env, root);
+    expect(await itemCommand.run(["update", child, "--status", "dropped"], env, root)).toBe(0);
+    await log(env, root, [
+      "qa.sweep-completed",
+      "--item",
+      child,
+      "--data",
+      "cases_run=3",
+      "--data",
+      "failed=0",
+    ]);
+    await log(env, root, [
+      "release.announced",
+      "--item",
+      child,
+      "--data",
+      "version=0.3.0",
+    ]);
+    expect(await itemCommand.run(["update", child, "--status", "blocked"], env, root)).toBe(0);
+
+    const out = await standup(env, root, ["--since", "7d"]);
+    const defined = await entry("Standup");
+    for (const verb of ["opened", "moved", "blocked", "parked", "closed", "tested", "shipped"]) {
+      expect(out).toContain(`  ${verb}  `);
+      expect(defined).toContain(`\`${verb}\``);
+    }
+  });
+});

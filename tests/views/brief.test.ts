@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { configCommand } from "../../src/commands/config";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
@@ -23,6 +24,7 @@ import {
   type BriefInputs,
 } from "../../src/views/brief";
 import { collectProgress, renderProgress } from "../../src/views/progress";
+import { BRIEF_ROADMAP_MAX_LINES, BRIEF_ROADMAP_NOW_CAP } from "../../src/views/roadmap";
 import { loadSnapshot } from "../../src/views/snapshot";
 import { renderStatus } from "../../src/views/status";
 import { makeFrontmatter, makeObservation, makeRun, seededEnv } from "../store/helpers";
@@ -1513,5 +1515,34 @@ describe("renderBrief — the roadmap block (Phase 4 F4)", () => {
     const brief = await composeBrief(store.layout, await readConfig(store.layout));
     expect(brief).toContain("== roadmap ==");
     expect(brief).toContain("nahel  product  no features");
+  });
+});
+
+/**
+ * The roadmap block is DOCUMENTED VOCABULARY too (F4's doc-tested criterion):
+ * its cap and its ordering rule are what make the elision predictable rather
+ * than a silent lie, so both are written down where the project's terms live —
+ * and asserted through the CONSTANTS the renderer reads, so changing one in
+ * code fails the glossary that still teaches the old number.
+ */
+describe("brief's roadmap block — documented vocabulary", () => {
+  async function briefEntry(): Promise<string> {
+    const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
+    const line = glossary.split("\n").find((each) => each.startsWith("- **Brief / briefing** —"));
+    expect(line).toBeDefined();
+    return line!;
+  }
+
+  test("the glossary states the cap, the line budget, and the ordering rule", async () => {
+    const defined = await briefEntry();
+    expect(defined).toContain("roadmap block");
+    expect(defined).toContain(String(BRIEF_ROADMAP_NOW_CAP));
+    expect(defined).toContain(String(BRIEF_ROADMAP_MAX_LINES));
+    expect(defined).toContain("horizon-entry order");
+    expect(defined).toContain("+K more");
+  });
+
+  test("the glossary states that a store with no nodes gets no block at all", async () => {
+    expect(await briefEntry()).toContain("no roadmap nodes");
   });
 });

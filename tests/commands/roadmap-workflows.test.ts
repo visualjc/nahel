@@ -232,10 +232,15 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain(`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}`);
     expect(body).toContain("--data included=");
     expect(body).toContain("--data excluded=");
-    // Journal ORDER is the proof, so the doc must state the ordering rule and
-    // why a set written afterwards proves nothing.
-    expect(body).toContain("journal order");
+    // The ordering rule is stated where the reader ACTS on it, in the same
+    // words the acceptance section later uses: the selection's `ts` strictly
+    // earlier than every node-created `ts`. This step used to claim rendered
+    // JOURNAL ORDER was the proof, which contradicted the doc's own
+    // acceptance — a same-second tie renders in the right order half the time.
     expect(body).toContain("before the first node");
+    expect(body).toContain("strictly earlier");
+    const ruleAt = body.indexOf("strictly earlier");
+    expect(ruleAt).toBeGreaterThan(body.indexOf(`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}`));
     const selectionAt = body.indexOf(`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}`);
     const firstNodeAt = body.indexOf("nahel roadmap node new");
     expect(selectionAt).toBeGreaterThan(-1);
@@ -353,7 +358,10 @@ describe("the vocabulary the migration is recorded under (F6)", () => {
     expect(defined).toContain("`included`");
     expect(defined).toContain("`excluded`");
     expect(defined).toContain("near-miss");
-    expect(defined).toContain("journal order");
+    // The rule as the acceptance actually reads it — not "journal order",
+    // which a same-second tie renders correctly about half the time.
+    expect(defined).toContain("strictly earlier");
+    expect(defined).toContain("same-second");
     // Recorded like every other open-extension type: logged, never self-recorded.
     expect(defined).toContain("nahel log");
     expect(defined).toContain("self-record");

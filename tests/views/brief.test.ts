@@ -614,6 +614,165 @@ describe("renderBrief — governance & merge authority (F2.2 config semantics, F
   });
 });
 
+/**
+ * Awaiting your eyes (Phase 4 F5): the brief's one line for agent-authored
+ * roadmap acts a human has not looked at. Trust and visibility, not
+ * enforcement — nothing is ever refused; the line is the whole control.
+ */
+describe("renderBrief — roadmap changes since your last touch (Phase 4 F5)", () => {
+  const AWAITING = "roadmap changes since your last touch";
+
+  /** One roadmap-node mutation carrying the payload mutate() journals. */
+  function roadmapEvent(
+    ts: string,
+    kind: "human" | "agent",
+    node: { id: string; name: string },
+  ): JournalEvent {
+    return {
+      id: `rm${node.id}${ts.slice(11, 19).replace(/:/g, "")}`,
+      ts,
+      seq: 0,
+      type: "roadmap.node-updated",
+      actor: kind === "human" ? { kind: "human", id: "jim" } : { kind: "agent", id: "claude-code" },
+      payload: { target: "roadmap-node", record: { id: node.id, name: node.name }, body: "x\n" },
+    };
+  }
+
+  const HUMAN_TOUCH = roadmapEvent("2026-08-01T10:00:00Z", "human", { id: "n0", name: "seed" });
+
+  test("the line names the count and the nodes, inside the governance section", () => {
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "human", architecture: "human" },
+        events: [
+          HUMAN_TOUCH,
+          roadmapEvent("2026-08-01T11:00:00Z", "agent", { id: "n1", name: "alpha" }),
+          roadmapEvent("2026-08-01T11:00:01Z", "agent", { id: "n2", name: "beta" }),
+        ],
+      }),
+    );
+    const section = brief.split("== governance & merge authority ==")[1]!.split("\n\n")[0]!;
+    expect(section).toContain(AWAITING);
+    expect(section).toContain("2 agent acts on 2 nodes");
+    expect(section).toContain("alpha");
+    expect(section).toContain("beta");
+    expect(section).toContain("2026-08-01T10:00:00Z");
+  });
+
+  test("one act on one node reads as one, not as `1 acts on 1 nodes`", () => {
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "delegated", architecture: "human" },
+        events: [HUMAN_TOUCH, roadmapEvent("2026-08-01T11:00:00Z", "agent", { id: "n1", name: "alpha" })],
+      }),
+    );
+    expect(brief).toContain("1 agent act on 1 node —");
+  });
+
+  test("under governance.product: agent there is no line at all — no header, no count", () => {
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "agent", architecture: "human" },
+        events: [HUMAN_TOUCH, roadmapEvent("2026-08-01T11:00:00Z", "agent", { id: "n1", name: "alpha" })],
+      }),
+    );
+    expect(brief).not.toContain(AWAITING);
+    expect(brief).toContain("product: agent");
+  });
+
+  test("a first-touch human gets no line — absent, never an empty header", () => {
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "human", architecture: "human" },
+        events: [roadmapEvent("2026-08-01T11:00:00Z", "agent", { id: "n1", name: "alpha" })],
+      }),
+    );
+    expect(brief).not.toContain(AWAITING);
+  });
+
+  test("beyond the cap the named nodes stop and the remainder is counted, with the pointer", () => {
+    const events: JournalEvent[] = [HUMAN_TOUCH];
+    for (let i = 0; i < 12; i += 1) {
+      events.push(
+        roadmapEvent(`2026-08-01T11:00:${String(i).padStart(2, "0")}Z`, "agent", {
+          id: `n${i + 1}`,
+          name: `node-${i}`,
+        }),
+      );
+    }
+    const brief = renderBrief(
+      makeInputs({ governance: { product: "human", architecture: "human" }, events }),
+    );
+    expect(brief).toContain("12 agent acts on 12 nodes");
+    expect(brief).toContain("node-9");
+    expect(brief).not.toContain("node-10");
+    expect(brief).toContain("+2 more — nahel roadmap");
+  });
+
+  test("composeBrief drives the whole F5 cycle through the real CLI: raise, clear, re-raise", async () => {
+    const { roadmapCommand } = await import("../../src/commands/roadmap");
+    const store = await populatedWithProduct();
+
+    /** Drive a command with console captured; a non-zero exit is a failure. */
+    const run = async (
+      command: { run(argv: string[], env: Env, cwd: string, actor?: string): Promise<number> },
+      argv: string[],
+      actor?: string,
+    ): Promise<void> => {
+      const logSpy = spyOn(console, "log").mockImplementation(() => {});
+      const errs: string[] = [];
+      const errSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        errs.push(args.join(" "));
+      });
+      try {
+        const code = await command.run(argv, store.env, store.root, actor);
+        expect(errs.join("\n")).toBe("");
+        expect(code).toBe(0);
+      } finally {
+        logSpy.mockRestore();
+        errSpy.mockRestore();
+      }
+    };
+    const brief = async (): Promise<string> =>
+      composeBrief(store.layout, await readConfig(store.layout));
+
+    await run(configCommand, ["set", "governance", "--data", '{"product":"human","architecture":"human"}'], "human:jim");
+    await run(
+      roadmapCommand,
+      ["node", "new", "feature", "alpha", "--horizon", "next", "--intent", "a delta"],
+      "human:jim",
+    );
+    // Nothing agent-authored since the human's own act.
+    expect(await brief()).not.toContain(AWAITING);
+
+    // An AGENT re-horizons it: never refused, journaled as the agent, surfaced.
+    await run(roadmapCommand, ["node", "update", "alpha", "--horizon", "now"]);
+    const raised = await brief();
+    expect(raised).toContain(AWAITING);
+    expect(raised).toContain("alpha");
+
+    // An ack under an AGENT actor clears nothing.
+    await run(roadmapCommand, ["ack"]);
+    expect(await brief()).toContain(AWAITING);
+
+    // The human's ack clears it, mutating no node.
+    await run(roadmapCommand, ["ack"], "human:jim");
+    expect(await brief()).not.toContain(AWAITING);
+
+    // The next agent act re-raises it.
+    await run(roadmapCommand, ["node", "update", "alpha", "--horizon", "later"]);
+    expect(await brief()).toContain(AWAITING);
+
+    // Under agent-as-PO the same store shows no surface at all — and the
+    // mutation still succeeds, because governance never refuses a scribe.
+    await run(configCommand, ["set", "governance", "--data", '{"product":"agent","architecture":"human"}'], "human:jim");
+    await run(roadmapCommand, ["node", "update", "alpha", "--horizon", "now"]);
+    const swarm = await brief();
+    expect(swarm).not.toContain(AWAITING);
+    expect(swarm).toContain("product: agent");
+  });
+});
+
 describe("renderBrief — responsibility routing (PRD F3, ADR-0015)", () => {
   test("absent routing renders no routing block at all (zero noise)", () => {
     const brief = renderBrief(makeInputs());

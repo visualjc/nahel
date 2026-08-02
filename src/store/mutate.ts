@@ -568,6 +568,15 @@ function appendLine(text: string, line: string): string {
  * the source is gone and the destination was never written (a hand deletion —
  * `validate` names it), or an `append` target that does not exist; nothing is
  * invented in either case.
+ *
+ * "The destination already exists" is NOT the same fact as "this move already
+ * happened", and conflating them deletes documents: a PRD basename is not
+ * unique across time, so a successor feature reusing the name its predecessor
+ * shipped under points at an archive slot another act filled. The move is
+ * therefore judged COMPLETE only when the destination carries THIS event's
+ * stamp — the header names the archival event id, so the test is exact — and
+ * an occupied-by-someone-else destination is `unrepairable`, with the source
+ * left exactly where it is.
  */
 async function applyDocumentEdit(
   layout: StoreLayout,
@@ -577,6 +586,7 @@ async function applyDocumentEdit(
     const to = join(layout.root, edit.to);
     const from = join(layout.root, edit.from);
     const landed = await readTextFile(to);
+    if (landed !== null && !landed.includes(edit.header)) return "unrepairable";
     if (landed === null) {
       const source = await readTextFile(from);
       if (source === null) return "unrepairable";

@@ -2116,9 +2116,12 @@ function checkDivergence(state: ParsedState): Finding[] {
  * filesystem should hold — so an act killed before the file work landed is
  * reported in the same words and healed by the same flag.
  *
- * The three shapes a `move` can be caught in are named separately, because they
- * are three different facts about where the document is:
+ * The shapes a `move` can be caught in are named separately, because they are
+ * different facts about where the document is:
  *
+ * - the destination holds a document this event did NOT stamp: a reused PRD
+ *   basename pointing two deltas at one archive slot. Repair refuses to unlink
+ *   the live source into it, and this names why;
  * - neither location holds it: repair cannot invent a document, so this is the
  *   one archival state `--repair` will not fix, and it says so;
  * - the destination is empty and the source still holds it: the move never
@@ -2153,6 +2156,20 @@ function checkArchival(state: ParsedState): Finding[] {
       if (edit.op === "move") {
         const to = presence[edit.to] === true;
         const from = presence[edit.from] === true;
+        // A file AT the destination is not this move having happened: the
+        // stamp names the archival event, so only the stamp proves it.
+        if (to && !(state.input.documentText?.[edit.to] ?? "").includes(edit.header)) {
+          findings.push({
+            severity: "error",
+            check: "roadmap.document-collision",
+            path: edit.to,
+            message:
+              `event ${event.id} moved ${edit.from} to ${edit.to}, but the document at ${edit.to} carries a ` +
+              "different act's stamp — repair will not unlink a live document into an archive it did not write",
+            fix: "rename one of the two documents — the archive holds one file per delta, and an archived PRD is never overwritten — then re-run `nahel roadmap archive`",
+          });
+          continue;
+        }
         if (!to && !from) {
           findings.push({
             severity: "error",

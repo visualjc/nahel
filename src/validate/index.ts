@@ -155,38 +155,51 @@ async function collectAdrPresence(
 
 /**
  * What every journaled DOCUMENT step names, as data (Phase 4 F10): whether each
- * path exists, and — for an `append`, whose completion is judged by content —
- * the text itself. The steps are read through the store's own payload parser,
- * so the checks judge exactly what repair would apply. Collected here for the
- * same reason PRD presence is: the checks touch no filesystem.
+ * path exists, and — for the two paths whose completion is judged by CONTENT —
+ * the text itself. A `move`'s DESTINATION needs its content, because a file
+ * being there is not the same fact as this move having happened (it must carry
+ * this event's own stamp); an `append`'s target needs it because the marker
+ * test is the whole judgment. Only a `move`'s source is judged by existence.
+ *
+ * The steps are read through the store's own payload parser, so the checks
+ * judge exactly what repair would apply, and every path is gathered before
+ * anything is read — one edit's need for content cannot depend on the order
+ * another edit happened to name the same path in.
  */
 async function collectDocumentState(
   layout: StoreLayout,
   input: ValidationInput,
 ): Promise<void> {
-  const presence: Record<string, boolean> = {};
-  const text: Record<string, string> = {};
-  const read = async (path: string): Promise<string | null> => {
-    try {
-      return await readTextFile(join(layout.root, path));
-    } catch {
-      // Unreadable (e.g. the path names a directory): not a usable document.
-      return null;
-    }
-  };
+  const paths = new Set<string>();
+  const needText = new Set<string>();
   for (const segment of input.segments) {
     for (const event of segment.events) {
       for (const edit of eventDocuments(event).edits) {
-        for (const path of edit.op === "move" ? [edit.from, edit.to] : [edit.path]) {
-          if (path in presence) continue;
-          const content = await read(path);
-          presence[path] = content !== null;
-          if (content !== null && edit.op === "append") text[path] = content;
+        if (edit.op === "move") {
+          paths.add(edit.from);
+          paths.add(edit.to);
+          needText.add(edit.to);
+        } else {
+          paths.add(edit.path);
+          needText.add(edit.path);
         }
       }
     }
   }
-  if (Object.keys(presence).length === 0) return;
+  if (paths.size === 0) return;
+  const presence: Record<string, boolean> = {};
+  const text: Record<string, string> = {};
+  for (const path of [...paths].sort()) {
+    let content: string | null;
+    try {
+      content = await readTextFile(join(layout.root, path));
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      content = null;
+    }
+    presence[path] = content !== null;
+    if (content !== null && needText.has(path)) text[path] = content;
+  }
   input.documentPresence = presence;
   input.documentText = text;
 }

@@ -221,6 +221,18 @@ export async function runArchiveSubcommand(
         `interrupted, \`nahel validate --repair\` completes it (the document may already be at ${archived})`,
     );
   }
+  // A PRD basename is not unique across time: a successor reusing the name its
+  // predecessor shipped under points at an archive slot another delta already
+  // filled. Refused outright rather than resolved here — every automatic answer
+  // (overwrite, suffix, merge) either buries a closed record or invents a
+  // filename nobody chose, and no PRD is ever deleted.
+  if ((await readTextFile(join(ctx.layout.root, archived))) !== null) {
+    throw new UsageError(
+      `${archived} already exists, so archiving ${prd} there would bury a closed delta — rename one of the ` +
+        "two documents first (the archive holds one file per delta, and an archived PRD is never " +
+        "overwritten), then run this command again",
+    );
+  }
 
   const eventId = generateId(ctx.env);
   const now = ctx.env.now();

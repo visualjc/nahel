@@ -1,0 +1,2 @@
+{"id":"vz6fq58s","ts":"2026-08-02T10:13:06Z","seq":0,"type":"roadmap.migration-selected","actor":{"kind":"agent","id":"claude-code"},"payload":{"included":["bdgp78s4","aqz2bvav","x41wnrap","t4e4476a","9m38trg4","64p2tza6","c31rnb9k"],"excluded":[{"id":"hk0vqhq","reason":"placeholder"},{"id":"a22spcmj","reason":"placeholder"},{"id":"f35q1rax","reason":"placeholder"}],"note":"dry-check"}}
+{"id":"vw4kyayc","ts":"2026-08-02T10:13:06Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

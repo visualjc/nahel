@@ -4,7 +4,6 @@ import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claimCommand } from "../../src/commands/intervene";
 import { itemCommand } from "../../src/commands/item";
-import { logCommand } from "../../src/commands/log";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ITEM_STARTED_BLOCKED_EVENT_TYPE } from "../../src/schema/events";
@@ -587,14 +586,9 @@ describe("starting a blocked item is recorded, never refused (F8)", () => {
     expect(stderr()).toBe("");
   });
 
-  test("the type is self-recorded: `nahel log` refuses to hand-append it", async () => {
-    const { root, env } = await setup();
-
-    errs = [];
-    expect(await logCommand.run([ITEM_STARTED_BLOCKED_EVENT_TYPE], env, root)).toBe(1);
-    expect(stderr()).toContain("nahel item");
-    errs = [];
-  });
+  // The type is SELF-RECORDED, so `nahel log` must refuse to hand-append it —
+  // pinned in tests/commands/log.test.ts beside every other reserved type,
+  // which is the one place that guard cannot be forgotten.
 });
 
 describe("multiple parallel `now`s are correct, never warned about (F8)", () => {

@@ -4,6 +4,7 @@ import { LANES, WORK_ITEM_STATUSES, WORK_ITEM_TYPES, type WorkItemStatus } from 
 import type { Env } from "../schema/env";
 import {
   CORE_EVENT_TYPES,
+  ITEM_STARTED_BLOCKED_EVENT_TYPE,
   PROTOTYPE_MERGE_REFUSED_EVENT_TYPE,
 } from "../schema/events";
 import { generateId } from "../schema/id";
@@ -142,6 +143,40 @@ const CLOSED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
  * `nahel validate`'s prototype.* checks are the git-side half.
  */
 const MERGE_BOUND_STATUSES: readonly WorkItemStatus[] = ["in-review", "done"];
+
+/**
+ * The statuses that stop a dependency blocking its dependents (Phase 4 F8) —
+ * the same two the frontier's work-item predicate settles on.
+ */
+const SETTLED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
+
+/**
+ * The dependencies of `item` that have NOT settled — every `depends_on` target
+ * still short of `done`/`dropped`, plus every target no record carries (F8's
+ * conservative reading: the record may arrive by a later merge, ADR-0012, and
+ * `validate` reports the dangling edge). In the recorded `depends_on` order, so
+ * two readings of the same item name the blockers the same way.
+ *
+ * Read from DISK rather than from argv, because a `--depends-on` set in the
+ * same call is part of the state being started against.
+ */
+async function openBlockers(
+  layout: StoreLayout,
+  item: WorkItemFrontmatter,
+): Promise<{ id: string; status: string }[]> {
+  const open: { id: string; status: string }[] = [];
+  for (const id of item.depends_on) {
+    if (!(await itemExists(layout, id))) {
+      open.push({ id, status: "no record here" });
+      continue;
+    }
+    const { frontmatter } = await readItem(layout, id);
+    if (!SETTLED_STATUSES.includes(frontmatter.status)) {
+      open.push({ id, status: frontmatter.status });
+    }
+  }
+  return open;
+}
 
 const USAGE = `usage:
   nahel item new <type> <name> <lane> [--parent <id>] [--depends-on <id>]...
@@ -403,12 +438,38 @@ async function itemUpdate(
   }
   next.updated = env.now();
 
+  // The anti-waterfall rule (Phase 4 F8): starting an item whose dependencies
+  // are still live is PERMITTED — blocking is advisory everywhere, and nothing
+  // below refuses. Reaching `in-progress` from anything else IS the start; a
+  // call that re-states the status the item already holds started nothing.
+  const starting = next.status === "in-progress" && current.status !== "in-progress";
+  const blockers = starting ? await openBlockers(ctx.layout, next) : [];
+
   await mutate(ctx, {
     target: "item",
     eventType: CORE_EVENT_TYPES.itemUpdated,
     frontmatter: next,
     body,
   });
+  if (blockers.length > 0) {
+    // Journaled AFTER the mutation, deliberately: the event annotates a start
+    // that HAPPENED, and mutate()'s claim check can still refuse an agent here —
+    // a note written first would record a start the store never took.
+    await appendEvent(ctx.layout, ctx.env, {
+      type: ITEM_STARTED_BLOCKED_EVENT_TYPE,
+      actor: ctx.actor,
+      session: ctx.session,
+      item: id,
+      payload: { from: current.status, blockers: blockers.map((blocker) => blocker.id) },
+    });
+    // Said out loud as well as recorded: the point of the rule is that the
+    // choice is VISIBLE, and a journal nobody reads until later is not that.
+    console.log(
+      `⚠️ item ${id} started with ${blockers.length} open blocker${blockers.length === 1 ? "" : "s"}: ` +
+        `${blockers.map((blocker) => `${blocker.id} (${blocker.status})`).join(", ")} — ` +
+        "recorded, not refused (blocking is advisory)",
+    );
+  }
   await closeStoreContext(ctx);
   return 0;
 }

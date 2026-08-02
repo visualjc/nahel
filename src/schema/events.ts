@@ -151,6 +151,21 @@ export const DEPLOY_ENVIRONMENT_PAYLOAD_KEY = "environment";
 export const RELEASE_VERSION_PAYLOAD_KEY = "version";
 
 /**
+ * A work item deliberately STARTED while one of its `depends_on` targets was
+ * still live (Phase 4 F8, the anti-waterfall rule). Blocking is advisory
+ * everywhere — no command refuses work because a blocker is open — so the start
+ * succeeds and this event names every open blocker, which makes the choice
+ * visible rather than prevented. Payload: `{from, blockers}` — the status the
+ * item left, and every dependency that had not reached `done` or `dropped`.
+ *
+ * Self-recorded by `nahel item update`, so it is reserved from `nahel log`: the
+ * whole value of the record is that it was written BY the act, and a type an
+ * agent could hand-append is a type an agent could write without starting
+ * anything (or start without writing).
+ */
+export const ITEM_STARTED_BLOCKED_EVENT_TYPE = "item.started-with-open-blocker";
+
+/**
  * The prototype lane's acts (Phase 2 F5). Two of them are read back by
  * machinery, not just by humans, which is why they are reserved types rather
  * than free-form notes:
@@ -205,4 +220,5 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   [PROTOTYPE_PROMOTION_REFUSED_EVENT_TYPE, "`nahel prototype`"],
   [PROTOTYPE_DISPOSED_EVENT_TYPE, "`nahel prototype`"],
   [PROTOTYPE_MERGE_REFUSED_EVENT_TYPE, "`nahel item`"],
+  [ITEM_STARTED_BLOCKED_EVENT_TYPE, "`nahel item`"],
 ]);

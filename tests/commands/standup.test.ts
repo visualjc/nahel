@@ -307,8 +307,13 @@ describe("nahel standup — documented vocabulary", () => {
 
   test("every documented verb is one the command can actually print", async () => {
     const { root, env } = await setup("2026-08-02T09:15:00Z", 1);
-    const { child } = await moved(env, root);
-    expect(await itemCommand.run(["update", child, "--status", "dropped"], env, root)).toBe(0);
+    const { epic, child } = await moved(env, root);
+    // `moved` already produced opened / moved / closed / shipped; the rest need
+    // their own acts, on their own items — a done item cannot become blocked.
+    const stuck = await newItem(env, root, ["bug", "flaky-test", "direct", "--parent", epic]);
+    expect(await itemCommand.run(["update", stuck, "--status", "blocked"], env, root)).toBe(0);
+    const abandoned = await newItem(env, root, ["chore", "old-idea", "direct", "--parent", epic]);
+    expect(await itemCommand.run(["update", abandoned, "--status", "dropped"], env, root)).toBe(0);
     await log(env, root, [
       "qa.sweep-completed",
       "--item",
@@ -318,14 +323,6 @@ describe("nahel standup — documented vocabulary", () => {
       "--data",
       "failed=0",
     ]);
-    await log(env, root, [
-      "release.announced",
-      "--item",
-      child,
-      "--data",
-      "version=0.3.0",
-    ]);
-    expect(await itemCommand.run(["update", child, "--status", "blocked"], env, root)).toBe(0);
 
     const out = await standup(env, root, ["--since", "7d"]);
     const defined = await entry("Standup");

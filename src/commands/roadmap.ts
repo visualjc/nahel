@@ -17,6 +17,9 @@ import {
 import { closeStoreContext, mutate } from "../store/mutate";
 import { renderRoadmapNode, roadmapNodeLinks } from "../views/roadmap";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
+import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
+import { resolveNodeRef } from "./roadmap-ref";
+import { runTicketSubcommand, TICKET_USAGE } from "./roadmap-ticket";
 
 /**
  * `nahel roadmap node` (Phase 4 F1): the roadmap node write and read-back
@@ -83,7 +86,11 @@ const USAGE = `usage:
   nahel roadmap ack
     Say "seen": records a human-attributed acknowledgement that clears the
     brief's "roadmap changes since your last touch" line. Mutates no node.
-    Run under an AGENT actor it is journaled as itself and clears nothing.`;
+    Run under an AGENT actor it is journaled as itself and clears nothing.
+
+${MAP_USAGE}
+
+${TICKET_USAGE}`;
 
 /** Options shared by `node new` and `node update` (update adds the clears). */
 const LINK_OPTIONS = {
@@ -147,21 +154,6 @@ function requireIntent(value: string | undefined): string {
     );
   }
   return value.endsWith("\n") ? value : `${value}\n`;
-}
-
-/**
- * Resolve a node reference to an id. A slug must name a node that exists —
- * there is nothing else it could mean. A well-formed id is recorded as given
- * even when no record carries it yet: the node may arrive by a later merge
- * (ADR-0012), and a dangling ref is `validate`'s business, never a refusal.
- */
-async function resolveNodeRef(layout: StoreLayout, ref: string, what: string): Promise<string> {
-  const record = await resolveRoadmapNode(layout, ref);
-  if (record !== null) return record.frontmatter.id;
-  if (ID_PATTERN.test(ref)) return ref;
-  throw new UsageError(
-    `${what} ${JSON.stringify(ref)} does not name a roadmap node — pass an existing node's slug, or its id`,
-  );
 }
 
 /** Refuse a name already held by another node (slugs are unique per store). */
@@ -475,11 +467,13 @@ export const roadmapCommand: Command = {
         return 0;
       }
       if (group === "ack") return ack(rest, env, cwd, actorOverride);
+      if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
+      if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);
       if (group !== "node") {
         throw new UsageError(
           group === undefined
-            ? "missing subcommand — expected `roadmap node new`, `roadmap node update`, `roadmap node show`, or `roadmap ack`"
-            : `unknown subcommand ${JSON.stringify(group)} — expected \`roadmap node\` or \`roadmap ack\``,
+            ? "missing subcommand — expected `roadmap node`, `roadmap map`, `roadmap ticket`, or `roadmap ack`"
+            : `unknown subcommand ${JSON.stringify(group)} — expected \`roadmap node\`, \`roadmap map\`, \`roadmap ticket\`, or \`roadmap ack\``,
         );
       }
       const [sub, ...args] = rest;

@@ -9,7 +9,7 @@ import type {
   WorkItemFrontmatter,
 } from "../schema/records";
 import { compareEvents } from "../store/journal";
-import type { RoadmapNodeRecord } from "../store/layout";
+import type { MapRecord, RoadmapNodeRecord, TicketRecord } from "../store/layout";
 import { descendantIds } from "./snapshot";
 
 /**
@@ -58,9 +58,7 @@ export function renderRoadmapNode(record: RoadmapNodeRecord, links: RoadmapNodeL
   const lines = [
     [node.name, node.kind, `horizon=${node.horizon}`, `id=${node.id}`].join("  "),
   ];
-  const field = (key: string, value: string | undefined): void => {
-    if (value !== undefined && value !== "") lines.push(`  ${key}=${value}`);
-  };
+  const field = (key: string, value: string | undefined): void => fieldLine(lines, key, value);
   field("parent", node.parent);
   field("design_doc", node.design_doc);
   field("adrs", (node.adrs ?? []).join(", "));
@@ -73,6 +71,97 @@ export function renderRoadmapNode(record: RoadmapNodeRecord, links: RoadmapNodeL
   lines.push(`  created=${node.created}  updated=${node.updated}`);
   const intent = record.body.trimEnd();
   if (intent !== "") lines.push("", intent);
+  return lines.join("\n");
+}
+
+/**
+ * One indented `key=value` field line, skipped entirely when the value is
+ * absent or empty — a blank `prd=` would read as a recorded empty path.
+ */
+function fieldLine(lines: string[], key: string, value: string | undefined): void {
+  if (value !== undefined && value !== "") lines.push(`  ${key}=${value}`);
+}
+
+/** A section heading with its count, then one indented line per entry. */
+function section(lines: string[], heading: string, entries: readonly string[]): void {
+  lines.push("", `${heading} (${entries.length}):`);
+  // An EMPTY section still prints its heading: a section that vanished when it
+  // emptied would read as one that was never charted, which is a different
+  // fact about a map (F7's five sections are all always present).
+  if (entries.length === 0) lines.push("  (none)");
+  for (const entry of entries) lines.push(`  ${entry}`);
+}
+
+/** One ticket as a map's reader sees it: identity, then the question's first line. */
+function ticketLines(record: TicketRecord): string[] {
+  const ticket = record.frontmatter;
+  const head = [ticket.id, ticket.type, ticket.state];
+  if (ticket.claimant !== undefined) head.push(`claimed by ${ticket.claimant}`);
+  if (ticket.blockers.length > 0) head.push(`blocked by ${ticket.blockers.join(", ")}`);
+  const question = record.body.split("\n", 1)[0] ?? "";
+  // A distilled ticket has no body left; the decision line below carries it.
+  return question === "" ? [head.join("  ")] : [head.join("  "), `    ${question}`];
+}
+
+/**
+ * Render one map (F7): the node it charts, its destination, its Notes prose,
+ * and all four listed sections — decisions so far, not yet specified, out of
+ * scope, and the tickets hanging off it. Pure over records already read, so two
+ * reads of an unchanged store are byte-identical (HC1).
+ *
+ * `node` is the record the map charts, or null when no node carries that id yet
+ * (it may arrive by a later merge — `validate` reports the dangling ref).
+ */
+export function renderMap(
+  record: MapRecord,
+  node: RoadmapNodeRecord | null,
+  tickets: readonly TicketRecord[],
+): string {
+  const map = record.frontmatter;
+  const lines = [`map of ${node?.frontmatter.name ?? map.node}  id=${map.id}`];
+  fieldLine(lines, "node", map.node);
+  fieldLine(lines, "destination", map.destination);
+  lines.push(`  created=${map.created}  updated=${map.updated}`);
+  const notes = record.body.trimEnd();
+  if (notes !== "") lines.push("", notes);
+  section(
+    lines,
+    "decisions so far",
+    map.decisions.map((entry) => `${entry.ticket}  ${entry.decision}`),
+  );
+  section(lines, "not yet specified", map.fog);
+  section(
+    lines,
+    "out of scope",
+    map.out_of_scope.map((entry) =>
+      entry.ticket === undefined ? entry.reason : `${entry.reason}  (${entry.ticket})`,
+    ),
+  );
+  lines.push("", `tickets (${tickets.length}):`);
+  if (tickets.length === 0) lines.push("  (none)");
+  for (const ticket of tickets) for (const line of ticketLines(ticket)) lines.push(`  ${line}`);
+  return lines.join("\n");
+}
+
+/**
+ * Render one decision ticket (F7): its identity and lifecycle facts — the same
+ * `state`, `claimant` and `blockers` F8's frontier predicate joins on — then
+ * the question itself as the body. A distilled ticket prints no question,
+ * because there is none left; its decision line is what remains.
+ */
+export function renderTicket(record: TicketRecord, map: MapRecord | null): string {
+  const ticket = record.frontmatter;
+  const lines = [`ticket ${ticket.id}  ${ticket.type}  ${ticket.state}`];
+  fieldLine(lines, "map", ticket.map);
+  fieldLine(lines, "destination", map?.frontmatter.destination);
+  fieldLine(lines, "claimant", ticket.claimant);
+  fieldLine(lines, "blockers", ticket.blockers.join(", "));
+  fieldLine(lines, "decision", ticket.decision);
+  fieldLine(lines, "reason", ticket.reason);
+  fieldLine(lines, "resolution", ticket.resolution);
+  lines.push(`  created=${ticket.created}  updated=${ticket.updated}`);
+  const question = record.body.trimEnd();
+  if (question !== "") lines.push("", question);
   return lines.join("\n");
 }
 

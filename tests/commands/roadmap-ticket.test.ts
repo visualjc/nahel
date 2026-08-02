@@ -62,7 +62,9 @@ async function ok(env: Env, root: string, args: string[], actor?: string): Promi
 async function fails(env: Env, root: string, args: string[], actor?: string): Promise<string> {
   errs = [];
   expect(await roadmapCommand.run(args, env, root, actor)).toBe(1);
-  return stderr();
+  const message = stderr();
+  errs = [];
+  return message;
 }
 
 function lastId(printed: string[]): string {
@@ -284,7 +286,9 @@ describe("the claim is advisory assignment, not the intervention claim (F7)", ()
     const { root, env, ticket } = await charted();
     expect(await fails(env, root, ["ticket", "release", ticket])).toContain("open");
     await ok(env, root, ["ticket", "claim", ticket], "agent:codex");
-    expect(await fails(env, root, ["ticket", "distill", ticket])).toContain("claimed");
+    await ok(env, root, ["ticket", "release", ticket], "agent:codex");
+    // Twice is refused the same way: every verb states the state it moves from.
+    expect(await fails(env, root, ["ticket", "release", ticket])).toContain("open");
   });
 });
 

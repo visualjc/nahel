@@ -602,3 +602,112 @@ describe("featureStatus — the dev rollup it carries", () => {
     expect(JSON.stringify({ items, events, node })).toBe(before);
   });
 });
+
+describe("featureStatus — the stage, by precedence (F9's table, F2's machinery)", () => {
+  /** A feature over an epic whose children hold `statuses`, plus the events given. */
+  function stageOf(
+    statuses: readonly WorkItemFrontmatter["status"][],
+    types: readonly string[],
+  ): string {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, statuses);
+    const node = makeNode(env, { epic: epic.id });
+    const events = types.map((type, index) =>
+      makeEvent({
+        id: `aaaaaaa${index}`,
+        item: epic.id,
+        type,
+        ts: `2026-07-1${index + 1}T12:00:00Z`,
+        payload: { failed: 0, environment: "prod", version: "0.3.0" },
+      }),
+    );
+    return featureStatus(node, items, events).stage;
+  }
+
+  test("a covering release wins over everything below it", () => {
+    expect(
+      stageOf(["done"], [QA_SWEEP_EVENT_TYPE, DEPLOY_COMPLETED_EVENT_TYPE, RELEASE_ANNOUNCED_EVENT_TYPE]),
+    ).toBe("released");
+  });
+
+  test("no release, a covering deploy → deployed", () => {
+    expect(stageOf(["done"], [QA_SWEEP_EVENT_TYPE, DEPLOY_COMPLETED_EVENT_TYPE])).toBe("deployed");
+  });
+
+  test("no release or deploy, a covering sweep → tested", () => {
+    expect(stageOf(["done"], [QA_SWEEP_EVENT_TYPE])).toBe("tested");
+  });
+
+  test("no covering events, dev built → built", () => {
+    expect(stageOf(["done"], [])).toBe("built");
+  });
+
+  test("no covering events, dev in-flight → in-flight", () => {
+    expect(stageOf(["done", "backlog"], [])).toBe("in-flight");
+  });
+
+  test("no covering events, dev planned → planned", () => {
+    expect(stageOf(["backlog"], [])).toBe("planned");
+  });
+
+  test("no covering events, dev unknown → unknown", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const node = makeNode(env, { epic: "aaaaaaaa" });
+
+    expect(featureStatus(node, [], []).stage).toBe("unknown");
+  });
+
+  test("a deploy recorded AFTER a release leaves the stage at released — precedence, not recency", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    const release = makeEvent({
+      id: "aaaaaaa1",
+      item: epic.id,
+      type: RELEASE_ANNOUNCED_EVENT_TYPE,
+      ts: "2026-07-16T12:00:00Z",
+      payload: { version: "0.3.0" },
+    });
+    const laterDeploy = makeEvent({
+      id: "aaaaaaa2",
+      item: epic.id,
+      type: DEPLOY_COMPLETED_EVENT_TYPE,
+      ts: "2026-07-17T12:00:00Z",
+      payload: { environment: "prod" },
+    });
+
+    expect(featureStatus(node, items, [release, laterDeploy]).stage).toBe("released");
+  });
+
+  test("a sweep covering a DIFFERENT feature does not lift this one past its dev status", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const subject = featureOverEpic(env);
+    const other = featureOverEpic(env);
+    const event = makeEvent({ item: other.epic.id, payload: { failed: 0 } });
+
+    expect(featureStatus(subject.node, [...subject.items, ...other.items], [event]).stage).toBe(
+      "built",
+    );
+  });
+
+  test("dev unknown WITH a covering sweep still reads tested — the events are the higher rows", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const node = makeNode(env, { epic: "aaaaaaaa" });
+    const event = makeEvent({ item: "aaaaaaaa", payload: { failed: 0 } });
+
+    const status = featureStatus(node, [], [event]);
+    expect(status.dev).toBe("unknown");
+    expect(status.stage).toBe("tested");
+  });
+
+  test("a failing sweep still reaches tested — the stage says a sweep ran, not that it passed", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    const event = makeEvent({ item: epic.id, payload: { failed: 4 } });
+
+    const status = featureStatus(node, items, [event]);
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z (4 failed)");
+    expect(status.stage).toBe("tested");
+  });
+});

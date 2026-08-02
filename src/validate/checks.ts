@@ -12,22 +12,27 @@ import {
 import {
   configSchema,
   distilledSchema,
+  mapFrontmatterSchema,
   observationFrontmatterSchema,
   roadmapNodeFrontmatterSchema,
   runSchema,
   skillsLockSchema,
   skillsManifestSchema,
+  ticketFrontmatterSchema,
   workItemFrontmatterSchema,
   type Config,
   type JournalEvent,
+  type MapFrontmatter,
   type ObservationFrontmatter,
   type RoadmapNodeFrontmatter,
   type Run,
   type SkillsLock,
   type SkillsManifest,
+  type TicketFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import {
+  CORE_EVENT_TYPES,
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
 } from "../schema/events";
@@ -100,6 +105,9 @@ export interface ValidationInput {
   observations: RawFrontmatterRecord[];
   /** Roadmap node records from `nahel/roadmap/` (Phase 4 F1). */
   roadmapNodes: RawFrontmatterRecord[];
+  /** Map records from `nahel/maps/` and ticket records from `nahel/tickets/` (F7). */
+  maps: RawFrontmatterRecord[];
+  tickets: RawFrontmatterRecord[];
   segments: SegmentScan[];
   /** `skills.yaml` — undefined text means absent (a repo may use no skills). */
   skillsManifestPath: string;
@@ -175,6 +183,12 @@ interface ParsedState {
   roadmapNodes: Map<string, { record: RoadmapNodeFrontmatter; body: string; path: string }>;
   /** Ids with a node file on disk, valid or not (dangling = no file at all). */
   roadmapNodeFiles: Set<string>;
+  /** Maps and tickets that parsed cleanly, by id (Phase 4 F7). */
+  maps: Map<string, { record: MapFrontmatter; body: string; path: string }>;
+  tickets: Map<string, { record: TicketFrontmatter; body: string; path: string }>;
+  /** Ids with a map/ticket file on disk, valid or not (dangling = no file). */
+  mapFiles: Set<string>;
+  ticketFiles: Set<string>;
   /** Every valid event across all segments, in the ts → seq → id total order. */
   events: JournalEvent[];
   eventIds: Set<string>;
@@ -218,6 +232,10 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     observations: new Map(),
     roadmapNodes: new Map(),
     roadmapNodeFiles: new Set(input.roadmapNodes.map((raw) => raw.id)),
+    maps: new Map(),
+    tickets: new Map(),
+    mapFiles: new Set(input.maps.map((raw) => raw.id)),
+    ticketFiles: new Set(input.tickets.map((raw) => raw.id)),
     events: [],
     eventIds: new Set(),
     skillsManifest: undefined,
@@ -405,6 +423,22 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
       schema: roadmapNodeFrontmatterSchema,
       keep: (raw: RawFrontmatterRecord, record: RoadmapNodeFrontmatter) =>
         state.roadmapNodes.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
+    },
+    {
+      check: "schema.map",
+      what: "map",
+      raws: input.maps,
+      schema: mapFrontmatterSchema,
+      keep: (raw: RawFrontmatterRecord, record: MapFrontmatter) =>
+        state.maps.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
+    },
+    {
+      check: "schema.ticket",
+      what: "decision ticket",
+      raws: input.tickets,
+      schema: ticketFrontmatterSchema,
+      keep: (raw: RawFrontmatterRecord, record: TicketFrontmatter) =>
+        state.tickets.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
     },
   ] as const;
   for (const kind of frontmatterKinds) {
@@ -840,6 +874,126 @@ function checkRoadmapShape(state: ParsedState): Finding[] {
         path,
         message: `roadmap node ${record.id} (${record.name}) has no product ancestor — its intent hangs off nothing`,
         fix: "parent it (directly or through its tree) under a product node with `nahel roadmap node update <ref> --parent <ref>` — this is advisory, nothing was refused",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Map and decision-ticket integrity (Phase 4 F7). The severity split follows
+ * the rest of the roadmap layer exactly: a ref the STORE owns — the node a map
+ * charts, the map a ticket hangs off — is an error, because nothing addresses
+ * a chart without it; everything the PRD calls advisory (blocking edges, the
+ * claimant/state pairing) is a warning that never fails validate.
+ *
+ * The one error that is not a ref is the HAND-EMPTIED BODY. `distill` exists so
+ * that throwing a question away is a journaled, replayable, attributable act
+ * (HC3); an empty body with no distill event behind it means someone did it
+ * with an editor, which is exactly the thing the verb replaces.
+ */
+function checkWayfinder(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  // Which node each map charts — a second map on one node makes `map show
+  // <node-slug>` ambiguous, the same way a duplicate slug does for nodes.
+  const mapsByNode = new Map<string, string[]>();
+  for (const { record, path } of state.maps.values()) {
+    mapsByNode.set(record.node, [...(mapsByNode.get(record.node) ?? []), record.id]);
+    if (!state.roadmapNodeFiles.has(record.node)) {
+      findings.push({
+        severity: "error",
+        check: "refs.map-node",
+        path,
+        message: `map ${record.id} charts roadmap node ${record.node}, which does not exist`,
+        fix: "create the node, or re-chart the map on the right one — a map with no node is a chart of nothing",
+      });
+    }
+  }
+  for (const [node, ids] of [...mapsByNode.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    if (ids.length > 1) {
+      findings.push({
+        severity: "error",
+        check: "roadmap.duplicate-map",
+        message:
+          `roadmap node ${node} is charted by ${ids.sort().join(" and ")} — one map per node ` +
+          "(a second one makes `nahel roadmap map show <node>` ambiguous)",
+        fix: "merge the two charts into one and delete the loser's record — this is what a merge of two charting sessions produces",
+      });
+    }
+  }
+
+  // Every ticket whose body was emptied THROUGH the CLI, by its distill event.
+  const distilled = new Set<string>();
+  for (const event of state.events) {
+    if (event.type !== CORE_EVENT_TYPES.ticketDistilled) continue;
+    for (const mutation of mutationRecords(event)) {
+      if (!("invalid" in mutation) && mutation.target === "ticket") {
+        distilled.add(mutation.record.id);
+      }
+    }
+  }
+
+  for (const { record, body, path } of state.tickets.values()) {
+    if (!state.mapFiles.has(record.map)) {
+      findings.push({
+        severity: "error",
+        check: "refs.ticket-map",
+        path,
+        message: `decision ticket ${record.id} hangs off map ${record.map}, which does not exist`,
+        fix: "chart the map, or re-point the ticket at the right one — a ticket with no map answers no destination",
+      });
+    }
+    for (const blocker of record.blockers) {
+      if (blocker === record.id) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.ticket-shape",
+          path,
+          message: `decision ticket ${record.id} is its own blocker — it can never come off the frontier`,
+          fix: `re-wire it with \`nahel roadmap ticket update ${record.id} --blocked-by <ticket-id>\` or \`--clear-blockers\` — this is advisory, nothing was refused`,
+        });
+      } else if (!state.ticketFiles.has(blocker)) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.ticket-blocker-missing",
+          path,
+          message: `decision ticket ${record.id} is blocked by ${blocker}, which does not exist`,
+          fix: "the blocking ticket may arrive by a later merge — otherwise re-wire it with `nahel roadmap ticket update <ref> --blocked-by <ticket-id>` or `--clear-blockers`",
+        });
+      }
+    }
+    // The claimant and the state are one fact spelled twice: `claimed` means
+    // someone holds it, and no other state holds anything.
+    if (record.state === "claimed" && record.claimant === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.ticket-shape",
+        path,
+        message: `decision ticket ${record.id} is claimed but records no claimant — nothing says who is working it`,
+        fix: `release it with \`nahel roadmap ticket release ${record.id}\` and claim it again — the claim is advisory, so releasing is always permitted`,
+      });
+    }
+    if (record.state !== "claimed" && record.claimant !== undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.ticket-shape",
+        path,
+        message:
+          `decision ticket ${record.id} is ${record.state} but still records claimant ` +
+          `${record.claimant} — nothing stays assigned once it is decided`,
+        fix: "the CLI drops the claimant on every terminal transition; this record was written another way",
+      });
+    }
+    if (body === "" && !distilled.has(record.id)) {
+      findings.push({
+        severity: "error",
+        check: "roadmap.ticket-body",
+        path,
+        message:
+          `decision ticket ${record.id} has an empty body and no \`${CORE_EVENT_TYPES.ticketDistilled}\` event — ` +
+          "a ticket body is emptied through the CLI, never by editing the file (hard constraint 3)",
+        fix: `restore the body (\`nahel validate --repair\` replays the journaled record), then empty it with \`nahel roadmap ticket distill ${record.id}\``,
       });
     }
   }
@@ -1414,70 +1568,112 @@ function checkCycles(state: ParsedState): Finding[] {
 }
 
 /** A mutation event's parsed payload, or why it cannot be replayed. */
-type MutationTarget = "item" | "run" | "observation" | "roadmap-node";
+type MutationTarget =
+  | "item"
+  | "run"
+  | "observation"
+  | "roadmap-node"
+  | "map"
+  | "ticket";
 
 type Mutation =
   | { target: "item"; record: WorkItemFrontmatter; body: string }
   | { target: "run"; record: Run }
   | { target: "observation"; record: ObservationFrontmatter; body: string }
   | { target: "roadmap-node"; record: RoadmapNodeFrontmatter; body: string }
+  | { target: "map"; record: MapFrontmatter; body: string }
+  | { target: "ticket"; record: TicketFrontmatter; body: string }
   | { target: MutationTarget; invalid: string };
 
+/** Each mutation target's schema, and whether its payload carries a body. */
+const MUTATION_SCHEMAS: Record<
+  MutationTarget,
+  { schema: z.ZodType<{ id: string }>; hasBody: boolean }
+> = {
+  item: { schema: workItemFrontmatterSchema, hasBody: true },
+  run: { schema: runSchema, hasBody: false },
+  observation: { schema: observationFrontmatterSchema, hasBody: true },
+  "roadmap-node": { schema: roadmapNodeFrontmatterSchema, hasBody: true },
+  map: { schema: mapFrontmatterSchema, hasBody: true },
+  ticket: { schema: ticketFrontmatterSchema, hasBody: true },
+};
+
+/** Parse one `{target, record, body}` triple out of a mutation payload. */
+function mutationEntry(entry: Record<string, unknown>, target: MutationTarget): Mutation {
+  const kind = MUTATION_SCHEMAS[target];
+  const result = kind.schema.safeParse(entry["record"]);
+  if (!result.success) return { target, invalid: zodIssues(result.error) };
+  const body = entry["body"];
+  if (kind.hasBody && typeof body !== "string") {
+    return { target, invalid: "payload body is not a string" };
+  }
+  // The cast is the same one parseState's kind table makes: TypeScript cannot
+  // relate the table's schema to the union member across a lookup, but within
+  // one target they always match.
+  return { target, record: result.data, body: typeof body === "string" ? body : "" } as Mutation;
+}
+
 /**
- * Parse a mutation event's payload record, when the event is a mutation.
+ * The mutation records one event carries, when the event is a mutation — one
+ * entry for a single-record mutation, one per record for a SEQUENCE (F7's
+ * `resolve` and `close` write several records under a single write-ahead
+ * event), and [] when the event is not a mutation at all.
+ *
  * Mutations are identified by event TYPE (the choke point's core mutation
  * types), never by payload shape — a mutation-shaped payload under `note` or
  * any open extension type (a forged `nahel log`, a rogue writer) is inert
  * data. Within a mutation type, payload shape is a validity check: a core
  * mutation event that cannot be replayed is reported, not ignored.
  */
-function mutationRecord(event: JournalEvent): Mutation | undefined {
-  if (!MUTATION_EVENT_TYPES.has(event.type)) return undefined;
+function mutationRecords(event: JournalEvent): Mutation[] {
+  if (!MUTATION_EVENT_TYPES.has(event.type)) return [];
   const payload = event.payload;
-  if (payload["target"] === "item") {
-    const result = workItemFrontmatterSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "item", invalid: zodIssues(result.error) };
-    const body = payload["body"];
-    if (typeof body !== "string") {
-      return { target: "item", invalid: "payload body is not a string" };
+  if (payload["target"] === "sequence") {
+    const records = payload["records"];
+    if (!Array.isArray(records)) {
+      return [{ target: sequenceTarget(event), invalid: "sequence payload carries no records list" }];
     }
-    return { target: "item", record: result.data, body };
-  }
-  if (payload["target"] === "run") {
-    const result = runSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "run", invalid: zodIssues(result.error) };
-    return { target: "run", record: result.data };
-  }
-  if (payload["target"] === "observation") {
-    const result = observationFrontmatterSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "observation", invalid: zodIssues(result.error) };
-    const body = payload["body"];
-    if (typeof body !== "string") {
-      return { target: "observation", invalid: "payload body is not a string" };
+    const mutations: Mutation[] = [];
+    for (const entry of records) {
+      if (entry === null || typeof entry !== "object") {
+        mutations.push({ target: sequenceTarget(event), invalid: "sequence record is not an object" });
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      const target = record["target"];
+      if (typeof target !== "string" || !(target in MUTATION_SCHEMAS)) {
+        mutations.push({
+          target: sequenceTarget(event),
+          invalid: `sequence record names no known target (${JSON.stringify(target)})`,
+        });
+        continue;
+      }
+      mutations.push(mutationEntry(record, target as MutationTarget));
     }
-    return { target: "observation", record: result.data, body };
+    return mutations;
   }
-  if (payload["target"] === "roadmap-node") {
-    const result = roadmapNodeFrontmatterSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "roadmap-node", invalid: zodIssues(result.error) };
-    const body = payload["body"];
-    if (typeof body !== "string") {
-      return { target: "roadmap-node", invalid: "payload body is not a string" };
-    }
-    return { target: "roadmap-node", record: result.data, body };
+  const target = payload["target"];
+  if (typeof target === "string" && target in MUTATION_SCHEMAS) {
+    return [mutationEntry(payload, target as MutationTarget)];
   }
   // A core mutation type whose payload lacks the target/record replay fields:
   // the choke point always writes them, so this event cannot be replayed.
-  return {
-    target: event.type.startsWith("item.")
-      ? "item"
-      : event.type.startsWith("observation.")
-        ? "observation"
-        : event.type.startsWith("roadmap.")
-          ? "roadmap-node"
-          : "run",
-    invalid: "payload carries no target/record mutation fields",
-  };
+  return [
+    {
+      target: sequenceTarget(event),
+      invalid: "payload carries no target/record mutation fields",
+    },
+  ];
+}
+
+/** The record kind an unreplayable event's TYPE implies, for the report. */
+function sequenceTarget(event: JournalEvent): MutationTarget {
+  if (event.type.startsWith("item.")) return "item";
+  if (event.type.startsWith("observation.")) return "observation";
+  if (event.type.startsWith("roadmap.map-")) return "map";
+  if (event.type.startsWith("roadmap.ticket-")) return "ticket";
+  if (event.type.startsWith("roadmap.")) return "roadmap-node";
+  return "run";
 }
 
 /**
@@ -1523,50 +1719,52 @@ function checkClaims(state: ParsedState): Finding[] {
   };
 
   for (const event of state.events) {
-    const mutation = mutationRecord(event);
-    if (mutation === undefined || "invalid" in mutation) continue;
-    // Observations and roadmap nodes touch no item — no claim can cover them
-    // (mutate() parity: a claim freezes work, never the intent above it).
-    if (mutation.target === "observation" || mutation.target === "roadmap-node") continue;
+    for (const mutation of mutationRecords(event)) {
+      if ("invalid" in mutation) continue;
+      // Observations, roadmap nodes, maps and tickets touch no item — no claim
+      // can cover them (mutate() parity: a claim freezes work, never the intent
+      // above it, and a ticket's own claim is advisory assignment).
+      if (mutation.target !== "item" && mutation.target !== "run") continue;
 
-    const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
-    if (event.actor.kind === "agent") {
-      const incomingParent =
-        mutation.target === "item" ? mutation.record.parent : undefined;
-      const claim = coveringClaim(targetItem, incomingParent);
-      if (claim !== undefined) {
-        const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
-        findings.push({
-          severity: "error",
-          check: "claims.violation",
-          message:
-            `event ${event.id} (${event.type}) is an agent mutation by ${event.actor.id} ` +
-            `on item ${targetItem}, which was claimed by ${claim.claimant}${via} at event time`,
-          fix: "review the merged history with the claimant — the claim was held when this mutation was journaled (PRD F9)",
-        });
+      const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
+      if (event.actor.kind === "agent") {
+        const incomingParent =
+          mutation.target === "item" ? mutation.record.parent : undefined;
+        const claim = coveringClaim(targetItem, incomingParent);
+        if (claim !== undefined) {
+          const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
+          findings.push({
+            severity: "error",
+            check: "claims.violation",
+            message:
+              `event ${event.id} (${event.type}) is an agent mutation by ${event.actor.id} ` +
+              `on item ${targetItem}, which was claimed by ${claim.claimant}${via} at event time`,
+            fix: "review the merged history with the claimant — the claim was held when this mutation was journaled (PRD F9)",
+          });
+        }
       }
-    }
 
-    if (mutation.target === "item") {
-      const record = mutation.record;
-      const existing = claimedBy.get(record.id);
-      if (
-        record.claimed_by !== undefined &&
-        existing !== undefined &&
-        existing !== record.claimed_by
-      ) {
-        findings.push({
-          severity: "error",
-          check: "claims.conflict",
-          message:
-            `item ${record.id} has conflicting claims: claimed by ${existing}, ` +
-            `then by ${record.claimed_by} (event ${event.id}) with no handback between`,
-          fix: "decide the claimant: the loser hands back, then re-claim (nahel handback / nahel claim)",
-        });
+      if (mutation.target === "item") {
+        const record = mutation.record;
+        const existing = claimedBy.get(record.id);
+        if (
+          record.claimed_by !== undefined &&
+          existing !== undefined &&
+          existing !== record.claimed_by
+        ) {
+          findings.push({
+            severity: "error",
+            check: "claims.conflict",
+            message:
+              `item ${record.id} has conflicting claims: claimed by ${existing}, ` +
+              `then by ${record.claimed_by} (event ${event.id}) with no handback between`,
+            fix: "decide the claimant: the loser hands back, then re-claim (nahel handback / nahel claim)",
+          });
+        }
+        if (record.claimed_by === undefined) claimedBy.delete(record.id);
+        else claimedBy.set(record.id, record.claimed_by);
+        parentOf.set(record.id, record.parent);
       }
-      if (record.claimed_by === undefined) claimedBy.delete(record.id);
-      else claimedBy.set(record.id, record.claimed_by);
-      parentOf.set(record.id, record.parent);
     }
   }
   return findings;
@@ -1680,8 +1878,8 @@ function checkDivergence(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
 
   for (const event of state.events) {
-    const mutation = mutationRecord(event);
-    if (mutation !== undefined && "invalid" in mutation) {
+    for (const mutation of mutationRecords(event)) {
+      if (!("invalid" in mutation)) continue;
       findings.push({
         severity: "error",
         check: "journal.payload",
@@ -1693,78 +1891,65 @@ function checkDivergence(state: ParsedState): Finding[] {
     }
   }
 
-  type ItemFinalist = { event: JournalEvent; record: WorkItemFrontmatter; body: string };
-  type RunFinalist = { event: JournalEvent; record: Run };
-  type ObservationFinalist = {
-    event: JournalEvent;
-    record: ObservationFrontmatter;
-    body: string;
-  };
-  type RoadmapNodeFinalist = {
-    event: JournalEvent;
-    record: RoadmapNodeFrontmatter;
-    body: string;
-  };
-  const itemFinalists = new Map<string, ItemFinalist[]>();
-  const runFinalists = new Map<string, RunFinalist[]>();
-  const observationFinalists = new Map<string, ObservationFinalist[]>();
-  const roadmapNodeFinalists = new Map<string, RoadmapNodeFinalist[]>();
+  // Keyed by target and id, and mirroring the store's replayPending exactly: a
+  // SEQUENCE event (F7) contributes one finalist per record it carries, so an
+  // interruption between any two of its writes is reported record by record.
+  type Finalist = { event: JournalEvent; record: { id: string }; body: string };
+  const finalists = new Map<string, Finalist[]>();
   for (const segment of state.input.segments) {
     // Per segment, event order is causal order: later overwrites earlier.
-    const segmentItems = new Map<string, ItemFinalist>();
-    const segmentRuns = new Map<string, RunFinalist>();
-    const segmentObservations = new Map<string, ObservationFinalist>();
-    const segmentRoadmapNodes = new Map<string, RoadmapNodeFinalist>();
+    const latest = new Map<string, Finalist>();
     for (const event of segment.events) {
-      const mutation = mutationRecord(event);
-      if (mutation === undefined || "invalid" in mutation) continue;
-      if (mutation.target === "item") {
-        segmentItems.set(mutation.record.id, {
+      for (const mutation of mutationRecords(event)) {
+        if ("invalid" in mutation) continue;
+        const body = mutation.target === "run" ? "" : mutation.body;
+        latest.set(`${mutation.target}:${mutation.record.id}`, {
           event,
           record: mutation.record,
-          body: mutation.body,
-        });
-      } else if (mutation.target === "run") {
-        segmentRuns.set(mutation.record.id, { event, record: mutation.record });
-      } else if (mutation.target === "roadmap-node") {
-        segmentRoadmapNodes.set(mutation.record.id, {
-          event,
-          record: mutation.record,
-          body: mutation.body,
-        });
-      } else {
-        segmentObservations.set(mutation.record.id, {
-          event,
-          record: mutation.record,
-          body: mutation.body,
+          body,
         });
       }
     }
-    for (const [id, finalist] of segmentItems) {
-      itemFinalists.set(id, [...(itemFinalists.get(id) ?? []), finalist]);
-    }
-    for (const [id, finalist] of segmentRuns) {
-      runFinalists.set(id, [...(runFinalists.get(id) ?? []), finalist]);
-    }
-    for (const [id, finalist] of segmentObservations) {
-      observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), finalist]);
-    }
-    for (const [id, finalist] of segmentRoadmapNodes) {
-      roadmapNodeFinalists.set(id, [...(roadmapNodeFinalists.get(id) ?? []), finalist]);
+    for (const [key, finalist] of latest) {
+      finalists.set(key, [...(finalists.get(key) ?? []), finalist]);
     }
   }
 
+  /** The on-disk record and its file, per target — what divergence compares to. */
+  const onDisk: Record<
+    MutationTarget,
+    Map<string, { record: { id: string }; body?: string; path: string }>
+  > = {
+    item: state.items,
+    run: state.runs,
+    observation: state.observations,
+    "roadmap-node": state.roadmapNodes,
+    map: state.maps,
+    ticket: state.tickets,
+  };
+  /** What each target is called in the report. */
+  const noun: Record<MutationTarget, string> = {
+    item: "item",
+    run: "run",
+    observation: "observation",
+    "roadmap-node": "roadmap node",
+    map: "map",
+    ticket: "decision ticket",
+  };
+
   const repairFix =
     "run `nahel validate --repair` — it replays the journaled mutation and only materializes what the journal already records";
-  for (const [id, finalists] of itemFinalists) {
-    const disk = state.items.get(id);
-    const candidates = latestCandidates(finalists);
+  for (const [key, list] of finalists) {
+    const target = key.slice(0, key.indexOf(":")) as MutationTarget;
+    const id = key.slice(target.length + 1);
+    const disk = onDisk[target].get(id);
+    const candidates = latestCandidates(list);
     const inSync =
       disk !== undefined &&
       candidates.some(
         (candidate) =>
           JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
-          disk.body === candidate.body,
+          (disk.body ?? "") === candidate.body,
       );
     if (!inSync) {
       const pending = candidates[candidates.length - 1]!;
@@ -1773,74 +1958,7 @@ function checkDivergence(state: ParsedState): Finding[] {
         check: "journal.divergence",
         ...(disk === undefined ? {} : { path: disk.path }),
         message:
-          `item ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
-          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
-        fix: repairFix,
-      });
-    }
-  }
-  for (const [id, finalists] of runFinalists) {
-    const disk = state.runs.get(id);
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      disk !== undefined &&
-      candidates.some(
-        (candidate) => JSON.stringify(disk.record) === JSON.stringify(candidate.record),
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      findings.push({
-        severity: "error",
-        check: "journal.divergence",
-        ...(disk === undefined ? {} : { path: disk.path }),
-        message:
-          `run ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
-          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
-        fix: repairFix,
-      });
-    }
-  }
-  for (const [id, finalists] of observationFinalists) {
-    const disk = state.observations.get(id);
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      disk !== undefined &&
-      candidates.some(
-        (candidate) =>
-          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
-          disk.body === candidate.body,
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      findings.push({
-        severity: "error",
-        check: "journal.divergence",
-        ...(disk === undefined ? {} : { path: disk.path }),
-        message:
-          `observation ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
-          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
-        fix: repairFix,
-      });
-    }
-  }
-  for (const [id, finalists] of roadmapNodeFinalists) {
-    const disk = state.roadmapNodes.get(id);
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      disk !== undefined &&
-      candidates.some(
-        (candidate) =>
-          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
-          disk.body === candidate.body,
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      findings.push({
-        severity: "error",
-        check: "journal.divergence",
-        ...(disk === undefined ? {} : { path: disk.path }),
-        message:
-          `roadmap node ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
+          `${noun[target]} ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
           `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
         fix: repairFix,
       });
@@ -2261,6 +2379,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkRoadmapDerivation(state),
     ...checkRoadmapAdrRefs(state),
     ...checkRoadmapShape(state),
+    ...checkWayfinder(state),
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),

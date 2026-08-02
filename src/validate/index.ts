@@ -9,9 +9,12 @@ import {
   itemPath,
   listDistilledMarkers,
   listItems,
+  listMaps,
   listObservations,
   listRoadmapNodes,
   listRuns,
+  listTickets,
+  mapPath,
   observationPath,
   readConfigText,
   readRunRecordText,
@@ -20,6 +23,7 @@ import {
   readTextFile,
   roadmapNodePath,
   runRecordPath,
+  ticketPath,
   type StoreLayout,
 } from "../store/layout";
 import {
@@ -138,6 +142,8 @@ export async function collectValidationInput(
     runs: [],
     observations: [],
     roadmapNodes: [],
+    maps: [],
+    tickets: [],
     segments: await scanSegments(layout),
     skillsManifestPath: layout.skillsManifestPath,
     skillsLockPath: layout.skillsLockPath,
@@ -209,6 +215,28 @@ export async function collectValidationInput(
       continue;
     }
     input.roadmapNodes.push(await collectFrontmatterRecord(id, roadmapNodePath(layout, id)));
+  }
+  for (const id of (await listMaps(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.maps.push({
+        id,
+        path: join(layout.mapsDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
+    input.maps.push(await collectFrontmatterRecord(id, mapPath(layout, id)));
+  }
+  for (const id of (await listTickets(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.tickets.push({
+        id,
+        path: join(layout.ticketsDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
+    input.tickets.push(await collectFrontmatterRecord(id, ticketPath(layout, id)));
   }
 
   // Knowledge-document presence (prd: F1/ADR-0013; investigation: F5): stat

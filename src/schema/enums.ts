@@ -82,6 +82,32 @@ export const ROADMAP_HORIZONS = ["now", "next", "later"] as const;
 export type RoadmapHorizon = (typeof ROADMAP_HORIZONS)[number];
 
 /**
+ * What kind of work answers a decision ticket (glossary: Decision ticket;
+ * Phase 4 F7, wayfinder-adapted): `research` — go find out; `prototype` — build
+ * a throwaway and look; `grilling` — interview the human until the branch is
+ * resolved; `task` — the answer is known, someone just has to do it. The type
+ * picks the surface the working-a-map workflow reaches for, nothing else: it
+ * carries no lifecycle of its own and never gates a transition.
+ */
+export const DECISION_TICKET_TYPES = ["research", "prototype", "grilling", "task"] as const;
+export type DecisionTicketType = (typeof DECISION_TICKET_TYPES)[number];
+
+/**
+ * A decision ticket's lifecycle state (glossary: Decision ticket; Phase 4 F7).
+ * Four states and six transitions, every one of them a named CLI verb — the
+ * PRD's transition table read literally.
+ *
+ * `claimed` is ADVISORY assignment and deliberately NOT the intervention claim
+ * (`nahel intervene claim`, which freezes a work-item subtree against agent
+ * mutation): a claimed ticket refuses only a second claim, release is always
+ * permitted to anyone, and nothing anywhere is frozen. The two words share a
+ * spelling and nothing else — F5 named the distinction, F8's frontier depends
+ * on it (an `open` ticket with no claimant is takeable).
+ */
+export const DECISION_TICKET_STATES = ["open", "claimed", "resolved", "closed"] as const;
+export type DecisionTicketState = (typeof DECISION_TICKET_STATES)[number];
+
+/**
  * Who owns legislation for a governance area (glossary: Delegated
  * governance): `human` — agents propose, the human approves; `delegated` —
  * agent roles decide via consensus. Recorded in Phase 1, enforced later.

@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   ACTOR_KINDS,
+  DECISION_TICKET_STATES,
+  DECISION_TICKET_TYPES,
   FOUNDING_MODES,
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
@@ -160,6 +162,98 @@ export const roadmapNodeFrontmatterSchema = z.strictObject({
   updated: timestampField,
 });
 export type RoadmapNodeFrontmatter = z.infer<typeof roadmapNodeFrontmatterSchema>;
+
+/**
+ * One line of a map's **Decisions so far** index (Phase 4 F7): the ticket that
+ * produced the decision, and the one-liner itself. An INDEX, not a store — the
+ * decision's full reasoning lives in the journal event the resolution wrote and
+ * in the observation distilled from it, which is exactly why a ticket body can
+ * later be thrown away without losing anything.
+ */
+export const mapDecisionSchema = z.strictObject({
+  ticket: idField,
+  decision: nonEmptyString("decision"),
+});
+export type MapDecision = z.infer<typeof mapDecisionSchema>;
+
+/**
+ * One line of a map's **Out of scope** section (F7): what was ruled beyond the
+ * destination, and — when a `ticket close` earned the line — which ticket. The
+ * ticket ref is optional because charting rules things out before any ticket
+ * exists. Out-of-scope entries never graduate: nothing moves a line back.
+ */
+export const mapOutOfScopeSchema = z.strictObject({
+  reason: nonEmptyString("out-of-scope reason"),
+  ticket: idField.optional(),
+});
+export type MapOutOfScope = z.infer<typeof mapOutOfScopeSchema>;
+
+/**
+ * Map frontmatter (Phase 4 F7) — the wayfinder chart attached to ONE roadmap
+ * node: where this effort is going, what has been decided, what is still foggy,
+ * and what was ruled out. The fifth section, **Notes**, is the markdown body
+ * (the node/observation precedent: the prose IS the body).
+ *
+ * The three list sections are REQUIRED keys, unlike a node's per-kind links: a
+ * node's links are optional because WHICH kind carries which is a soft
+ * `validate` judgment, while every map has all five sections and the CLI writes
+ * all three lists on every mutation. An absent key here therefore means a
+ * hand-edited record, which is a finding rather than a shape to tolerate.
+ *
+ * There is deliberately no status, count, or progress field: a map's state is
+ * read from its tickets, and F8's frontier is the only view that ranks them.
+ */
+export const mapFrontmatterSchema = z.strictObject({
+  id: idField,
+  /** The roadmap node this map charts — one map per node (F7). */
+  node: idField,
+  /** Where this effort is going; a map without one charts nothing. */
+  destination: nonEmptyString("destination"),
+  /** Decisions so far: the one-line index, in the order they were decided. */
+  decisions: z.array(mapDecisionSchema),
+  /** Not yet specified: in-scope questions not sharp enough to ticket yet. */
+  fog: z.array(nonEmptyString("fog entry")),
+  /** Out of scope: ruled beyond the destination; never graduates. */
+  out_of_scope: z.array(mapOutOfScopeSchema),
+  created: timestampField,
+  updated: timestampField,
+});
+export type MapFrontmatter = z.infer<typeof mapFrontmatterSchema>;
+
+/**
+ * Decision-ticket frontmatter (Phase 4 F7) — one open question hanging off a
+ * map, with the question itself as the markdown body. The body is what
+ * `distill` empties once the decision is recorded elsewhere; every other field
+ * survives, so a distilled ticket still reads as a resolved question.
+ *
+ * `state`, `claimant` and `blockers` are the three facts F8's frontier
+ * predicate joins on — a takeable ticket is `open`, unclaimed, and blocked by
+ * nothing still live. Blocking is ADVISORY: the list is a rendering input, and
+ * no command anywhere refuses work because an entry is unresolved.
+ *
+ * `claimant` is an actor id, present exactly while the state is `claimed`; the
+ * terminal states carry none, because nothing is assigned once it is decided.
+ */
+export const ticketFrontmatterSchema = z.strictObject({
+  id: idField,
+  /** The map this ticket hangs off — the ticket→map direction, one way. */
+  map: idField,
+  type: z.enum(DECISION_TICKET_TYPES),
+  state: z.enum(DECISION_TICKET_STATES),
+  /** Who holds the advisory claim; present exactly while state is `claimed`. */
+  claimant: nonEmptyString("claimant actor id").optional(),
+  /** Sibling tickets this one waits on — advisory, never enforced (F8). */
+  blockers: z.array(idField),
+  /** The one-liner `resolve` recorded (also indexed on the map). */
+  decision: nonEmptyString("decision").optional(),
+  /** Why `close` ruled the question away (also a line in the map's Out of scope). */
+  reason: nonEmptyString("reason").optional(),
+  /** The resolution event id — what the decision's observation cites as its source. */
+  resolution: idField.optional(),
+  created: timestampField,
+  updated: timestampField,
+});
+export type TicketFrontmatter = z.infer<typeof ticketFrontmatterSchema>;
 
 /** Run — one execution of a work item through its lane; hot state lives here. */
 export const runSchema = z.strictObject({

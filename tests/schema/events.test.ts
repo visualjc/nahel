@@ -29,6 +29,15 @@ describe("schema/events", () => {
       observationCreated: "observation.created",
       roadmapNodeCreated: "roadmap.node-created",
       roadmapNodeUpdated: "roadmap.node-updated",
+      mapCreated: "roadmap.map-created",
+      mapUpdated: "roadmap.map-updated",
+      ticketCreated: "roadmap.ticket-created",
+      ticketUpdated: "roadmap.ticket-updated",
+      ticketClaimed: "roadmap.ticket-claimed",
+      ticketReleased: "roadmap.ticket-released",
+      ticketResolved: "roadmap.ticket-resolved",
+      ticketClosed: "roadmap.ticket-closed",
+      ticketDistilled: "roadmap.ticket-distilled",
       note: "note",
     });
   });

@@ -31,8 +31,8 @@ const MAP = {
 const TICKET = {
   id: "x1rr51c4",
   map: "kqm3vx7t",
-  type: "research",
-  state: "open",
+  type: "research" as const,
+  state: "open" as const,
   blockers: [],
   created: "2026-08-01T12:00:00Z",
   updated: "2026-08-01T12:00:00Z",

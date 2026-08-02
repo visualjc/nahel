@@ -17,6 +17,15 @@ export const CORE_EVENT_TYPES = {
   observationCreated: "observation.created",
   roadmapNodeCreated: "roadmap.node-created",
   roadmapNodeUpdated: "roadmap.node-updated",
+  mapCreated: "roadmap.map-created",
+  mapUpdated: "roadmap.map-updated",
+  ticketCreated: "roadmap.ticket-created",
+  ticketUpdated: "roadmap.ticket-updated",
+  ticketClaimed: "roadmap.ticket-claimed",
+  ticketReleased: "roadmap.ticket-released",
+  ticketResolved: "roadmap.ticket-resolved",
+  ticketClosed: "roadmap.ticket-closed",
+  ticketDistilled: "roadmap.ticket-distilled",
   note: "note",
 } as const;
 
@@ -53,6 +62,35 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.observationCreated,
   CORE_EVENT_TYPES.roadmapNodeCreated,
   CORE_EVENT_TYPES.roadmapNodeUpdated,
+  CORE_EVENT_TYPES.mapCreated,
+  CORE_EVENT_TYPES.mapUpdated,
+  CORE_EVENT_TYPES.ticketCreated,
+  CORE_EVENT_TYPES.ticketUpdated,
+  CORE_EVENT_TYPES.ticketClaimed,
+  CORE_EVENT_TYPES.ticketReleased,
+  CORE_EVENT_TYPES.ticketResolved,
+  CORE_EVENT_TYPES.ticketClosed,
+  CORE_EVENT_TYPES.ticketDistilled,
+]);
+
+/**
+ * The wayfinder mutation types (F7), each named by the verb that writes it —
+ * the PRD's transition table, one row per entry. Three of them are MULTI-RECORD
+ * sequences: `resolve` writes the ticket, the decision observation and the
+ * map's index line under one event, and `close` writes the ticket and the map's
+ * out-of-scope line, so an interruption anywhere in the sequence leaves the
+ * journal ahead of the records — the one crash shape replay already heals.
+ */
+export const WAYFINDER_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
+  [CORE_EVENT_TYPES.mapCreated, "`nahel roadmap map new`"],
+  [CORE_EVENT_TYPES.mapUpdated, "`nahel roadmap map update`"],
+  [CORE_EVENT_TYPES.ticketCreated, "`nahel roadmap ticket new`"],
+  [CORE_EVENT_TYPES.ticketUpdated, "`nahel roadmap ticket update`"],
+  [CORE_EVENT_TYPES.ticketClaimed, "`nahel roadmap ticket claim`"],
+  [CORE_EVENT_TYPES.ticketReleased, "`nahel roadmap ticket release`"],
+  [CORE_EVENT_TYPES.ticketResolved, "`nahel roadmap ticket resolve`"],
+  [CORE_EVENT_TYPES.ticketClosed, "`nahel roadmap ticket close`"],
+  [CORE_EVENT_TYPES.ticketDistilled, "`nahel roadmap ticket distill`"],
 ]);
 
 /**
@@ -141,6 +179,7 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   // not by `nahel item`/`nahel run` like the rest of the mutation set.
   [CORE_EVENT_TYPES.roadmapNodeCreated, "`nahel roadmap node`"],
   [CORE_EVENT_TYPES.roadmapNodeUpdated, "`nahel roadmap node`"],
+  ...WAYFINDER_EVENT_TYPES,
   [ROADMAP_ACKED_EVENT_TYPE, "`nahel roadmap ack`"],
   [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
   [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],

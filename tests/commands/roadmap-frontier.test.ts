@@ -657,4 +657,23 @@ describe("the frontier carries the reader onward (F8)", () => {
     const hints = (await frontier(env, root)).split("\n").filter((line) => line.startsWith("↳ "));
     expect(hints.join("\n")).toContain(`nahel progress --item ${id}`);
   });
+
+  test("the hint names the item on the FIRST line, not whichever sorts first flat", async () => {
+    const { root, env } = await setup();
+    // The child is created BEFORE the item that ends up its parent, so the
+    // store's flat `created` → `id` order starts with the child while the
+    // rendered TREE starts with the parent. The two genuinely disagree, and a
+    // hint that followed the flat order would point past the first line a
+    // reader sees. (Same-second creation reaches the same disagreement through
+    // the id tiebreak — this shape gets there without depending on the clock.)
+    const child = await work(env, root, "add-refunds");
+    const parent = await work(env, root, "payments-epic");
+    await item(env, root, ["update", child, "--parent", parent]);
+
+    const rendered = await frontier(env, root);
+    const lines = rendered.split("\n").filter((line) => line.includes("  backlog  "));
+    expect(lines[0]).toContain(parent);
+    expect(lines[1]).toContain(child);
+    expect(rendered).toContain(`↳ nahel progress --item ${parent}  —`);
+  });
 });

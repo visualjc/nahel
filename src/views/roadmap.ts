@@ -542,14 +542,17 @@ const NO_ROADMAP =
 
 /**
  * The zoom hint a rendering ends with (F3), so the drill path is discoverable
- * from the output itself rather than from the help. The example is the
- * alphabetically first slug among the nodes the rendering named: stable against
- * id churn and against re-parenting, so a doc-tested rendering does not wobble
- * when unrelated state moves.
+ * from the output itself rather than from the help.
+ *
+ * Every hint is `↳ <command>  — <what it shows>`, and the command is REAL: a
+ * concrete slug, never a `<node>` placeholder a reader would have to fill in.
+ * The one it names is the alphabetically first slug the rendering listed —
+ * stable against id churn and re-parenting, so a doc-tested rendering does not
+ * wobble when unrelated state moves.
  */
 function zoomHint(names: readonly string[]): string | undefined {
   if (names.length === 0) return undefined;
-  return `↳ nahel roadmap <node>  — zoom in (e.g. nahel roadmap ${[...names].sort()[0]!})`;
+  return `↳ nahel roadmap ${[...names].sort()[0]!}  — zoom into a node listed above`;
 }
 
 /** Close a rendering with its hints; absent ones are dropped, not left blank. */

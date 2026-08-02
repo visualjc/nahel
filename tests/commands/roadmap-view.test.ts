@@ -645,7 +645,9 @@ describe("the zoom hints are the drill path, and they run (F3)", () => {
       expect(lines.length).toBeGreaterThan(0);
       for (const hint of lines) followed.push(await follow(env, root, hint));
     }
-    expect(followed).toHaveLength(6);
+    // One zoom hint on the overview, one on the product, two on the charted
+    // feature (its work and its chart), and the upward one on the bare feature.
+    expect(followed).toHaveLength(5);
     for (const output of followed) expect(output).not.toBe("");
   });
 

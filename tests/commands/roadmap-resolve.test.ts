@@ -218,7 +218,11 @@ describe("nahel roadmap ticket resolve — decision, observation, index line", (
         `${DECISION}\nand a forged second line`,
         `${DECISION}\rand a forged second line`,
       ]) {
-        const message = await fails(env, root, ["ticket", verb, ticket, flag, text]);
+        const args =
+          verb === "close"
+            ? ["ticket", verb, ticket, "--out-of-scope", flag, text]
+            : ["ticket", verb, ticket, flag, text];
+        const message = await fails(env, root, args);
         expect(message).toContain(flag);
         expect(message).toContain("one line");
       }
@@ -249,13 +253,20 @@ describe("nahel roadmap ticket resolve — decision, observation, index line", (
   });
 });
 
-describe("nahel roadmap ticket close — the out-of-scope ruling", () => {
-  test("closes the ticket, adds one line to Out of scope with its reason, and never to Decisions", async () => {
+describe("nahel roadmap ticket close — two dispositions, and only one of them is Out of scope", () => {
+  test("--out-of-scope adds one line to Out of scope with its reason, and never to Decisions", async () => {
     const { root, layout, env, map, ticket } = await charted();
     await ok(
       env,
       root,
-      ["ticket", "close", ticket, "--reason", "marketing announcements are a later phase"],
+      [
+        "ticket",
+        "close",
+        ticket,
+        "--out-of-scope",
+        "--reason",
+        "marketing announcements are a later phase",
+      ],
       "human:jim",
     );
 
@@ -263,6 +274,7 @@ describe("nahel roadmap ticket close — the out-of-scope ruling", () => {
     expect(record.frontmatter.state).toBe("closed");
     expect(record.frontmatter.reason).toBe("marketing announcements are a later phase");
     expect(record.frontmatter.decision).toBeUndefined();
+    expect(record.frontmatter.invalidated_by).toBeUndefined();
 
     const chart = await readMap(layout, map);
     expect(chart.frontmatter.out_of_scope).toEqual([
@@ -276,19 +288,109 @@ describe("nahel roadmap ticket close — the out-of-scope ruling", () => {
     expect(closed.actor).toEqual({ kind: "human", id: "jim" });
   });
 
+  test("--invalidated-by records the decision that killed the question, and writes NO Out-of-scope line", async () => {
+    // An invalidated question was never beyond the destination — filing it
+    // under "ruled beyond the destination" would be false. The invalidating
+    // ref lives on the ticket; the map renders it beside Decisions so far.
+    const { root, layout, env, map, ticket } = await charted();
+    const second = lastId(
+      await ok(env, root, [
+        "ticket",
+        "new",
+        "--map",
+        map,
+        "--type",
+        "task",
+        "--question",
+        "which region do we deploy to?",
+      ]),
+    );
+    await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION]);
+    await ok(
+      env,
+      root,
+      [
+        "ticket",
+        "close",
+        second,
+        "--invalidated-by",
+        ticket,
+        "--reason",
+        "the fly.io decision already settles the region",
+      ],
+      "human:jim",
+    );
+
+    const record = await readTicket(layout, second);
+    expect(record.frontmatter.state).toBe("closed");
+    expect(record.frontmatter.invalidated_by).toBe(ticket);
+    expect(record.frontmatter.reason).toBe("the fly.io decision already settles the region");
+
+    const chart = await readMap(layout, map);
+    expect(chart.frontmatter.out_of_scope).toEqual([]);
+    // And it is not a decision either: the index carries the resolution only.
+    expect(chart.frontmatter.decisions).toEqual([{ ticket, decision: DECISION }]);
+
+    // The map says why the question died, beside the decision that killed it.
+    const shown = (await ok(env, root, ["map", "show", map])).join("\n");
+    expect(shown).toContain("invalidated by a decision (1)");
+    expect(shown).toContain(second);
+    expect(shown).toContain(ticket);
+    expect(shown).toContain("the fly.io decision already settles the region");
+    expect(shown).toContain("out of scope (0)");
+    expect((await ok(env, root, ["ticket", "show", second])).join("\n")).toContain(
+      `invalidated_by=${ticket}`,
+    );
+  });
+
+  test("a close states WHICH disposition it is: neither is refused, and both together are refused", async () => {
+    const { root, layout, env, map, ticket } = await charted();
+    const neither = await fails(env, root, ["ticket", "close", ticket, "--reason", "because"]);
+    expect(neither).toContain("--out-of-scope");
+    expect(neither).toContain("--invalidated-by");
+    const both = await fails(env, root, [
+      "ticket",
+      "close",
+      ticket,
+      "--reason",
+      "because",
+      "--out-of-scope",
+      "--invalidated-by",
+      "0aaaaaaa",
+    ]);
+    expect(both).toContain("mutually exclusive");
+    // A malformed invalidating ref is refused too — it names a ticket or the
+    // journal event whose decision killed the question.
+    expect(
+      await fails(env, root, [
+        "ticket",
+        "close",
+        ticket,
+        "--reason",
+        "because",
+        "--invalidated-by",
+        "not-an-id",
+      ]),
+    ).toContain("--invalidated-by");
+    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
+    expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([]);
+  });
+
   test("a close with no reason is refused, and re-closing changes nothing", async () => {
     const { root, layout, env, map, ticket } = await charted();
-    expect(await fails(env, root, ["ticket", "close", ticket])).toContain("--reason");
-    await ok(env, root, ["ticket", "close", ticket, "--reason", "out of scope"]);
-    expect(await fails(env, root, ["ticket", "close", ticket, "--reason", "again"])).toContain(
-      "closed",
+    expect(await fails(env, root, ["ticket", "close", ticket, "--out-of-scope"])).toContain(
+      "--reason",
     );
+    await ok(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "out of scope"]);
+    expect(
+      await fails(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "again"]),
+    ).toContain("closed");
     expect((await readMap(layout, map)).frontmatter.out_of_scope).toHaveLength(1);
   });
 
   test("a closed ticket can no longer be resolved — the table has no such row", async () => {
     const { root, env, ticket } = await charted();
-    await ok(env, root, ["ticket", "close", ticket, "--reason", "out of scope"]);
+    await ok(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "out of scope"]);
     expect(await fails(env, root, ["ticket", "resolve", ticket, "--decision", DECISION])).toContain(
       "closed",
     );

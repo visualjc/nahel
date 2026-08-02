@@ -193,7 +193,14 @@ describe("nahel roadmap ticket distill — the body goes through the CLI", () =>
     expect(await fails(env, root, ["ticket", "distill", open])).toContain("open");
     await ok(env, root, ["ticket", "claim", open], "agent:codex");
     expect(await fails(env, root, ["ticket", "distill", open])).toContain("claimed");
-    await ok(env, root, ["ticket", "close", open, "--reason", "a later phase owns announcements"]);
+    await ok(env, root, [
+      "ticket",
+      "close",
+      open,
+      "--out-of-scope",
+      "--reason",
+      "a later phase owns announcements",
+    ]);
     await ok(env, root, ["ticket", "distill", open]);
     expect((await readTicket(layout, open)).body).toBe("");
     expect((await readTicket(layout, ticket)).body).not.toBe("");

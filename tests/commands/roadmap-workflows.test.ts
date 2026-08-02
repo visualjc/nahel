@@ -75,6 +75,15 @@ describe("work-map.md — one ticket, one decision, and the fog that graduates",
     expect(body).toContain("one ticket");
   });
 
+  test("a close states WHICH disposition it is — the two are not the same fact", async () => {
+    const { body } = await shippedWorkflow("work-map.md");
+    expect(body).toContain("--out-of-scope");
+    expect(body).toContain("--invalidated-by");
+    // And says why: an invalidated question was never beyond the destination.
+    expect(body).toContain("beyond the destination");
+    expect(body).toContain("invalidated");
+  });
+
   test("names the surface each ticket type is answered with", async () => {
     const { body } = await shippedWorkflow("work-map.md");
     // The type is not decoration: it picks the surface that answers it.

@@ -275,7 +275,14 @@ describe("close interrupted between its two steps (F7)", () => {
     const { root, layout, env, map, ticket } = await charted();
     await freeze(layout.mapsDir);
     expect(
-      await fails(env, root, ["ticket", "close", ticket, "--reason", "a later phase owns it"]),
+      await fails(env, root, [
+        "ticket",
+        "close",
+        ticket,
+        "--out-of-scope",
+        "--reason",
+        "a later phase owns it",
+      ]),
     ).not.toBe("");
     await thaw(layout.mapsDir);
 
@@ -285,9 +292,9 @@ describe("close interrupted between its two steps (F7)", () => {
     expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([
       { reason: "a later phase owns it", ticket },
     ]);
-    expect(await fails(env, root, ["ticket", "close", ticket, "--reason", "again"])).toContain(
-      "closed",
-    );
+    expect(
+      await fails(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "again"]),
+    ).toContain("closed");
     expect((await readMap(layout, map)).frontmatter.out_of_scope).toHaveLength(1);
   });
 });

@@ -206,6 +206,29 @@ describe("validate — the advisory shapes are warnings", () => {
     ).toHaveLength(1);
   });
 
+  test("an invalidating ref naming neither a ticket nor a journal event is a warning", async () => {
+    // `close --invalidated-by` records the decision that killed the question.
+    // A ref that resolves to nothing records nothing — reported like every
+    // other dangling ref in the layer, and never a refused mutation (the
+    // target may arrive by a later merge, ADR-0012).
+    const fixture = await setup();
+    const { map } = await charted(fixture);
+    const closed = await createTicket(fixture, {
+      map: map.id,
+      state: "closed",
+      reason: "another decision settled it",
+      invalidated_by: "0aaaaaaa",
+    });
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.ticket-invalidator-missing",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(closed.id);
+    expect(findings[0]!.message).toContain("0aaaaaaa");
+  });
+
   test("a ticket blocking itself is a warning — a well-formed id link, and an odd shape", async () => {
     const fixture = await setup();
     const node = await createNode(fixture, "a-product");

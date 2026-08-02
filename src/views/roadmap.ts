@@ -259,12 +259,26 @@ const NO_COVERAGE: ReadonlySet<string> = new Set();
  * ONE walk of the item tree per node. Callers that need both the rollup and the
  * event association compute it once and pass it to each — they are asking the
  * same question of the same subtree.
+ *
+ * An epic id NO ITEM RECORD carries covers nothing at all. F2 states the rule
+ * as resolution, not as string equality — an event covers a node iff its `item`
+ * resolves to that node's epic ITEM or to a descendant of it in the item
+ * `parent` tree — and a dangling id resolves to nothing, so the honest coverage
+ * is empty. The dev rollup still reads `unknown` (the id is recorded, the work
+ * is not there) and `validate` still names the missing epic; what changes is
+ * that no logged lifecycle event can carry the node past a development nobody
+ * can find. This SUPERSEDES the earlier reading — coverage by ref, so events
+ * associate with a dangling epic — which seeded the walk with an id no record
+ * carried and let a deploy or release advance the stage of a node whose epic
+ * had been dropped, straight into F9's stage and F10's archival gate.
  */
 function epicCoverage(
   node: RoadmapNodeFrontmatter,
   items: readonly WorkItemFrontmatter[],
 ): ReadonlySet<string> {
-  return node.epic === undefined ? NO_COVERAGE : descendantIds(items, node.epic);
+  if (node.epic === undefined) return NO_COVERAGE;
+  if (!items.some((item) => item.id === node.epic)) return NO_COVERAGE;
+  return descendantIds(items, node.epic);
 }
 
 /**
@@ -390,14 +404,14 @@ export interface RoadmapFeatureStatus {
  * brief block each make once per feature.
  *
  * The event ASSOCIATION rule is stored, not inferred: an event covers this node
- * iff its `item` ref names the node's epic or a descendant of it in the item
- * `parent` tree. An event with no `item`, or one pointing outside the subtree,
- * covers nothing here — it stays store-wide and renders only in `brief`'s QA
- * line. Coverage is by REF, so an event still covers a node whose epic id has
- * no item record: the ref is the recorded fact, and the missing epic is its own
- * warning. (Two feature nodes whose epics nest therefore both see the inner
- * subtree's events — the honest reading of a tree that names one epic inside
- * another, which `validate`'s shape checks are what flag.)
+ * iff its `item` ref RESOLVES to the node's epic item or to a descendant of it
+ * in the item `parent` tree. An event with no `item`, one pointing outside the
+ * subtree, or one naming an epic id no record carries, covers nothing here — it
+ * stays store-wide and renders only in `brief`'s QA line (see epicCoverage for
+ * why a dangling epic covers nothing). (Two feature nodes whose epics nest
+ * therefore both see the inner subtree's events — the honest reading of a tree
+ * that names one epic inside another, which `validate`'s shape checks are what
+ * flag.)
  *
  * When more than one event of a type covers the node, the winner is the LAST in
  * the store's canonical total order (`ts` → `seq` → `id`, compareEvents), so

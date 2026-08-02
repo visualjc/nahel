@@ -396,14 +396,25 @@ describe("featureStatus — the association rule: which events cover a feature",
     expect(featureStatus(node, items, [event]).qa).toBe("—");
   });
 
-  test("a dangling epic id still associates by ref: dev unknown, QA column filled", () => {
+  /**
+   * Changed with the Phase 4 epic review, which SUPERSEDES the earlier reading
+   * (coverage by ref, so a dangling epic still associated). F2 states the rule
+   * as RESOLUTION — an event covers a node iff its `item` resolves to that
+   * node's epic item or to a descendant of it — and an id no record carries
+   * resolves to nothing. The dev status still reads `unknown` and `validate`
+   * still names the missing epic; what no longer happens is a logged deploy or
+   * release carrying such a node to `deployed`/`released`, which crossed into
+   * F9's stage and F10's archival precondition.
+   */
+  test("a dangling epic id covers NOTHING: dev unknown, every event column empty", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const node = makeNode(env, { epic: "aaaaaaaa" });
     const event = makeEvent({ item: "aaaaaaaa", payload: { failed: 0 } });
 
     const status = featureStatus(node, [], [event]);
     expect(status.dev).toBe("unknown");
-    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+    expect(status.qa).toBe("—");
+    expect(status.stage).toBe("unknown");
   });
 
   test("only the whole-sweep type feeds the QA column — a per-case qa.result does not", () => {
@@ -694,14 +705,25 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
     );
   });
 
-  test("dev unknown WITH a covering sweep still reads tested — the events are the higher rows", () => {
+  /**
+   * Changed with the Phase 4 epic review, which SUPERSEDES the earlier reading
+   * this case was written against ("the events are the higher rows, so a sweep
+   * aimed at a dangling epic lifts the stage to tested"). Under the resolution
+   * rule, dev `unknown` and a covering event are mutually exclusive: `unknown`
+   * IS "the epic record is not there", and an id no record carries resolves to
+   * nothing, so it covers nothing. The precedence table's last row —
+   * "dev status `unknown`, no covering events" — is the only row a missing epic
+   * can reach, exactly as the PRD spells it.
+   */
+  test("dev unknown reaches the table's last row: events aimed at the missing epic cover nothing", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const node = makeNode(env, { epic: "aaaaaaaa" });
     const event = makeEvent({ item: "aaaaaaaa", payload: { failed: 0 } });
 
     const status = featureStatus(node, [], [event]);
     expect(status.dev).toBe("unknown");
-    expect(status.stage).toBe("tested");
+    expect(status.qa).toBe("—");
+    expect(status.stage).toBe("unknown");
   });
 
   test("a failing sweep still reaches tested — the stage says a sweep ran, not that it passed", () => {
@@ -771,7 +793,7 @@ describe("featureStatus — the epic's subtree is walked once", () => {
     expect(counted.reads()).toBe(0);
   });
 
-  test("a dangling epic id still walks once — coverage is by ref, so events still associate", () => {
+  test("a dangling epic walks NOTHING — there is no subtree to walk", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const { items } = epicWith(env, ["done"]);
     const node = makeNode(env, { epic: "aaaaaaaa" });
@@ -781,9 +803,12 @@ describe("featureStatus — the epic's subtree is walked once", () => {
       makeEvent({ item: "aaaaaaaa", payload: { failed: 0 } }),
     ]);
 
+    // Superseded by the epic review: an id no record carries resolves to
+    // nothing, so it covers nothing (see the association test above) — and the
+    // walk that used to seed itself with that id does not happen at all.
     expect(status.dev).toBe("unknown");
-    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
-    expect(counted.reads()).toBeGreaterThan(0);
+    expect(status.qa).toBe("—");
+    expect(counted.reads()).toBe(0);
   });
 });
 

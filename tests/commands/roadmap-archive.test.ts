@@ -1052,11 +1052,14 @@ describe("a dangling epic covers no lifecycle events (F2's rule, F10's gate)", (
     expect(zoom.join("\n")).not.toContain("released");
 
     const said = await fails(fixture.env, fixture.root, ["archive", "ghost-delta"]);
-    expect(said).toContain("unknown");
-    expect(said).toContain("released only");
+    expect(said).toContain("stage unknown");
+    expect(said).toContain("once its feature is released");
     expect(await text(fixture.root, "docs/prds/ghost-delta.md")).not.toBeNull();
     expect(await text(fixture.root, "docs/prds/archived/ghost-delta.md")).toBeNull();
-    // And validate does not ask anyone to archive it either.
-    expect((await validate(fixture.root)).out).not.toContain(node);
+    // Validate names the missing epic — and does NOT ask anyone to archive a
+    // node it never called released.
+    const report = await validate(fixture.root);
+    expect(report.out).toContain("roadmap.epic-missing");
+    expect(report.out).not.toContain(`node ${node} (ghost-delta) is released`);
   });
 });

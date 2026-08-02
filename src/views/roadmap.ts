@@ -1053,11 +1053,66 @@ export function ticketFrontier(tickets: readonly TicketRecord[]): TicketRecord[]
     });
 }
 
-/** Everything one frontier rendering reads from — three store reads, underived. */
+/** The work-item statuses that stop an item blocking its dependents (F8). */
+const SETTLED_ITEM_STATUSES: ReadonlySet<string> = new Set(["done", "dropped"]);
+
+/**
+ * Every item id an intervention claim covers: each claimed item's whole
+ * subtree, because a claim covers the subtree (the glossary; `nahel claim`
+ * pauses runs across exactly this set). Built from descendantIds — the one
+ * coverage walk the rollup, `progress --item` and the claim itself all use — so
+ * a claimed ANCESTOR is what takes a descendant off the frontier, and no second
+ * reading of "covered" can drift from the store's.
+ */
+function claimCoverage(items: readonly WorkItemFrontmatter[]): Set<string> {
+  const covered = new Set<string>();
+  for (const item of items) {
+    if (item.claimed_by === undefined) continue;
+    for (const id of descendantIds(items, item.id)) covered.add(id);
+  }
+  return covered;
+}
+
+/**
+ * True when a work item is takeable (F8): status `backlog`, not covered by an
+ * intervention claim, and every `depends_on` target already `done` or
+ * `dropped`.
+ *
+ * A dependency no record carries is NOT settled, for ticketTakeable's reason:
+ * the item may arrive by a later merge (ADR-0012), `validate` reports the
+ * dangling edge, and nothing is refused either way — the listing is all that
+ * holds back.
+ */
+function itemTakeable(
+  item: WorkItemFrontmatter,
+  byId: ReadonlyMap<string, WorkItemFrontmatter>,
+  claimed: ReadonlySet<string>,
+): boolean {
+  if (item.status !== "backlog" || claimed.has(item.id)) return false;
+  return item.depends_on.every((id) => {
+    const dependency = byId.get(id);
+    return dependency !== undefined && SETTLED_ITEM_STATUSES.has(dependency.status);
+  });
+}
+
+/**
+ * The takeable work items, in the order they arrive — the snapshot's canonical
+ * `created` → `id` order, which every other item view already renders in.
+ */
+export function workItemFrontier(
+  items: readonly WorkItemFrontmatter[],
+): WorkItemFrontmatter[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const claimed = claimCoverage(items);
+  return items.filter((item) => itemTakeable(item, byId, claimed));
+}
+
+/** Everything one frontier rendering reads from — four store reads, underived. */
 export interface FrontierFacts {
   tickets: readonly TicketRecord[];
   maps: readonly MapRecord[];
   nodes: readonly RoadmapNodeRecord[];
+  items: readonly WorkItemFrontmatter[];
 }
 
 /**
@@ -1093,10 +1148,23 @@ export function renderFrontier(facts: FrontierFacts): string {
     const question = ticketQuestion(record);
     if (question !== "") lines.push(`      ${question}`);
   }
+
+  // The second kind, rendered by the ONE item-line renderer `nahel status` uses
+  // — takeable items may nest (a backlog parent with a backlog child are both
+  // takeable), and knownIds is every item in the store so a parent left off the
+  // frontier is never reported missing.
+  const items = workItemFrontier(facts.items);
+  lines.push("", `work items (${items.length}):`);
+  if (items.length === 0) lines.push("  (none)");
+  lines.push(...renderItemTree(items, new Set(facts.items.map((item) => item.id))));
+
   const hints = [
     tickets[0] === undefined
       ? undefined
       : `↳ nahel roadmap ticket show ${tickets[0].frontmatter.id}  — the question in full`,
+    items[0] === undefined
+      ? undefined
+      : `↳ nahel progress --item ${items[0].id}  — what has happened on it so far`,
   ];
   hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
   return lines.join("\n");

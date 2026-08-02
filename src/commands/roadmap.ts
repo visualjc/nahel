@@ -108,9 +108,11 @@ const USAGE = `usage:
     <ref> is the node's slug or its id; both address the same node.
 
   nahel roadmap frontier
-    The takeable edge: the decision tickets that can be answered now (open,
-    unclaimed, every blocker settled). Reads only — it refuses nothing, and an
-    entry it does not list can still be started deliberately.
+    The takeable edge, across both kinds: the decision tickets that can be
+    answered now (open, unclaimed, every blocker settled) and the work items
+    that can be built now (backlog, unclaimed, every dependency done or
+    dropped). Reads only — it refuses nothing, and an entry it does not list
+    can still be started deliberately.
 
   nahel roadmap ack
     Say "seen": records a human-attributed acknowledgement that clears the
@@ -550,6 +552,7 @@ async function frontier(args: string[], cwd: string): Promise<number> {
       tickets: await readTickets(layout),
       maps: await readMaps(layout),
       nodes: await readRoadmapNodes(layout),
+      items: (await loadSnapshot(layout)).items,
     }),
   );
   return 0;

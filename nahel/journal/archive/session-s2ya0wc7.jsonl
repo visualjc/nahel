@@ -1,0 +1,2 @@
+{"id":"xddkw2qb","ts":"2026-08-02T01:29:10Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"ykvprab2","payload":{"target":"item","record":{"id":"ykvprab2","name":"roadmap-node-records","type":"feature","status":"backlog","lane":"direct","parent":"bdgp78s4","depends_on":[],"external_refs":[],"created":"2026-08-02T01:29:10Z","updated":"2026-08-02T01:29:10Z"},"body":""}}
+{"id":"nm5qz25b","ts":"2026-08-02T01:29:10Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

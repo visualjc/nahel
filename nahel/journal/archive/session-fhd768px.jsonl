@@ -1,0 +1,2 @@
+{"id":"76m15t85","ts":"2026-08-02T01:29:22Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"x1rr51c4","payload":{"target":"item","record":{"id":"x1rr51c4","name":"roadmap-maps-tickets","type":"feature","status":"backlog","lane":"direct","parent":"bdgp78s4","depends_on":["ykvprab2"],"external_refs":[],"created":"2026-08-02T01:29:22Z","updated":"2026-08-02T01:29:22Z"},"body":""}}
+{"id":"mk8v03gc","ts":"2026-08-02T01:29:22Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

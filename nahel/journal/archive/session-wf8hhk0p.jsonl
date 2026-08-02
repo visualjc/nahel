@@ -1,0 +1,2 @@
+{"id":"n3szp17f","ts":"2026-08-02T01:29:22Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"sb1fr7vk","payload":{"target":"item","record":{"id":"sb1fr7vk","name":"roadmap-view-verbs","type":"feature","status":"backlog","lane":"direct","parent":"bdgp78s4","depends_on":["ykvprab2","8nh9ja8c"],"external_refs":[],"created":"2026-08-02T01:29:22Z","updated":"2026-08-02T01:29:22Z"},"body":""}}
+{"id":"xg9pj0xb","ts":"2026-08-02T01:29:22Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

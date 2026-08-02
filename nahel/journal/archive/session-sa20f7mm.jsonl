@@ -1,0 +1,2 @@
+{"id":"7m6p00zm","ts":"2026-08-02T01:29:00Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"sp2yf32m","payload":{"target":"item","record":{"id":"sp2yf32m","name":"roadmap-layer","type":"plan","status":"done","lane":"full","depends_on":[],"external_refs":[],"created":"2026-07-25T17:27:28Z","updated":"2026-08-02T01:29:00Z"},"body":""}}
+{"id":"z3jv8x4w","ts":"2026-08-02T01:29:00Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

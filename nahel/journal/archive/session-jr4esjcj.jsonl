@@ -1,0 +1,2 @@
+{"id":"jnc3ahr3","ts":"2026-08-02T01:29:22Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"xcwnks9b","payload":{"target":"item","record":{"id":"xcwnks9b","name":"roadmap-migration","type":"feature","status":"backlog","lane":"direct","parent":"bdgp78s4","depends_on":["sb1fr7vk"],"external_refs":[],"created":"2026-08-02T01:29:22Z","updated":"2026-08-02T01:29:22Z"},"body":""}}
+{"id":"pe5pxtgb","ts":"2026-08-02T01:29:22Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

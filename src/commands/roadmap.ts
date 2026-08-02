@@ -1,12 +1,13 @@
 import { parseArgs } from "node:util";
 import { ROADMAP_HORIZONS, ROADMAP_NODE_KINDS } from "../schema/enums";
 import type { Env } from "../schema/env";
-import { CORE_EVENT_TYPES } from "../schema/events";
+import { CORE_EVENT_TYPES, ROADMAP_ACKED_EVENT_TYPE } from "../schema/events";
 import { generateId, ID_PATTERN } from "../schema/id";
 import {
   roadmapNodeFrontmatterSchema,
   type RoadmapNodeFrontmatter,
 } from "../schema/records";
+import { appendEvent } from "../store/journal";
 import {
   openStore,
   readRoadmapNodes,
@@ -77,7 +78,12 @@ const USAGE = `usage:
 
   nahel roadmap node show <ref>
     Print one node — its fields, its lineage both ways, and its intent prose.
-    <ref> is the node's slug or its id; both address the same node.`;
+    <ref> is the node's slug or its id; both address the same node.
+
+  nahel roadmap ack
+    Say "seen": records a human-attributed acknowledgement that clears the
+    brief's "roadmap changes since your last touch" line. Mutates no node.
+    Run under an AGENT actor it is journaled as itself and clears nothing.`;
 
 /** Options shared by `node new` and `node update` (update adds the clears). */
 const LINK_OPTIONS = {
@@ -417,10 +423,45 @@ async function nodeShow(args: string[], cwd: string): Promise<number> {
   return 0;
 }
 
+/**
+ * `nahel roadmap ack` (F5): record that a human has looked at the roadmap. The
+ * act IS the whole verb — it carries no ref, no payload, and touches no record,
+ * so there is nothing to parse and nothing to name. Under an AGENT actor it is
+ * journaled all the same and clears nothing: provenance is read back from the
+ * journal, exactly as merge authority reads the flip that authorizes it, and a
+ * silent ✅ would read as a clear the awaiting surface will not honor.
+ */
+async function ack(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
+  if (args.length > 0) {
+    throw new UsageError(
+      `roadmap ack takes no arguments — it acknowledges the roadmap as a whole (got ${JSON.stringify(args[0])})`,
+    );
+  }
+  const ctx = await commandContext(cwd, env, actorOverride);
+  await appendEvent(ctx.layout, ctx.env, {
+    type: ROADMAP_ACKED_EVENT_TYPE,
+    actor: ctx.actor,
+    session: ctx.session,
+    payload: {},
+  });
+  await closeStoreContext(ctx);
+  console.log(
+    ctx.actor.kind === "human"
+      ? "✅ roadmap acknowledged"
+      : `✅ roadmap acknowledged by ${ctx.actor.kind}:${ctx.actor.id} — recorded, but an agent ack clears nothing (a human's eyes are what the brief is waiting for)`,
+  );
+  return 0;
+}
+
 export const roadmapCommand: Command = {
   name: "roadmap",
   description:
-    "create, update, and read roadmap nodes — the intent layer above work items (roadmap node new | update | show)",
+    "create, update, and read roadmap nodes — the intent layer above work items (roadmap node new | update | show, roadmap ack)",
   run: (argv, env, cwd, actorOverride) =>
     execute("run `nahel roadmap --help` for usage", async () => {
       const [group, ...rest] = argv;
@@ -433,11 +474,12 @@ export const roadmapCommand: Command = {
         console.log(USAGE);
         return 0;
       }
+      if (group === "ack") return ack(rest, env, cwd, actorOverride);
       if (group !== "node") {
         throw new UsageError(
           group === undefined
-            ? "missing subcommand — expected `roadmap node new`, `roadmap node update`, or `roadmap node show`"
-            : `unknown subcommand ${JSON.stringify(group)} — expected \`roadmap node\``,
+            ? "missing subcommand — expected `roadmap node new`, `roadmap node update`, `roadmap node show`, or `roadmap ack`"
+            : `unknown subcommand ${JSON.stringify(group)} — expected \`roadmap node\` or \`roadmap ack\``,
         );
       }
       const [sub, ...args] = rest;

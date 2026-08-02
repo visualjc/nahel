@@ -55,6 +55,16 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.roadmapNodeUpdated,
 ]);
 
+/**
+ * `nahel roadmap ack` (Phase 4 F5): the human saying "seen" about the roadmap.
+ * Deliberately NOT a core mutation type — it changes no record, which is the
+ * whole point of the verb — but reserved all the same, because the
+ * awaiting-your-eyes surface reads it by TYPE to decide whether agent-authored
+ * roadmap acts have been looked at, exactly as merge authority reads
+ * `config.updated` to decide who authorized auto-merge. Payload: `{}`.
+ */
+export const ROADMAP_ACKED_EVENT_TYPE = "roadmap.acked";
+
 /** The dispatch bracket: intent (carrying the composed invocation) and outcome. */
 export const DISPATCH_STARTED_EVENT_TYPE = "dispatch.started";
 export const DISPATCH_ENDED_EVENT_TYPE = "dispatch.ended";
@@ -131,6 +141,7 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   // not by `nahel item`/`nahel run` like the rest of the mutation set.
   [CORE_EVENT_TYPES.roadmapNodeCreated, "`nahel roadmap node`"],
   [CORE_EVENT_TYPES.roadmapNodeUpdated, "`nahel roadmap node`"],
+  [ROADMAP_ACKED_EVENT_TYPE, "`nahel roadmap ack`"],
   [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
   [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],
   [DISPATCH_ENDED_EVENT_TYPE, "`nahel dispatch`"],

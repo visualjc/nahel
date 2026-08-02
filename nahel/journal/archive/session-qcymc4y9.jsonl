@@ -1,0 +1,2 @@
+{"id":"c4b4x52c","ts":"2026-08-02T07:00:42Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"ev98p7d2","payload":{"target":"item","record":{"id":"ev98p7d2","name":"roadmap-brief-standup","type":"feature","status":"in-review","lane":"direct","parent":"bdgp78s4","depends_on":["8nh9ja8c","sb1fr7vk"],"external_refs":[],"created":"2026-08-02T01:29:22Z","updated":"2026-08-02T07:00:42Z"},"body":""}}
+{"id":"yhf5wd4x","ts":"2026-08-02T07:00:42Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

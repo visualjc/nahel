@@ -1,0 +1,2 @@
+{"id":"d6pxs7sy","ts":"2026-08-02T03:41:17Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"7cjwj6ez","payload":{"target":"item","record":{"id":"7cjwj6ez","name":"roadmap-governance-agent","type":"feature","status":"in-review","lane":"direct","parent":"bdgp78s4","depends_on":["ykvprab2"],"external_refs":[],"created":"2026-08-02T01:29:22Z","updated":"2026-08-02T03:41:17Z"},"body":""}}
+{"id":"n8bb1ntk","ts":"2026-08-02T03:41:17Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

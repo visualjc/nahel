@@ -2,7 +2,7 @@
 id: y8pdc7fw
 name: roadmap-prd-archival
 type: feature
-status: backlog
+status: in-review
 lane: direct
 parent: bdgp78s4
 depends_on:
@@ -10,5 +10,5 @@ depends_on:
   - 0e0fh3em
 external_refs: []
 created: 2026-08-02T01:29:23Z
-updated: 2026-08-02T01:29:23Z
+updated: 2026-08-02T10:37:44Z
 ---

@@ -1,0 +1,2 @@
+{"id":"rqtdfe5h","ts":"2026-08-02T03:02:13Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"8nh9ja8c","payload":{"target":"item","record":{"id":"8nh9ja8c","name":"roadmap-derived-status","type":"feature","status":"in-review","lane":"direct","parent":"bdgp78s4","depends_on":["ykvprab2"],"external_refs":[],"created":"2026-08-02T01:29:22Z","updated":"2026-08-02T03:02:13Z"},"body":""}}
+{"id":"80068eth","ts":"2026-08-02T03:02:13Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

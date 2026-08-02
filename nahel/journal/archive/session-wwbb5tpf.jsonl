@@ -1,0 +1,2 @@
+{"id":"gkbm5ftt","ts":"2026-08-02T10:37:44Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"y8pdc7fw","payload":{"target":"item","record":{"id":"y8pdc7fw","name":"roadmap-prd-archival","type":"feature","status":"in-review","lane":"direct","parent":"bdgp78s4","depends_on":["ykvprab2","0e0fh3em"],"external_refs":[],"created":"2026-08-02T01:29:23Z","updated":"2026-08-02T10:37:44Z"},"body":""}}
+{"id":"57k8tw1z","ts":"2026-08-02T10:37:44Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"3kb2j1wj","ts":"2026-08-02T10:37:44Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"bdgp78s4","payload":{"target":"item","record":{"id":"bdgp78s4","name":"phase-4-roadmap-layer","type":"feature","status":"in-review","lane":"full","depends_on":[],"external_refs":[],"prd":"docs/prds/phase-4-roadmap-layer.md","created":"2026-08-02T01:29:00Z","updated":"2026-08-02T10:37:44Z"},"body":""}}
+{"id":"h9jp1asr","ts":"2026-08-02T10:37:44Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

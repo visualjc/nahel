@@ -22,11 +22,14 @@ import {
   knowledgePaths,
   listObservations,
   readObservation,
+  readRoadmapNodes,
   readTextFile,
+  type RoadmapNodeRecord,
   type StoreLayout,
 } from "../store/layout";
 import { GOAL_HEADING, HARD_CONSTRAINTS_HEADING } from "../templates/product";
 import { collectProgress, renderProgress } from "./progress";
+import { renderBriefRoadmap } from "./roadmap";
 import { chronological, loadSnapshot, type Snapshot } from "./snapshot";
 import { renderStatus } from "./status";
 
@@ -91,6 +94,12 @@ export interface BriefInputs {
   reader: Actor;
   /** Responsibility routing map from config, or undefined when unconfigured. */
   routing?: Config["routing"];
+  /**
+   * Roadmap node records (Phase 4 F4), in the id order readRoadmapNodes
+   * returns — the block orders them itself, by horizon entry. Absent or empty
+   * renders no roadmap section at all.
+   */
+  nodes?: readonly RoadmapNodeRecord[];
   /**
    * Observation records, oldest → newest (created → id), for the active
    * repro-waivers section (F5). Optional: absent renders no waiver block.
@@ -485,6 +494,12 @@ function assemble(
   // Optional, right after governance: advisory routing map when configured.
   const routing = routingBody(inputs.routing);
   if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
+  // Optional, between the policy and the work: where the product is going
+  // (Phase 4 F4). It sits ABOVE item statuses because that is the reading
+  // order — intent, then the work under it — and it is self-capping at
+  // BRIEF_ROADMAP_MAX_LINES, so no rung of the ladder below touches it.
+  const roadmap = renderBriefRoadmap(inputs.nodes ?? [], inputs.snapshot.items, inputs.events);
+  if (roadmap !== null) sections.push(`== roadmap ==\n${roadmap}`);
   sections.push(
     `== item statuses ==\n${statusSection}`,
     `== recent activity (newest last) ==\n${activityBody(inputs.events, keptEvents)}`,
@@ -594,6 +609,7 @@ export async function composeBrief(
     merge: await readMergeAuthority(layout, config),
     reader: resolveActor(config.actor, actorOverride),
     routing: config.routing,
+    nodes: await readRoadmapNodes(layout),
     observations,
     warnings,
   });

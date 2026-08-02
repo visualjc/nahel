@@ -1,5 +1,6 @@
 import { DECISION_TICKET_STATES, ROADMAP_HORIZONS } from "../schema/enums";
 import {
+  CORE_EVENT_TYPES,
   DEPLOY_COMPLETED_EVENT_TYPE,
   DEPLOY_ENVIRONMENT_PAYLOAD_KEY,
   QA_SWEEP_EVENT_TYPE,
@@ -644,6 +645,191 @@ export function renderRoadmapOverview(
     for (const { frontmatter } of outside) lines.push(`  ${nodeLine(frontmatter)}`);
   }
   hintBlock(lines, [zoomHint(nodes.map(({ frontmatter }) => frontmatter))]);
+  return lines.join("\n");
+}
+
+/**
+ * The brief's roadmap block: how many `now` nodes it names before it starts
+ * counting (F4). Ten is the PRD's number, and it is a cap on NAMES, never on
+ * truth — the remainder is always stated.
+ */
+export const BRIEF_ROADMAP_NOW_CAP = 10;
+
+/**
+ * The block's hard line budget (F4): ten `now` lines, the remainder line, and
+ * one summary line each for `next` and `later`. A block that could grow past
+ * this would make the brief's 4 KB target a function of roadmap size, and many
+ * parallel `now`s are doctrine (F8) — so the block is capped rather than
+ * truncated, and no rung of brief's ladder ever touches it.
+ */
+export const BRIEF_ROADMAP_MAX_LINES = BRIEF_ROADMAP_NOW_CAP + 3;
+
+/** The node kinds' derived summaries, one call each — F2's two renderers. */
+function nodeSummaryFields(
+  record: RoadmapNodeRecord,
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string[] {
+  const node = record.frontmatter;
+  if (node.kind === "feature") return [featureStatus(node, items, events).stage];
+  if (node.kind === "product") {
+    const features = productFeatureNodes(nodes, node.id);
+    return [
+      renderProductStatus(features.map(({ frontmatter }) => featureStatus(frontmatter, items, events).dev)),
+    ];
+  }
+  // An initiative's rollup semantics are deliberately undefined (F1's
+  // non-goal), so it claims no derived word — the same silence the zoom keeps.
+  return [];
+}
+
+/**
+ * One node as an orientation surface names it: the slug, its kind, whatever its
+ * kind makes derivable, and its id. Shared by the brief's block and `standup`'s
+ * group headers, so the two cannot describe the same node differently.
+ */
+export function roadmapNodeSummary(
+  record: RoadmapNodeRecord,
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string {
+  const node = record.frontmatter;
+  return [
+    node.name,
+    node.kind,
+    ...nodeSummaryFields(record, nodes, items, events),
+    `id=${node.id}`,
+  ].join("  ");
+}
+
+/** The two event types that can put a node on a horizon. */
+const HORIZON_EVENT_TYPES: ReadonlySet<string> = new Set([
+  CORE_EVENT_TYPES.roadmapNodeCreated,
+  CORE_EVENT_TYPES.roadmapNodeUpdated,
+]);
+
+/** The node id and horizon one roadmap act recorded, read defensively. */
+function recordedHorizon(event: JournalEvent): { id: string; horizon: string } | undefined {
+  const record = event.payload["record"];
+  if (typeof record !== "object" || record === null) return undefined;
+  const fields = record as Record<string, unknown>;
+  const id = fields["id"];
+  const horizon = fields["horizon"];
+  if (typeof id !== "string" || typeof horizon !== "string") return undefined;
+  return { id, horizon };
+}
+
+/** The act that put a node where it now stands, and the horizon it left it on. */
+interface HorizonEntry {
+  event: JournalEvent;
+  horizon: string;
+}
+
+/**
+ * The act that set each node's CURRENT horizon: walking the node's acts in the
+ * store's canonical order (`ts` → `seq` → `id`), the entry is the act that most
+ * recently CHANGED the horizon — a rename or an intent edit that left the
+ * horizon alone does not restart the clock, and a node moved to `next` and back
+ * to `now` entered `now` on the way back, not when it was charted.
+ *
+ * An act whose payload does not carry a readable id and horizon is skipped: it
+ * is data nahel cannot read as a horizon move, and guessing would date a node
+ * by an act that may have said nothing about where it sits.
+ */
+function horizonEntries(events: readonly JournalEvent[]): Map<string, HorizonEntry> {
+  const acts = events.filter((event) => HORIZON_EVENT_TYPES.has(event.type));
+  const entries = new Map<string, HorizonEntry>();
+  for (const event of [...acts].sort(compareEvents)) {
+    const recorded = recordedHorizon(event);
+    if (recorded === undefined) continue;
+    const current = entries.get(recorded.id);
+    if (current !== undefined && current.horizon === recorded.horizon) continue;
+    entries.set(recorded.id, { event, horizon: recorded.horizon });
+  }
+  return entries;
+}
+
+/**
+ * Horizon-entry order (F4): oldest first by the act that set the node's current
+ * horizon, then by slug.
+ *
+ * A node whose entry the journal does not explain — no roadmap act, or a last
+ * recorded horizon that disagrees with the record (a hand-edit, or a history
+ * compacted past it) — sorts AFTER every dated node rather than being given a
+ * date it never earned. Those tie by slug, and by id beneath it: duplicate
+ * slugs are a merge shape `validate` reports, and an order that was not total
+ * would let two of them swap between renders.
+ */
+export function horizonEntryOrder(
+  nodes: readonly RoadmapNodeRecord[],
+  events: readonly JournalEvent[],
+): RoadmapNodeRecord[] {
+  const entries = horizonEntries(events);
+  const entryOf = (record: RoadmapNodeRecord): JournalEvent | undefined => {
+    const entry = entries.get(record.frontmatter.id);
+    return entry === undefined || entry.horizon !== record.frontmatter.horizon
+      ? undefined
+      : entry.event;
+  };
+  return [...nodes].sort((a, b) => {
+    const entryA = entryOf(a);
+    const entryB = entryOf(b);
+    if (entryA !== undefined && entryB !== undefined) {
+      const order = compareEvents(entryA, entryB);
+      if (order !== 0) return order;
+    } else if (entryA !== undefined || entryB !== undefined) {
+      return entryA !== undefined ? -1 : 1;
+    }
+    const names = [a.frontmatter.name, b.frontmatter.name];
+    if (names[0] !== names[1]) return names[0]! < names[1]! ? -1 : 1;
+    return a.frontmatter.id < b.frontmatter.id ? -1 : a.frontmatter.id > b.frontmatter.id ? 1 : 0;
+  });
+}
+
+/** `n nodes`, singular at one, and an explicit `none` at zero. */
+function nodeCount(count: number): string {
+  if (count === 0) return "none";
+  return `${count} node${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The brief's roadmap block (F4): DETERMINISTIC ELISION, never a completeness
+ * promise the cap cannot keep. At most ten `now` nodes in horizon-entry order,
+ * one line each; the remainder counted on one line naming the verb that shows
+ * it; then one summary line each for `next` and `later`.
+ *
+ * Every horizon speaks even at zero — a horizon that vanished when it emptied
+ * would read as one nobody has decided about, the rule the roadmap view's
+ * buckets and F2's distribution already follow. `now` speaks as `now: none`
+ * only when it has nothing to list, because with nodes to name a header would
+ * cost the block a fourteenth line.
+ *
+ * Null when the store carries no nodes at all: an archived or never-charted
+ * store gets no section, not empty scaffolding (F4's acceptance criterion, and
+ * brief's routing/waivers precedent).
+ */
+export function renderBriefRoadmap(
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string | null {
+  if (nodes.length === 0) return null;
+  const on = (horizon: string): RoadmapNodeRecord[] =>
+    nodes.filter(({ frontmatter }) => frontmatter.horizon === horizon);
+
+  const now = horizonEntryOrder(on("now"), events);
+  const lines =
+    now.length === 0
+      ? ["now: none"]
+      : now
+          .slice(0, BRIEF_ROADMAP_NOW_CAP)
+          .map((record) => roadmapNodeSummary(record, nodes, items, events));
+  if (now.length > BRIEF_ROADMAP_NOW_CAP) {
+    lines.push(`+${now.length - BRIEF_ROADMAP_NOW_CAP} more — nahel roadmap`);
+  }
+  lines.push(`next: ${nodeCount(on("next").length)}`, `later: ${nodeCount(on("later").length)}`);
   return lines.join("\n");
 }
 

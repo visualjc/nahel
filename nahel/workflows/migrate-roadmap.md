@@ -87,13 +87,18 @@ nothing is ever written back onto the item; never hand-edit anything under
    `nahel log` prints the id of the event it wrote — that line is your
    confirmation the set landed.
 
-   **Do not batch this step and the node creations into one script.** Journal
-   timestamps are second-precision and every CLI invocation writes
-   its own segment, so two acts in the same second have **no provable order**.
-   A migration run end to end in one breath renders its nodes interleaved with
-   the set that chose them, and the ordering this step exists to establish
-   becomes unreadable. Compose each node's intent as its own deliberate act;
-   step 6 checks that the journal came out readable.
+   **Do not batch this step and the node creations into one script** — and do
+   not trust composition to take long enough either: two ordinary invocations
+   share a second easily.
+
+   **Wait until the clock has left the selection's second** before creating
+   the first node. One deliberate pause, made on purpose, is the only thing
+   that makes the ordering true rather than likely. Journal timestamps are
+   second-precision and every CLI invocation writes its own segment, so two
+   acts in the same second have **no provable order**. A same-second tie
+   **fails the migration**, and cannot be repaired by an explanatory note —
+   the ordering IS the audit trail, so a migration that cannot prove its own
+   order has not been made. Step 6 accepts or fails it on exactly that test.
 
 4. Create the product node — one per store:
 
@@ -130,14 +135,23 @@ nothing is ever written back onto the item; never hand-edit anything under
    and **nothing invented** that the logged set never selected. If the two
    disagree, the nodes are what you fix; the set is already journaled.
 
-   Then read the migration back as a reviewer will:
+   Then accept — or fail — the migration on its journal order:
 
        nahel progress
 
-   Your `roadmap.migration-selected` line must sit **above every**
-   `roadmap.node-created` line. If it does not, the acts shared a second (see
-   step 3) and the journal cannot prove the order — say so plainly in step 7's
-   note rather than leaving a reader to discover it.
+   The rendered position is the **quick look**: your
+   `roadmap.migration-selected` line should sit **above every**
+   `roadmap.node-created` line. It is not the acceptance. A same-second tie
+   breaks on the random event id, so the wrong order renders as the right one
+   about half the time, and an eyeballed timeline would pass it.
+
+   The acceptance is **strict timestamp inequality**: read the leading `ts` of
+   the selection line, then the leading `ts` of every `roadmap.node-created`
+   line, and each of those must be **strictly later**. Equal timestamps are a
+   same-second tie, and a same-second tie **fails the migration** — it
+   cannot be repaired by an explanatory note. No CLI verb unmakes a node, so a
+   failed migration stops here and is reported as failed; what the store does
+   about it is a decision above this workflow.
 
 7. Prove the direction, then leave the store clean:
 

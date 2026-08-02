@@ -150,13 +150,12 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
           "--data", `excluded=${JSON.stringify(excluded)}`),
         "log roadmap.migration-selected",
       );
-      // The doc forbids batching this step with the node creations, and this is
-      // that rule obeyed: journal timestamps are second-precision and every
-      // invocation writes its own segment, so acts inside one second are
-      // ordered ambiguously BY DESIGN (store/journal.ts says so). A scripted
-      // migration would leave F6's first criterion unprovable rather than met —
-      // so the test crosses the second boundary a real migration crosses while
-      // its author is composing the first node's intent.
+      // The doc's step 3, obeyed: WAIT until the clock has left the selection's
+      // second before creating the first node. Journal timestamps are
+      // second-precision and every invocation writes its own segment, so acts
+      // inside one second are ordered ambiguously BY DESIGN (store/journal.ts
+      // says so) — and "compose deliberately" is not a guarantee, since two
+      // ordinary invocations share a second easily. One pause, on purpose.
       await Bun.sleep(1_100);
 
       // ── step 4: the product node ──────────────────────────────────────────
@@ -188,13 +187,15 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       const selectionAt = timeline.indexOf(selections[0]!);
       const nodeLines = timeline.filter((line) => line.includes(NODE_CREATED));
       expect(nodeLines).toHaveLength(4); // one product + three features
+      const selectionTs = tsOf(selections[0]!);
       for (const line of nodeLines) {
-        // Rendered order: the set is above every node in the timeline a
-        // reviewer actually reads…
+        // The QUICK LOOK (step 6's first half): the set sits above every node
+        // in the timeline a reviewer reads. On its own this proves nothing — a
+        // same-second tie breaks on random event id and renders right by luck.
         expect(timeline.indexOf(line)).toBeGreaterThan(selectionAt);
-        // …and the unambiguous half of the total order agrees, so the reading
-        // does not depend on how two same-second segments happened to merge.
-        expect(tsOf(line) > tsOf(selections[0]!)).toBe(true);
+        // The ACCEPTANCE (step 6's second half, and F6 AC1 as clarified): the
+        // node's `ts` is STRICTLY later than the selection's. Equal fails.
+        expect(tsOf(line) > selectionTs).toBe(true);
       }
 
       const set = payloadOf(selections[0]!);

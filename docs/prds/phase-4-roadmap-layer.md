@@ -389,6 +389,11 @@ whatever nodes happen to exist afterwards.
   selected set — included ids and excluded near-misses with reasons — and
   strictly precedes every node-creation event in that store (journal order
   proves it; a set event written after the nodes fails this criterion).
+  **Strict precedence means strict timestamp inequality**: the selection
+  event's `ts` is earlier than every node-creation event's `ts`, and a
+  same-second tie fails migration — segments are per-invocation and a
+  same-second tie breaks on random event id, so rendered order alone proves
+  nothing.
 - Every id in that selected set has a node afterwards, and every node traces
   back to an id in it — the set and the result match exactly, with no
   orphans and nothing invented.

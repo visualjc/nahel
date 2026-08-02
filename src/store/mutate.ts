@@ -455,6 +455,27 @@ function mutationEventFields(
 }
 
 /**
+ * Every item a mutation touches, with the parent it will have afterwards — the
+ * pairs the claim check walks. A run names the item it belongs to; a sequence
+ * contributes one pair per ITEM write it carries, in write order, so the
+ * refusal names the first claimed record the act would have touched.
+ */
+function claimedItemTargets(
+  mutation: Mutation,
+): { id: string; parent: string | undefined }[] {
+  if (mutation.target === "item") {
+    return [{ id: mutation.frontmatter.id, parent: mutation.frontmatter.parent }];
+  }
+  if (mutation.target === "run") return [{ id: mutation.run.item, parent: undefined }];
+  if (mutation.target === "sequence") {
+    return mutation.writes
+      .filter((write) => write.target === "item")
+      .map((write) => ({ id: write.frontmatter.id, parent: write.frontmatter.parent }));
+  }
+  return [];
+}
+
+/**
  * Apply one mutation: validate → claim check → write-ahead journal event →
  * record write(s). Refusals and validation failures write nothing at all.
  */
@@ -464,18 +485,20 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
 
   // Claim enforcement: agents may not mutate a claimed item or anything in a
   // claimed subtree. Humans pass — the claim is theirs. Observations, roadmap
-  // nodes, maps and tickets touch no item, so no claim can cover them.
-  if (ctx.actor.kind === "agent" && (mutation.target === "item" || mutation.target === "run")) {
-    const targetItem = mutation.target === "item" ? mutation.frontmatter.id : mutation.run.item;
-    const incomingParent =
-      mutation.target === "item" ? mutation.frontmatter.parent : undefined;
-    const claim = await findCoveringClaim(ctx.layout, targetItem, incomingParent);
-    if (claim !== undefined) {
-      const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
-      throw new ClaimViolationError(
-        `refusing agent mutation: item ${targetItem} is covered by a claim${via} (claimed_by ${claim.claimedBy}) — ` +
-          `a human must \`nahel handback ${claim.id}\` first`,
-      );
+  // nodes, maps and tickets touch no item, so no claim can cover them — but a
+  // SEQUENCE that writes items (F10's archival moves their `prd` paths) is an
+  // item mutation like any other, and is checked write by write: a claim that
+  // one act could step around is not a guardrail.
+  if (ctx.actor.kind === "agent") {
+    for (const { id, parent } of claimedItemTargets(mutation)) {
+      const claim = await findCoveringClaim(ctx.layout, id, parent);
+      if (claim !== undefined) {
+        const via = claim.id === id ? "" : ` via claimed ancestor ${claim.id}`;
+        throw new ClaimViolationError(
+          `refusing agent mutation: item ${id} is covered by a claim${via} (claimed_by ${claim.claimedBy}) — ` +
+            `a human must \`nahel handback ${claim.id}\` first`,
+        );
+      }
     }
   }
 

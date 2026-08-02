@@ -427,6 +427,41 @@ describe("renderStandup — grouping by node and item", () => {
     expect(out).toContain(`moved  backlog → in-progress  act=${moved.id}`);
   });
 
+  /**
+   * The association rule is RESOLUTION (Phase 4 epic review): a node whose epic
+   * id no record carries covers NOTHING — including the orphans still naming
+   * that dead id as their parent. Grouping them under the node would report a
+   * release beneath a feature whose work nobody can find; they belong in the
+   * section that already exists for movement no node covers.
+   */
+  test("a node whose epic no record carries groups nothing — its orphans are outside the roadmap", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    // The epic record is gone (a merge dropped it, a hand deletion). Its child
+    // survives, still naming the dead id as its parent, and it shipped.
+    const orphan = makeFrontmatter(env, { name: "orphan-work", parent: "aaaaaaaa" });
+    const ghost = makeNode(env, { name: "ghost-feature", epic: "aaaaaaaa" });
+    const shipped = logged(
+      env,
+      RELEASE_ANNOUNCED_EVENT_TYPE,
+      orphan.id,
+      { version: "1.0.0" },
+      "2026-07-30T09:00:00Z",
+    );
+
+    const out = renderStandup({
+      since: "2026-07-26T09:15:00Z",
+      nodes: [ghost],
+      items: [orphan],
+      runs: [],
+      events: [shipped],
+    });
+
+    expect(out).not.toContain("ghost-feature");
+    expect(out).toContain("outside the roadmap");
+    expect(out).toContain(`  orphan-work  id=${orphan.id}`);
+    expect(out).toContain(`shipped  released 1.0.0  act=${shipped.id}`);
+  });
+
   test("an act carrying no item ref is still shown, under its own bucket", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const release = logged(

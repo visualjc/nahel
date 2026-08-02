@@ -464,6 +464,29 @@ describe("`nahel roadmap frontier <ref>` — one node's takeable edge (F8)", () 
     expect(scoped).toContain("work items (0)");
   });
 
+  /**
+   * The association rule is RESOLUTION (Phase 4 epic review): a node whose epic
+   * id no record carries covers NOTHING, orphans included. Scoping the frontier
+   * to the dead id would list work under a feature whose epic nobody can find —
+   * and the items are still takeable, just not this node's, so the store-wide
+   * edge must go on showing them.
+   */
+  test("a node whose epic no record carries scopes to NO items, orphans included", async () => {
+    const { root, layout, env, node } = await setup();
+    const epic = lastId(await item(env, root, ["new", "plan", "ghost-epic", "full"]));
+    await ok(env, root, ["node", "update", node, "--epic", epic]);
+    const orphan = await work(env, root, "orphaned-work", ["--parent", epic]);
+    // The epic record goes; the child survives, still naming the dead id.
+    await rm(join(layout.itemsDir, `${epic}.md`));
+
+    const scoped = await frontier(env, root, ["deployment-devops-workflows"]);
+    expect(scoped).toContain("frontier of deployment-devops-workflows");
+    expect(scoped).toContain("work items (0)");
+    expect(scoped).not.toContain(orphan);
+    // …and the store-wide edge still offers it, because it IS takeable.
+    expect(await frontier(env, root)).toContain(orphan);
+  });
+
   test("a ref naming no node is refused by name, with the near misses", async () => {
     const { root, env } = await setup();
 

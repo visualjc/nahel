@@ -307,3 +307,193 @@ describe("nahel roadmap — the product level (F3)", () => {
     expect(out.indexOf(`id=${first}`)).toBeLessThan(out.indexOf(`id=${last}`));
   });
 });
+
+describe("nahel roadmap <ref> — zooming a node (F3)", () => {
+  test("a product zoom: its own detail, the distribution, and its children by horizon", async () => {
+    const { root, env } = await setup();
+    const { nahel, built } = await product(env, root);
+
+    const out = await view(env, root, ["nahel"]);
+    expect(out).toContain(`nahel  product  horizon=now  id=${nahel}`);
+    expect(out).toContain("  design_doc=docs/roadmap.md");
+    expect(out).toContain("Durable, tool-agnostic project state.");
+    expect(out).toContain("features: 1 built · 0 in-flight · 2 planned · 0 unknown");
+    expect(out).toContain("  now (2):");
+    expect(out).toContain(`  later (1):`);
+    expect(out).toContain(`    detached-state-repo  built  dev=built`);
+    // The top of the tree has no ancestors, so there is no breadcrumb to print.
+    expect(out).not.toContain("›");
+    expect(out).toContain(`id=${built}`);
+  });
+
+  test("a feature zoom: breadcrumb, its links, the derived columns, and the work under it", async () => {
+    const { root, layout, env } = await setup();
+    const { built, epic, leaf } = await product(env, root);
+    await log(env, root, ["qa.sweep-completed", "--item", epic, "--data", "failed=0"]);
+    const ts = (await journalEvents(layout)).find((e) => e.type === "qa.sweep-completed")!.ts;
+
+    const out = await view(env, root, ["detached-state-repo"]);
+    const lines = out.split("\n");
+    expect(lines[0]).toBe("nahel › detached-state-repo");
+    expect(out).toContain(`detached-state-repo  feature  horizon=now  id=${built}`);
+    expect(out).toContain("  prd=docs/prds/detached-state-repo.md");
+    expect(out).toContain(`  epic=${epic}`);
+    expect(out).toContain("Get state out of the repo.");
+    expect(out).toContain(`status: tested  dev=built  qa=tested ${ts}  deploy=—  release=—`);
+    expect(out).toContain("work items (2):");
+    expect(out).toContain(`  detached-epic  plan  backlog  lane=full  id=${epic}`);
+    expect(out).toContain(`    leaf-work  feature  done  lane=direct  id=${leaf}`);
+  });
+
+  test("the same node by slug and by id renders byte-identically", async () => {
+    const { root, env } = await setup();
+    const { built } = await product(env, root);
+
+    const bySlug = await view(env, root, ["detached-state-repo"]);
+    logs = [];
+    expect(await view(env, root, [built])).toBe(bySlug);
+  });
+
+  test("a feature's initiative membership is on the zoom", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+    const initiative = await newNode(env, root, [
+      "initiative",
+      "developer-experience",
+      "--horizon",
+      "now",
+      "--intent",
+      "The DX theme.",
+      "--feature",
+      "detached-state-repo",
+    ]);
+
+    expect(await view(env, root, ["detached-state-repo"])).toContain(`initiatives=${initiative}`);
+  });
+
+  test("a feature with no epic yet renders the node and SAYS so — it does not error", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    const out = await view(env, root, ["architecture-docs-wiki"]);
+    expect(out).toContain("architecture-docs-wiki  feature  horizon=now");
+    expect(out).toContain("Publish the architecture docs.");
+    expect(out).toContain("status: planned  dev=planned");
+    expect(out).toContain("work items: none — no epic recorded yet");
+    expect(out).toContain("--epic");
+  });
+
+  test("a feature naming an epic no item record carries says exactly that", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+    await newNode(env, root, [
+      "feature",
+      "dangling-epic",
+      "--horizon",
+      "next",
+      "--intent",
+      "Its epic never arrived.",
+      "--parent",
+      "nahel",
+      "--epic",
+      "aaaaaaaa",
+    ]);
+
+    const out = await view(env, root, ["dangling-epic"]);
+    expect(out).toContain("status: unknown  dev=unknown");
+    expect(out).toContain("work items: none — epic aaaaaaaa has no item record here");
+  });
+
+  test("an unfinished map and an in-flight epic render side by side, neither flagged (F8)", async () => {
+    const { root, env } = await setup();
+    const { epic } = await product(env, root);
+    expect(await itemCommand.run(["update", epic, "--status", "in-progress"], env, root)).toBe(0);
+    const child = await newItem(env, root, ["task", "half-done", "direct", "--parent", epic]);
+    expect(await itemCommand.run(["update", child, "--status", "in-progress"], env, root)).toBe(0);
+    expect(
+      await roadmapCommand.run(
+        [
+          "map",
+          "new",
+          "--node",
+          "detached-state-repo",
+          "--destination",
+          "State lives outside the repo",
+          "--fog",
+          "how does a fresh clone bootstrap?",
+        ],
+        env,
+        root,
+      ),
+    ).toBe(0);
+    expect(
+      await roadmapCommand.run(
+        [
+          "ticket",
+          "new",
+          "--map",
+          "detached-state-repo",
+          "--type",
+          "research",
+          "--question",
+          "Which transport?",
+        ],
+        env,
+        root,
+      ),
+    ).toBe(0);
+
+    const out = await view(env, root, ["detached-state-repo"]);
+    expect(out).toContain("status: in-flight  dev=in-flight");
+    expect(out).toContain(
+      'map: "State lives outside the repo"  tickets: 1 open · 0 claimed · 0 resolved · 0 closed',
+    );
+    expect(out).toContain("not yet specified (1)");
+    expect(out.toLowerCase()).not.toContain("warning");
+    expect(stderr()).toBe("");
+  });
+
+  test("a feature with no map says so, in the same place the chart would print", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    expect(await view(env, root, ["detached-state-repo"])).toContain("map: none charted");
+  });
+
+  test("the zoom ends with the drill hints: the work under the feature, and its chart", async () => {
+    const { root, env } = await setup();
+    const { epic } = await product(env, root);
+    expect(
+      await roadmapCommand.run(
+        ["map", "new", "--node", "detached-state-repo", "--destination", "Out of the repo"],
+        env,
+        root,
+      ),
+    ).toBe(0);
+
+    const out = await view(env, root, ["detached-state-repo"]);
+    expect(out).toContain(`↳ nahel progress --item ${epic}`);
+    expect(out).toContain("↳ nahel roadmap map show detached-state-repo");
+  });
+
+  test("a product zoom hints at zooming its children", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    const out = await view(env, root, ["nahel"]);
+    const last = out.split("\n").filter((line) => line !== "").pop();
+    expect(last).toStartWith("↳ nahel roadmap ");
+    expect(last).toContain("architecture-docs-wiki");
+  });
+
+  test("two consecutive zooms are byte-identical and the store is untouched", async () => {
+    const { root, layout, env } = await setup();
+    await product(env, root);
+    const before = await journalEvents(layout);
+
+    const first = await view(env, root, ["detached-state-repo"]);
+    logs = [];
+    expect(await view(env, root, ["detached-state-repo"])).toBe(first);
+    expect(await journalEvents(layout)).toEqual(before);
+  });
+});

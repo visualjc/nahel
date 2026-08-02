@@ -551,6 +551,61 @@ describe("nahel roadmap node — the canonical one-way direction", () => {
   });
 });
 
+/**
+ * `nahel roadmap ack` (Phase 4 F3/F5): the one WRITE in the view family — a
+ * human-attributed acknowledgement that clears the brief's awaiting-your-eyes
+ * line and mutates no node. Provenance comes from the journal, exactly as
+ * merge authority reads the flip that authorizes it.
+ */
+describe("nahel roadmap ack — say seen, change nothing", () => {
+  test("journals one roadmap.acked event under the acting actor and writes no record", async () => {
+    const { root, layout, env } = await setup();
+    await newNode(env, root, ["feature", "alpha", "--horizon", "now", "--intent", "a"]);
+    const nodesBefore = await listRoadmapNodes(layout);
+    const before = await resolveRoadmapNode(layout, "alpha");
+
+    const printed = await ok(env, root, ["ack"], "human:jim");
+    expect(printed.join("\n")).toContain("acknowledged");
+
+    const acks = (await journalEvents(layout)).filter((e) => e.type === "roadmap.acked");
+    expect(acks).toHaveLength(1);
+    expect(acks[0]!.actor).toEqual({ kind: "human", id: "jim" });
+    // It mutates no node: same nodes, same record bytes.
+    expect(await listRoadmapNodes(layout)).toEqual(nodesBefore);
+    expect(await resolveRoadmapNode(layout, "alpha")).toEqual(before);
+  });
+
+  test("an ack under an AGENT actor is recorded as itself — and says it clears nothing", async () => {
+    const { root, layout, env } = await setup();
+    const printed = await ok(env, root, ["ack"]); // config actor: agent:claude-code
+    const acks = (await journalEvents(layout)).filter((e) => e.type === "roadmap.acked");
+    expect(acks).toHaveLength(1);
+    expect(acks[0]!.actor.kind).toBe("agent");
+    // A silent ✅ would read as a clear the journal will not honor.
+    expect(printed.join("\n")).toContain("clears nothing");
+  });
+
+  test("ack takes no arguments — a stray one is a usage error, nothing journaled", async () => {
+    const { root, layout, env } = await setup();
+    expect(await roadmapCommand.run(["ack", "alpha"], env, root, "human:jim")).toBe(1);
+    expect(stderr()).toContain("takes no arguments");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+
+  test("roadmap.acked is self-recorded — `nahel log` refuses to forge one", async () => {
+    const { root, layout, env } = await setup();
+    const code = await logCommand.run(["roadmap.acked", "--data", "text=seen"], {
+      env,
+      cwd: root,
+      stdout: (text: string) => logs.push(text),
+      stderr: (text: string) => errs.push(text),
+    });
+    expect(code).not.toBe(0);
+    expect(stderr()).toContain("nahel roadmap ack");
+    expect(await journalEvents(layout)).toEqual([]);
+  });
+});
+
 describe("nahel roadmap — usage surface", () => {
   test("--help prints the node verbs without touching the store", async () => {
     const { root, layout, env } = await setup();
@@ -558,6 +613,7 @@ describe("nahel roadmap — usage surface", () => {
     expect(stdout()).toContain("roadmap node new");
     expect(stdout()).toContain("roadmap node update");
     expect(stdout()).toContain("roadmap node show");
+    expect(stdout()).toContain("roadmap ack");
     expect(await listRoadmapNodes(layout)).toEqual([]);
   });
 

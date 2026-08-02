@@ -1,3 +1,4 @@
+import { ROADMAP_HORIZONS } from "../schema/enums";
 import {
   DEPLOY_COMPLETED_EVENT_TYPE,
   QA_SWEEP_EVENT_TYPE,
@@ -442,4 +443,160 @@ export function featureStatus(
         ? NO_VALUE
         : `released ${payloadText(released.payload, "version")} ${released.ts}`,
   };
+}
+
+/**
+ * True for the three event types the derived columns read (F2). Exported so the
+ * command can KEEP only these while streaming the journal: the views take their
+ * events as an array, and a store whose journal outgrows memory must still
+ * render the roadmap. Anything else is not a column fact and is dropped.
+ */
+export function isRoadmapColumnEvent(event: JournalEvent): boolean {
+  return COLUMN_EVENT_TYPES.has(event.type);
+}
+
+/** One feature node beside its derivation — featureStatus called once, per feature. */
+interface FeatureWithStatus {
+  record: RoadmapNodeRecord;
+  status: RoadmapFeatureStatus;
+}
+
+/**
+ * Derive every listed feature ONCE. Both callers need the same derivation twice
+ * over — the product's distribution counts the dev statuses, the lines print the
+ * columns — and deriving per use would walk the item tree and the journal twice
+ * per feature for identical answers.
+ */
+function featureStatuses(
+  features: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): FeatureWithStatus[] {
+  return features.map((record) => ({
+    record,
+    status: featureStatus(record.frontmatter, items, events),
+  }));
+}
+
+/**
+ * The line a feature renders as, in the product level and in the zoom alike: the
+ * slug, the single-word stage, then F2's four derived columns VERBATIM — the
+ * render table's strings are the contract, so they are printed and never
+ * reformatted here. Fields are separated by two spaces because the values carry
+ * single spaces of their own (`tested <ts> (2 failed)`), the same house rule
+ * `status`'s `parent=<id> (missing)` already follows.
+ */
+function featureLine(record: RoadmapNodeRecord, status: RoadmapFeatureStatus): string {
+  const node = record.frontmatter;
+  return [
+    node.name,
+    status.stage,
+    `dev=${status.dev}`,
+    `qa=${status.qa}`,
+    `deploy=${status.deploy}`,
+    `release=${status.release}`,
+    `id=${node.id}`,
+  ].join("  ");
+}
+
+/**
+ * The feature children under one node, grouped `now → next → later` (F3). Every
+ * bucket prints even when empty, for renderProductStatus's reason: the three
+ * horizons are a fixed shape a reader scans down, and a bucket that vanished
+ * when it emptied would read as one nobody has decided about. Multiple parallel
+ * `now`s are the intended shape (F8) and are rendered as the ordinary case —
+ * nothing counts them, nothing warns.
+ *
+ * Within a bucket, features keep the id order readRoadmapNodes returns: ids are
+ * unique, so the order is total, and it does not move when a node is renamed.
+ */
+function horizonGroups(
+  features: readonly FeatureWithStatus[],
+  indent: string,
+  lines: string[],
+): void {
+  for (const horizon of ROADMAP_HORIZONS) {
+    const bucket = features.filter(({ record }) => record.frontmatter.horizon === horizon);
+    lines.push(`${indent}${horizon} (${bucket.length}):`);
+    if (bucket.length === 0) lines.push(`${indent}  (none)`);
+    for (const { record, status } of bucket) {
+      lines.push(`${indent}  ${featureLine(record, status)}`);
+    }
+  }
+}
+
+/** What a store with no nodes says: how to start, not an empty frame. */
+const NO_ROADMAP =
+  "no roadmap yet — chart the product first:\n" +
+  '  nahel roadmap node new product <slug> --horizon now --intent "<what this product is>"';
+
+/**
+ * The zoom hint every rendering ends with (F3), so the drill path is
+ * discoverable from the output itself rather than from the help. The example is
+ * the alphabetically first slug among the nodes the rendering named: stable
+ * against id churn and against re-parenting, so a doc-tested rendering does not
+ * wobble when unrelated state moves.
+ */
+function zoomHint(names: readonly string[]): string[] {
+  if (names.length === 0) return [];
+  const example = [...names].sort()[0]!;
+  return ["", `↳ nahel roadmap <node>  — zoom in (e.g. nahel roadmap ${example})`];
+}
+
+/**
+ * `nahel roadmap` with no ref (F3): the product level. One line per product node
+ * — its horizon, its id, and F2's distribution over its feature children — then
+ * those children grouped by horizon with their derived columns.
+ *
+ * Products render in the id order readRoadmapNodes returns. One product per
+ * store is the assumed shape (a second is a non-goal, not a refusal), so a
+ * second product node simply renders as a second block.
+ *
+ * A node that is neither a product nor a product's feature child — an
+ * initiative, a node whose parent is missing, a feature parented to a feature —
+ * is listed under `outside the product tree` rather than dropped: the shapes are
+ * `validate` warnings, and a view that hid them would make the store look
+ * smaller than it is. That section is ABSENT when empty, not an empty header.
+ */
+export function renderRoadmapOverview(
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string {
+  if (nodes.length === 0) return NO_ROADMAP;
+  const lines: string[] = [];
+  const placed = new Set<string>();
+  for (const record of nodes) {
+    if (record.frontmatter.kind !== "product") continue;
+    placed.add(record.frontmatter.id);
+    const features = featureStatuses(
+      productFeatureNodes(nodes, record.frontmatter.id),
+      items,
+      events,
+    );
+    for (const { record: feature } of features) placed.add(feature.frontmatter.id);
+    if (lines.length > 0) lines.push("");
+    lines.push(
+      [
+        record.frontmatter.name,
+        record.frontmatter.kind,
+        `horizon=${record.frontmatter.horizon}`,
+        `id=${record.frontmatter.id}`,
+        renderProductStatus(features.map(({ status }) => status.dev)),
+      ].join("  "),
+    );
+    horizonGroups(features, "  ", lines);
+  }
+  const outside = nodes.filter(({ frontmatter }) => !placed.has(frontmatter.id));
+  if (outside.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`outside the product tree (${outside.length}):`);
+    for (const { frontmatter } of outside) {
+      lines.push(
+        `  ${frontmatter.name}  ${frontmatter.kind}  horizon=${frontmatter.horizon}  id=${frontmatter.id}`,
+      );
+    }
+  }
+  lines.push(...zoomHint(nodes.map(({ frontmatter }) => frontmatter.name)));
+  return lines.join("\n");
 }

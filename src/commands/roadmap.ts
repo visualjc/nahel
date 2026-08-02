@@ -5,9 +5,10 @@ import { CORE_EVENT_TYPES, ROADMAP_ACKED_EVENT_TYPE } from "../schema/events";
 import { generateId, ID_PATTERN } from "../schema/id";
 import {
   roadmapNodeFrontmatterSchema,
+  type JournalEvent,
   type RoadmapNodeFrontmatter,
 } from "../schema/records";
-import { appendEvent } from "../store/journal";
+import { appendEvent, readJournal } from "../store/journal";
 import {
   openStore,
   readRoadmapNodes,
@@ -15,7 +16,13 @@ import {
   type StoreLayout,
 } from "../store/layout";
 import { closeStoreContext, mutate } from "../store/mutate";
-import { renderRoadmapNode, roadmapNodeLinks } from "../views/roadmap";
+import {
+  isRoadmapColumnEvent,
+  renderRoadmapNode,
+  renderRoadmapOverview,
+  roadmapNodeLinks,
+} from "../views/roadmap";
+import { loadSnapshot } from "../views/snapshot";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
 import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
 import { resolveNodeRef } from "./roadmap-ref";
@@ -52,6 +59,11 @@ const PRD_FIELD = roadmapNodeFrontmatterSchema.shape.prd;
 const EPIC_FIELD = roadmapNodeFrontmatterSchema.shape.epic;
 
 const USAGE = `usage:
+  nahel roadmap
+    The product level: every product node with the derived distribution of its
+    feature children, those children grouped by horizon with their derived
+    columns, and the zoom hint. Reads only — nothing is written.
+
   nahel roadmap node new <kind> <name> --horizon <h> --intent <text>
                          [--parent <ref>] [--design-doc <path>] [--adr <path>]...
                          [--prd <path>] [--epic <item-id>] [--predecessor <ref>]
@@ -416,6 +428,33 @@ async function nodeShow(args: string[], cwd: string): Promise<number> {
 }
 
 /**
+ * The journal facts the derived columns read (F2), collected while STREAMING so
+ * a long journal never has to fit in memory to render a roadmap: only the three
+ * column event types are kept, and the views take it from there.
+ */
+async function columnEvents(layout: StoreLayout): Promise<JournalEvent[]> {
+  const events: JournalEvent[] = [];
+  for await (const event of readJournal(layout)) {
+    if (isRoadmapColumnEvent(event)) events.push(event);
+  }
+  return events;
+}
+
+/**
+ * `nahel roadmap` with no ref (F3): the product level. A pure read — the store
+ * is opened, four collections are read, and the renderer turns them into text.
+ * Nothing here writes, and an empty store is rendered (how to start), never
+ * refused.
+ */
+async function overview(cwd: string): Promise<number> {
+  const layout = await openStore(cwd);
+  const nodes = await readRoadmapNodes(layout);
+  const { items } = await loadSnapshot(layout);
+  console.log(renderRoadmapOverview(nodes, items, await columnEvents(layout)));
+  return 0;
+}
+
+/**
  * `nahel roadmap ack` (F5): record that a human has looked at the roadmap. The
  * act IS the whole verb — it carries no ref, no payload, and touches no record,
  * so there is nothing to parse and nothing to name. Under an AGENT actor it is
@@ -466,6 +505,10 @@ export const roadmapCommand: Command = {
         console.log(USAGE);
         return 0;
       }
+      // F3: the bare verb IS the view. Every subcommand below is a reserved
+      // word, so a node named `node`, `map`, `ticket` or `ack` is addressed by
+      // `nahel roadmap node show <ref>` instead — the verbs win the word.
+      if (group === undefined) return overview(cwd);
       if (group === "ack") return ack(rest, env, cwd, actorOverride);
       if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
       if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);

@@ -731,6 +731,10 @@ describe("the closed-delta doctrine (F10)", () => {
     expect(defined).toContain("predecessor");
     // The design doc is the other half of the sentence: permanent, in place.
     expect(defined).toContain("design doc");
+    // And the one refusal a reused basename earns: the archive is one file per
+    // delta, so a collision is refused rather than resolved.
+    expect(defined).toContain("one file per delta");
+    expect(defined).toContain("never overwritten");
   });
 
   test("a new node continuing a released one is lineage, not a reopened delta", async () => {

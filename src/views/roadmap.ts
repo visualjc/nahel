@@ -1,9 +1,13 @@
+import type { RoadmapNodeFrontmatter, WorkItemFrontmatter } from "../schema/records";
 import type { RoadmapNodeRecord } from "../store/layout";
+import { descendantIds } from "./snapshot";
 
 /**
- * The roadmap node renderer (Phase 4 F1): PURE functions over records already
- * read from the store — no I/O, no clock, no randomness, so the same nodes
- * always render byte-identical output.
+ * The roadmap node renderer and its derived statuses (Phase 4 F1 + F2): PURE
+ * functions over records already read from the store — no I/O, no clock, no
+ * randomness, so the same nodes always render byte-identical output, and a
+ * render on a fresh clone of the same commit matches one on the machine that
+ * wrote it.
  */
 
 /**
@@ -60,4 +64,70 @@ export function renderRoadmapNode(record: RoadmapNodeRecord, links: RoadmapNodeL
   const intent = record.body.trimEnd();
   if (intent !== "") lines.push("", intent);
   return lines.join("\n");
+}
+
+/**
+ * A feature node's dev status (F2): the rollup of the work under its epic.
+ * There is no `unknown` work-item status — the word means "nahel cannot see
+ * the epic", which is a different fact from any status a child could hold.
+ */
+export type RoadmapDevStatus = "planned" | "in-flight" | "built" | "unknown";
+
+/**
+ * The two truth-table rows that are ALSO `validate` warnings: a node naming an
+ * epic no item record carries, and an epic whose every child was dropped. Both
+ * derive a status all the same — the warning is advisory, and the rollup stays
+ * total (F2: every case has a stated outcome).
+ */
+export type RoadmapEpicAnomaly = "epic-missing" | "all-dropped";
+
+/** A dev-status derivation: the status, plus the anomaly `validate` reports. */
+export interface RoadmapDevRollup {
+  status: RoadmapDevStatus;
+  anomaly?: RoadmapEpicAnomaly;
+}
+
+/**
+ * Derive a feature node's dev status from the work items under its epic (F2),
+ * total over the recorded vocabulary:
+ *
+ * | epic state | dev status |
+ * | no epic id on the node | `planned` |
+ * | epic id with no item record | `unknown` + `epic-missing` |
+ * | zero children after excluding `dropped` | `planned` (+ `all-dropped` when children existed) |
+ * | every non-dropped child `done` | `built` |
+ * | every non-dropped child `backlog` | `planned` |
+ * | anything else | `in-flight` |
+ *
+ * The rollup covers the epic's whole SUBTREE, not just its direct children:
+ * work nests (an epic's task can own its own children), and the same coverage
+ * rule the event association uses below — descendantIds, which claims and
+ * `progress --item` also use — is the only one under which "flipping a leaf
+ * work item to done changes the feature's status" (F2's first acceptance
+ * criterion) holds. The epic item's OWN status is excluded: it is the
+ * container, not work under itself.
+ *
+ * `dropped` children are excluded entirely (dropped work is not work), and
+ * `blocked` / `in-review` fall into the catch-all row as started work —
+ * blocking is advisory (F8), never a roadmap state of its own.
+ */
+export function featureDevStatus(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+): RoadmapDevRollup {
+  const epic = node.epic;
+  if (epic === undefined) return { status: "planned" };
+  if (!items.some((item) => item.id === epic)) {
+    return { status: "unknown", anomaly: "epic-missing" };
+  }
+  const covered = descendantIds(items, epic);
+  const children = items.filter((item) => item.id !== epic && covered.has(item.id));
+  const live = children.filter((item) => item.status !== "dropped");
+  if (live.length === 0) {
+    if (children.length === 0) return { status: "planned" };
+    return { status: "planned", anomaly: "all-dropped" };
+  }
+  if (live.every((item) => item.status === "done")) return { status: "built" };
+  if (live.every((item) => item.status === "backlog")) return { status: "planned" };
+  return { status: "in-flight" };
 }

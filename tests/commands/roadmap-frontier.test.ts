@@ -4,10 +4,15 @@ import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claimCommand } from "../../src/commands/intervene";
 import { itemCommand } from "../../src/commands/item";
+import { logCommand } from "../../src/commands/log";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
+import { ITEM_STARTED_BLOCKED_EVENT_TYPE } from "../../src/schema/events";
 import { ID_PATTERN } from "../../src/schema/id";
+import type { JournalEvent } from "../../src/schema/records";
+import { readJournal } from "../../src/store/journal";
 import { ensureLayout, writeConfig, type StoreLayout } from "../../src/store/layout";
+import { validateStore } from "../../src/validate";
 import { ROADMAP_SUBCOMMANDS } from "../../src/views/roadmap";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
@@ -74,6 +79,10 @@ function lastId(printed: string[]): string {
 /** The rendering `nahel roadmap frontier [ref]` prints, as one string. */
 async function frontier(env: Env, root: string, args: string[] = []): Promise<string> {
   return (await ok(env, root, ["frontier", ...args])).join("\n");
+}
+
+async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
+  return Array.fromAsync(readJournal(layout));
 }
 
 /** Every file under a directory, path → bytes — the store's exact state. */
@@ -487,6 +496,144 @@ describe("an empty frontier says WHY, and never reads as an empty store (F8)", (
     // `wire-the-gateway` is in-progress — started work is not a near miss at
     // all, so only the two BACKLOG items held back are counted.
     expect(listed).toContain("work items (0):\n  (none) — 1 blocked by a dependency, 1 claimed");
+  });
+});
+
+/**
+ * The anti-waterfall rule (F8): blocking is ADVISORY everywhere. No command
+ * refuses work because a blocker is open — an agent may deliberately start a
+ * blocked item, and doing so journals the choice, naming every open blocker, so
+ * it is visible rather than prevented.
+ */
+describe("starting a blocked item is recorded, never refused (F8)", () => {
+  test("the start succeeds and journals the deliberate-start event naming EVERY open blocker", async () => {
+    const { root, layout, env } = await setup();
+    const first = await work(env, root, "schema-change");
+    const second = await work(env, root, "wire-the-gateway");
+    const settled = await work(env, root, "old-approach");
+    await item(env, root, ["update", settled, "--status", "dropped"]);
+    const blocked = await work(env, root, "add-refunds", [
+      "--depends-on",
+      first,
+      "--depends-on",
+      second,
+      "--depends-on",
+      settled,
+    ]);
+
+    // Nothing refuses — the start is an ordinary success.
+    expect(await itemCommand.run(["update", blocked, "--status", "in-progress"], env, root)).toBe(0);
+    expect(stderr()).toBe("");
+
+    const started = (await journalEvents(layout)).filter(
+      (event) => event.type === ITEM_STARTED_BLOCKED_EVENT_TYPE,
+    );
+    expect(started).toHaveLength(1);
+    expect(started[0]!.item).toBe(blocked);
+    expect(started[0]!.actor).toEqual({ kind: "agent", id: "claude-code" });
+    // Every OPEN blocker, and only those: the dropped one has settled.
+    expect(started[0]!.payload).toEqual({ from: "backlog", blockers: [first, second] });
+  });
+
+  test("the caller is told, in the same breath as the recording", async () => {
+    const { root, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    const blocked = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+
+    const before = logs.length;
+    expect(await itemCommand.run(["update", blocked, "--status", "in-progress"], env, root)).toBe(0);
+    const said = logs.slice(before).join("\n");
+    expect(said).toContain(dependency);
+    expect(said).toContain("advisory");
+  });
+
+  test("an unblocked start journals nothing extra — the event is about the CHOICE", async () => {
+    const { root, layout, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    await item(env, root, ["update", dependency, "--status", "done"]);
+    const free = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+
+    await item(env, root, ["update", free, "--status", "in-progress"]);
+
+    expect(
+      (await journalEvents(layout)).filter((e) => e.type === ITEM_STARTED_BLOCKED_EVENT_TYPE),
+    ).toEqual([]);
+  });
+
+  test("re-stating `in-progress` is not a second start", async () => {
+    const { root, layout, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    const blocked = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+
+    await item(env, root, ["update", blocked, "--status", "in-progress"]);
+    await item(env, root, ["update", blocked, "--status", "in-progress", "--lane", "epic-lite"]);
+
+    expect(
+      (await journalEvents(layout)).filter((e) => e.type === ITEM_STARTED_BLOCKED_EVENT_TYPE),
+    ).toHaveLength(1);
+  });
+
+  test("the started item leaves the frontier, and the whole path refused nothing", async () => {
+    const { root, env } = await setup();
+    const dependency = await work(env, root, "schema-change");
+    const blocked = await work(env, root, "add-refunds", ["--depends-on", dependency]);
+    expect(await frontier(env, root)).not.toContain(blocked);
+
+    // Started while blocked, then carried all the way to done — no refusal
+    // anywhere in the path, which is the acceptance criterion itself.
+    for (const status of ["in-progress", "in-review", "done"]) {
+      expect(await itemCommand.run(["update", blocked, "--status", status], env, root)).toBe(0);
+    }
+    expect(stderr()).toBe("");
+  });
+
+  test("the type is self-recorded: `nahel log` refuses to hand-append it", async () => {
+    const { root, env } = await setup();
+
+    errs = [];
+    expect(await logCommand.run([ITEM_STARTED_BLOCKED_EVENT_TYPE], env, root)).toBe(1);
+    expect(stderr()).toContain("nahel item");
+    errs = [];
+  });
+});
+
+describe("multiple parallel `now`s are correct, never warned about (F8)", () => {
+  test("three `now`-horizon nodes produce no validate finding at all", async () => {
+    const { root, layout, env } = await setup();
+    const product = lastId(
+      await ok(env, root, [
+        "node",
+        "new",
+        "product",
+        "nahel",
+        "--horizon",
+        "now",
+        "--intent",
+        "The product.",
+      ]),
+    );
+    for (const name of ["first-delta", "second-delta", "third-delta"]) {
+      await ok(env, root, [
+        "node",
+        "new",
+        "feature",
+        name,
+        "--horizon",
+        "now",
+        "--intent",
+        "A delta.",
+        "--parent",
+        product,
+      ]);
+    }
+    // The setup's own charted node is a fourth `now` with no product parent, so
+    // it is moved under the product too — the shape under test is parallelism,
+    // not an orphan.
+    await ok(env, root, ["node", "update", "deployment-devops-workflows", "--parent", product]);
+
+    const findings = await validateStore(layout, { now: env.now() });
+    console.log("[parallel nows]", JSON.stringify(findings));
+    expect(findings).toEqual([]);
   });
 });
 

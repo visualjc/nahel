@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
 import type { RoadmapNodeFrontmatter, WorkItemFrontmatter } from "../../src/schema/records";
-import { featureDevStatus } from "../../src/views/roadmap";
+import type { RoadmapNodeRecord } from "../../src/store/layout";
+import {
+  featureDevStatus,
+  productFeatureNodes,
+  renderProductStatus,
+} from "../../src/views/roadmap";
 import { makeFrontmatter, seededEnv } from "../store/helpers";
 
 /**
@@ -215,5 +220,88 @@ describe("featureDevStatus — purity", () => {
     const node = makeNode(env, { epic: epic.id });
 
     expect(featureDevStatus(node, [...items].reverse())).toEqual(featureDevStatus(node, items));
+  });
+});
+
+/** A node record (frontmatter + intent body) — what readRoadmapNodes returns. */
+function makeRecord(
+  env: Env,
+  overrides: Partial<RoadmapNodeFrontmatter> = {},
+): RoadmapNodeRecord {
+  return { frontmatter: makeNode(env, overrides), body: "intent\n" };
+}
+
+describe("productFeatureNodes — which nodes a product rolls up", () => {
+  test("its feature children, in the id order readRoadmapNodes returns", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const product = makeRecord(env, { kind: "product", name: "nahel" });
+    const alpha = makeRecord(env, { name: "feature-alpha", parent: product.frontmatter.id });
+    const beta = makeRecord(env, { name: "feature-beta", parent: product.frontmatter.id });
+    const nodes = [alpha, beta, product].sort((a, b) =>
+      a.frontmatter.id < b.frontmatter.id ? -1 : 1,
+    );
+
+    const children = productFeatureNodes(nodes, product.frontmatter.id);
+    expect(children.map((child) => child.frontmatter.name)).toEqual(
+      [alpha, beta]
+        .sort((a, b) => (a.frontmatter.id < b.frontmatter.id ? -1 : 1))
+        .map((child) => child.frontmatter.name),
+    );
+  });
+
+  test("an initiative child is not a feature child — it links sideways, it does not roll up", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const product = makeRecord(env, { kind: "product", name: "nahel" });
+    const feature = makeRecord(env, { name: "feature-alpha", parent: product.frontmatter.id });
+    const initiative = makeRecord(env, {
+      kind: "initiative",
+      name: "an-initiative",
+      parent: product.frontmatter.id,
+    });
+
+    const children = productFeatureNodes([product, feature, initiative], product.frontmatter.id);
+    expect(children.map((child) => child.frontmatter.name)).toEqual(["feature-alpha"]);
+  });
+
+  test("a feature under ANOTHER product is not this product's child", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const one = makeRecord(env, { kind: "product", name: "product-one" });
+    const two = makeRecord(env, { kind: "product", name: "product-two" });
+    const feature = makeRecord(env, { name: "feature-alpha", parent: two.frontmatter.id });
+
+    expect(productFeatureNodes([one, two, feature], one.frontmatter.id)).toEqual([]);
+  });
+});
+
+describe("renderProductStatus — the count distribution, never one word", () => {
+  test("the full distribution in a fixed order: built, in-flight, planned, unknown", () => {
+    const statuses = [
+      ...Array<"built">(3).fill("built"),
+      ...Array<"in-flight">(2).fill("in-flight"),
+      ...Array<"planned">(6).fill("planned"),
+      "unknown" as const,
+    ];
+
+    expect(renderProductStatus(statuses)).toBe("3 built · 2 in-flight · 6 planned · 1 unknown");
+  });
+
+  test("every bucket is printed even at zero — the shape of the roll-up is the point", () => {
+    expect(renderProductStatus(["planned"])).toBe(
+      "0 built · 0 in-flight · 1 planned · 0 unknown",
+    );
+  });
+
+  test("the unknown count is never hidden", () => {
+    expect(renderProductStatus(["unknown", "unknown"])).toContain("2 unknown");
+  });
+
+  test("no feature children renders `no features`, not a row of zeros", () => {
+    expect(renderProductStatus([])).toBe("no features");
+  });
+
+  test("the order the statuses arrive in does not change the rendering", () => {
+    expect(renderProductStatus(["unknown", "built", "planned", "built"])).toBe(
+      renderProductStatus(["built", "planned", "built", "unknown"]),
+    );
   });
 });

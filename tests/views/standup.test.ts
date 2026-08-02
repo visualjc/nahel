@@ -79,12 +79,18 @@ function logged(
   };
 }
 
-/** An epic, one child, and a feature node covering the epic. */
-function charted(env: Env) {
+/**
+ * An epic, one child, and a feature node covering the epic. `items` carries the
+ * child at `status` — the RECORD state the node's derived stage reads — while
+ * `birth` is the child's creation act, journaled before the window, which is
+ * what a transition inside the window is measured against.
+ */
+function charted(env: Env, status: WorkItemFrontmatter["status"] = "backlog") {
   const epic = makeFrontmatter(env, { name: "demo-epic", type: "plan", lane: "full" });
   const child = makeFrontmatter(env, { name: "leaf-work", parent: epic.id });
   const node = makeNode(env, { name: "detached-state-repo", epic: epic.id });
-  return { epic, child, node, items: [epic, child] };
+  const birth = itemEvent(env, child, "2026-07-01T08:00:00Z", CORE_EVENT_TYPES.itemCreated);
+  return { epic, child, node, birth, items: [epic, { ...child, status }] };
 }
 
 describe("resolveSince — relative windows off the injected clock, never a Date", () => {
@@ -158,7 +164,7 @@ describe("renderStandup — the verbs, one per journaled act", () => {
 
   test("a status transition to done reads `closed`, with where it came from", () => {
     const env = seededEnv({ tickSeconds: 1 });
-    const fixture = charted(env);
+    const fixture = charted(env, "done");
     const started = itemEvent(
       env,
       { ...fixture.child, status: "in-progress" },
@@ -166,16 +172,25 @@ describe("renderStandup — the verbs, one per journaled act", () => {
     );
     const closed = itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z");
 
-    const out = standupOf(env, fixture, [started, closed]);
+    const out = standupOf(env, fixture, [fixture.birth, started, closed]);
 
     expect(out).toContain(
       `    2026-07-30T09:00:00Z  closed  in-progress → done  act=${closed.id}`,
     );
   });
 
+  test("a transition whose earlier history the journal does not carry says so", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    // No creation act — a compacted archive, or work that predates this journal.
+    const closed = itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z");
+
+    expect(standupOf(env, fixture, [closed])).toContain(`closed  → done  act=${closed.id}`);
+  });
+
   test("blocked, dropped and ordinary moves each get their own word", () => {
     const env = seededEnv({ tickSeconds: 1 });
-    const fixture = charted(env);
+    const fixture = charted(env, "dropped");
     const moved = itemEvent(
       env,
       { ...fixture.child, status: "in-progress" },
@@ -184,7 +199,7 @@ describe("renderStandup — the verbs, one per journaled act", () => {
     const blocked = itemEvent(env, { ...fixture.child, status: "blocked" }, "2026-07-28T08:00:00Z");
     const parked = itemEvent(env, { ...fixture.child, status: "dropped" }, "2026-07-29T08:00:00Z");
 
-    const out = standupOf(env, fixture, [moved, blocked, parked]);
+    const out = standupOf(env, fixture, [fixture.birth, moved, blocked, parked]);
 
     expect(out).toContain(`moved  backlog → in-progress  act=${moved.id}`);
     expect(out).toContain(`blocked  in-progress → blocked  act=${blocked.id}`);
@@ -313,7 +328,7 @@ describe("renderStandup — the verbs, one per journaled act", () => {
 describe("renderStandup — grouping by node and item", () => {
   test("movement groups under the node whose epic covers the item, then under the item", () => {
     const env = seededEnv({ tickSeconds: 1 });
-    const fixture = charted(env);
+    const fixture = charted(env, "done");
     const closed = itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z");
 
     const out = renderStandup({
@@ -321,7 +336,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
-      events: [closed],
+      events: [fixture.birth, closed],
     });
 
     expect(out.split("\n")).toEqual([
@@ -337,6 +352,7 @@ describe("renderStandup — grouping by node and item", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const fixture = charted(env);
     const solo = makeFrontmatter(env, { name: "solo-chore", type: "chore" });
+    const born = itemEvent(env, solo, "2026-07-01T08:00:00Z", CORE_EVENT_TYPES.itemCreated);
     const moved = itemEvent(env, { ...solo, status: "in-progress" }, "2026-07-30T09:00:00Z");
 
     const out = renderStandup({
@@ -344,7 +360,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [fixture.node],
       items: [...fixture.items, solo],
       runs: [],
-      events: [moved],
+      events: [born, moved],
     });
 
     expect(out).toContain("outside the roadmap");
@@ -392,12 +408,14 @@ describe("renderStandup — grouping by node and item", () => {
     const out = renderStandup({
       since: "2026-07-26T09:15:00Z",
       nodes: [outerNode, innerNode],
-      items: [outer, inner, leaf],
+      items: [outer, inner, { ...leaf, status: "done" }],
       runs: [],
       events: [closed],
     });
 
-    expect(out).toContain(`a-outer  feature  built  id=${outerNode.frontmatter.id}`);
+    // The outer node also covers the still-backlog inner epic item, so its own
+    // rollup reads in-flight — each node's header is ITS derivation, not a copy.
+    expect(out).toContain(`a-outer  feature  in-flight  id=${outerNode.frontmatter.id}`);
     expect(out).toContain(`b-inner  feature  built  id=${innerNode.frontmatter.id}`);
     expect(out.split(`act=${closed.id}`).length - 1).toBe(2);
   });

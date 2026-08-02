@@ -36,6 +36,7 @@ import {
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
 } from "../schema/events";
+import { epochSeconds } from "../schema/time";
 import type { HotState } from "../store/hotstate";
 import type { PrototypeRefScan } from "../store/prototype";
 import {
@@ -2049,28 +2050,6 @@ function checkHotState(state: ParsedState): Finding[] {
     }
   }
   return findings;
-}
-
-const TIMESTAMP_PARTS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
-
-/**
- * Seconds since the Unix epoch for a schema-format UTC timestamp, computed
- * with plain calendar arithmetic (days-from-civil) — the validate layer is
- * pure and touches no ambient clock or date machinery. Undefined when the
- * string is not in the schema's timestamp format.
- */
-function epochSeconds(timestamp: string): number | undefined {
-  const parts = TIMESTAMP_PARTS.exec(timestamp);
-  if (parts === null) return undefined;
-  const [, year, month, day, hour, minute, second] = parts.map(Number) as number[];
-  const shiftedYear = month! <= 2 ? year! - 1 : year!;
-  const era = Math.floor(shiftedYear / 400);
-  const yearOfEra = shiftedYear - era * 400;
-  const dayOfYear = Math.floor((153 * (month! + (month! > 2 ? -3 : 9)) + 2) / 5) + day! - 1;
-  const dayOfEra =
-    yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
-  const epochDays = era * 146097 + dayOfEra - 719468;
-  return epochDays * 86400 + hour! * 3600 + minute! * 60 + second!;
 }
 
 const COMPACT_FIX =

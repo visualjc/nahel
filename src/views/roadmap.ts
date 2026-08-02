@@ -333,9 +333,10 @@ const COLUMN_EVENT_TYPES: ReadonlySet<string> = new Set([
  * A payload value for a column: absent, null, or blank renders `?` — brief's
  * absent-payload-key convention, widened to blank because a recorded empty
  * `environment` tells a reader exactly as much as an omitted one, and the
- * render table spells both cases the same way.
+ * render table spells both cases the same way. Shared with `standup`, which
+ * renders the same lifecycle payloads and must spell their gaps the same way.
  */
-function payloadText(payload: Record<string, unknown>, key: string): string {
+export function payloadText(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   if (value === undefined || value === null) return "?";
   const text = String(value).trim();

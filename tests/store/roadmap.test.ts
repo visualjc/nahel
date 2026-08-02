@@ -97,10 +97,20 @@ describe("store/layout — roadmap node records live under nahel/roadmap/", () =
     expect(read.body).toBe("Move state out of the app repo.\n");
   });
 
-  test("listing is empty (never a throw) before any node exists", async () => {
+  test("listing is empty before any node exists — the ABSENT directory, and only that", async () => {
     const { layout } = await setup();
     expect(await listRoadmapNodes(layout)).toEqual([]);
     expect(await readRoadmapNodes(layout)).toEqual([]);
+  });
+
+  test("an UNREADABLE roadmap directory is reported, never rendered as an empty roadmap", async () => {
+    // "No nodes" and "could not look" are different facts and only the first
+    // is safe to render: a swallowed read failure would let the roadmap views
+    // claim a store has no roadmap when it has one nahel could not read.
+    const { layout } = await setup();
+    await writeFile(layout.roadmapDir, "not a directory");
+    expect(listRoadmapNodes(layout)).rejects.toThrow();
+    expect(readRoadmapNodes(layout)).rejects.toThrow();
   });
 
   test("readRoadmapNodes returns every node in id order — a deterministic read for the views", async () => {

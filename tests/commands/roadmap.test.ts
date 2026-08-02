@@ -394,11 +394,19 @@ describe("nahel roadmap node update — rename, re-parent, re-horizon", () => {
     expect(stderr()).toContain("ghost");
   });
 
-  test("a node cannot be its own parent", async () => {
-    const { root, env } = await setup();
-    await newNode(env, root, ["feature", "selfish", "--horizon", "now", "--intent", "i"]);
-    expect(await roadmapCommand.run(["node", "update", "selfish", "--parent", "selfish"], env, root)).toBe(1);
-    expect(stderr()).toContain("own parent");
+  test("a self-parent or self-predecessor is RECORDED, never refused — validate warns instead", async () => {
+    // Duplicate slug is the ONLY structural refusal (F1: the rules are soft
+    // and nothing is ever refused). A self-loop is a well-formed id link and
+    // an odd shape, so it is recorded and reported by `nahel validate`,
+    // exactly like a feature parented to a feature.
+    const { root, layout, env } = await setup();
+    const id = await newNode(env, root, ["feature", "selfish", "--horizon", "now", "--intent", "i"]);
+    await ok(env, root, ["node", "update", "selfish", "--parent", "selfish"]);
+    await ok(env, root, ["node", "update", "selfish", "--predecessor", "selfish"]);
+
+    const { frontmatter } = await readRoadmapNode(layout, id);
+    expect(frontmatter.parent).toBe(id);
+    expect(frontmatter.predecessor).toBe(id);
   });
 });
 

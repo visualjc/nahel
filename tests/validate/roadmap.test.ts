@@ -212,6 +212,91 @@ describe("validate — soft structural shape (F1: warned about, never refused)",
     expect(findingsFor(await validateStore(fixture.layout), "roadmap.shape")).toEqual([]);
   });
 
+  test("a node that is its own parent warns, naming the self-loop — and the walk terminates", async () => {
+    const fixture = await setup();
+    const node = await createNode(fixture, { name: "selfish" });
+    await mutate(fixture.agent, {
+      target: "roadmap-node",
+      eventType: CORE_EVENT_TYPES.roadmapNodeUpdated,
+      frontmatter: { ...node, parent: node.id, updated: fixture.env.now() },
+      body: "intent\n",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.shape");
+    const selfLoop = findings.filter((f) => f.message.includes("its own parent"));
+    expect(selfLoop).toHaveLength(1);
+    expect(selfLoop[0]!.severity).toBe("warning");
+    expect(selfLoop[0]!.message).toContain(node.id);
+  });
+
+  test("a node that is its own predecessor warns — lineage cannot start at itself", async () => {
+    const fixture = await setup();
+    const { product } = await healthyTree(fixture);
+    const node = await createNode(fixture, { name: "loop", parent: product.id });
+    await mutate(fixture.agent, {
+      target: "roadmap-node",
+      eventType: CORE_EVENT_TYPES.roadmapNodeUpdated,
+      frontmatter: {
+        ...node,
+        parent: product.id,
+        predecessor: node.id,
+        updated: fixture.env.now(),
+      },
+      body: "intent\n",
+    });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.shape");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(node.id);
+    expect(findings[0]!.message).toContain("its own predecessor");
+    // A warning, never an error: nothing about it was refused at write time.
+    expect((await validateStore(fixture.layout)).some((f) => f.severity === "error")).toBe(false);
+  });
+
+  test("an initiative linking fewer than two features warns — cardinality is judged HERE, not by the schema", async () => {
+    const fixture = await setup();
+    const { product, feature } = await healthyTree(fixture);
+    const thin = await createNode(fixture, {
+      kind: "initiative",
+      name: "thin-theme",
+      parent: product.id,
+      features: [feature.id],
+    });
+    const empty = await createNode(fixture, {
+      kind: "initiative",
+      name: "empty-theme",
+      parent: product.id,
+    });
+
+    const cardinality = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.shape",
+    ).filter((f) => f.message.includes("sideways"));
+    expect(cardinality).toHaveLength(2);
+    for (const finding of cardinality) expect(finding.severity).toBe("warning");
+    const message = cardinality.map((f) => f.message).join(" ");
+    expect(message).toContain(thin.id);
+    expect(message).toContain(empty.id);
+  });
+
+  test("a record omitting adrs/features reads as empty and is judged softly — never a schema error", async () => {
+    const fixture = await setup();
+    const { product } = await healthyTree(fixture);
+    const node = await createNode(fixture, { name: "bare", parent: product.id });
+    // The shape a hand edit or an older writer produces: no link-list keys.
+    await writeFile(
+      join(fixture.layout.roadmapDir, `${node.id}.md`),
+      `---\nid: ${node.id}\nname: bare\nkind: feature\nhorizon: now\nparent: ${product.id}\ncreated: ${node.created}\nupdated: ${node.updated}\n---\nintent\n`,
+    );
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "schema.roadmap-node")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.shape")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.initiative-link")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.adr-missing")).toEqual([]);
+  });
+
   test("a parent cycle does not hang the ancestor walk — it warns like any rootless node", async () => {
     const fixture = await setup();
     const a = await createNode(fixture, { name: "a" });

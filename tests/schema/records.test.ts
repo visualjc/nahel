@@ -715,17 +715,26 @@ describe("schema/records — roadmap node frontmatter (Phase 4 F1)", () => {
     expect(issues.some((i) => i.includes("horzon"))).toBe(true);
   });
 
-  test("requires the link lists — an absent adrs/features key is not an empty list", () => {
-    const { adrs: _a, ...withoutAdrs } = validNode;
-    expect(rejectionIssues(roadmapNodeFrontmatterSchema, withoutAdrs, "node no adrs").some((i) =>
-      i.startsWith("adrs:"),
-    )).toBe(true);
-    const { features: _f, ...withoutFeatures } = validNode;
-    expect(
-      rejectionIssues(roadmapNodeFrontmatterSchema, withoutFeatures, "node no features").some((i) =>
-        i.startsWith("features:"),
-      ),
-    ).toBe(true);
+  test("accepts a node omitting the link lists — an absent list is soft, judged by validate", () => {
+    // Every per-kind field is optional on the one record: a feature node has
+    // no ADR list and a product node no sideways links, so an omitted key must
+    // reach `nahel validate` — which owns the kind and cardinality judgment —
+    // instead of dying as a schema error before soft validation can speak.
+    const { adrs: _a, features: _f, ...bare } = validNode;
+    expectAccepted(roadmapNodeFrontmatterSchema, bare, "node without link lists");
+    const parsed = roadmapNodeFrontmatterSchema.parse(bare);
+    expect(parsed.adrs).toBeUndefined();
+    expect(parsed.features).toBeUndefined();
+  });
+
+  test("still validates every entry of a link list that IS present", () => {
+    // Optional is not unchecked.
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, adrs: ["../../etc/passwd"] },
+      "node bad adr in present list",
+    );
+    expect(issues.some((i) => i.startsWith("adrs.0:"))).toBe(true);
   });
 });
 

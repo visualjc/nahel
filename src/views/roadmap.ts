@@ -97,13 +97,22 @@ function section(lines: string[], heading: string, entries: readonly string[]): 
   for (const entry of entries) lines.push(`  ${entry}`);
 }
 
+/**
+ * The question a ticket asks, in one line — its body's first. A DISTILLED
+ * ticket has none left (`distill` emptied the body once the decision read back
+ * without it), so every caller must be able to render the empty string.
+ */
+function ticketQuestion(record: TicketRecord): string {
+  return record.body.split("\n", 1)[0] ?? "";
+}
+
 /** One ticket as a map's reader sees it: identity, then the question's first line. */
 function ticketLines(record: TicketRecord): string[] {
   const ticket = record.frontmatter;
   const head = [ticket.id, ticket.type, ticket.state];
   if (ticket.claimant !== undefined) head.push(`claimed by ${ticket.claimant}`);
   if (ticket.blockers.length > 0) head.push(`blocked by ${ticket.blockers.join(", ")}`);
-  const question = record.body.split("\n", 1)[0] ?? "";
+  const question = ticketQuestion(record);
   // A distilled ticket has no body left; the decision line below carries it.
   return question === "" ? [head.join("  ")] : [head.join("  "), `    ${question}`];
 }
@@ -555,6 +564,7 @@ export const ROADMAP_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "map",
   "ticket",
   "ack",
+  "frontier",
 ]);
 
 /**
@@ -569,11 +579,12 @@ export const ROADMAP_SUBCOMMANDS: ReadonlySet<string> = new Set([
  *
  * A node whose slug is one of the verbs above is spelled by ID instead: the
  * slug spelling would dispatch that subcommand and exit non-zero, which is a
- * hint that breaks when followed. The id spelling is always safe because every
- * reserved word is shorter than ID_LENGTH (8) — an id can never spell one, and
- * `tests/commands/roadmap-view.test.ts` pins that invariant. It would stop
- * holding only if a future subcommand were 8 characters drawn entirely from
- * ID_ALPHABET, and that verb would have to answer this question again.
+ * hint that breaks when followed. The id spelling is always safe because no
+ * reserved word satisfies ID_PATTERN — the short ones are the wrong LENGTH, and
+ * `frontier` (8 characters, F8) is disqualified by its `i` and `o`, neither of
+ * which ID_ALPHABET carries. `tests/commands/roadmap-view.test.ts` pins the
+ * invariant directly, so a future verb that could spell an id fails there
+ * rather than producing hints that break when followed.
  */
 function zoomHint(nodes: readonly RoadmapNodeFrontmatter[]): string | undefined {
   const first = [...nodes].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))[0];
@@ -983,6 +994,109 @@ export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomF
       ? `↳ nahel progress --item ${node.epic}  — the work under this feature`
       : undefined,
     map === undefined ? undefined : `↳ nahel roadmap map show ${node.name}  — the chart`,
+  ];
+  hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
+  return lines.join("\n");
+}
+
+/**
+ * The frontier (F8): the takeable edge — everything that can start NOW, rather
+ * than what comes next in a plan. It spans BOTH record kinds, because a
+ * ticket-only frontier would answer "what can I decide" while going silent on
+ * "what can I build", and mapping and building run concurrently by design.
+ *
+ * Everything below is a READ-ONLY rendering. Nothing here refuses anything: an
+ * entry missing from this list can still be started deliberately, and doing so
+ * journals the choice rather than being prevented (the anti-waterfall rule).
+ */
+
+/** The ticket states that stop a ticket blocking its dependents (F7's terminals). */
+const SETTLED_TICKET_STATES: ReadonlySet<string> = new Set(["resolved", "closed"]);
+
+/**
+ * True when a ticket is takeable (F8): state `open`, no claimant, and every
+ * blocking ticket already `resolved` or `closed`.
+ *
+ * A blocker no record carries is NOT settled: the ticket it names may arrive by
+ * a later merge (ADR-0012) and `validate` reports the dangling edge, so "still
+ * waiting" is the honest reading rather than "gone". Nothing is lost by the
+ * conservative call — blocking is advisory, so the ticket can be claimed and
+ * worked regardless; only this LISTING holds it back.
+ */
+function ticketTakeable(
+  record: TicketRecord,
+  byId: ReadonlyMap<string, TicketRecord>,
+): boolean {
+  const ticket = record.frontmatter;
+  if (ticket.state !== "open" || ticket.claimant !== undefined) return false;
+  return ticket.blockers.every((id) => {
+    const blocker = byId.get(id);
+    return blocker !== undefined && SETTLED_TICKET_STATES.has(blocker.frontmatter.state);
+  });
+}
+
+/**
+ * The takeable tickets, in a deterministic total order: by the map they hang
+ * off, then by id. Map order groups one destination's questions together, and
+ * both keys are IDS rather than slugs — a rename must not reorder a rendering,
+ * and duplicate slugs are a merge shape `validate` reports rather than one an
+ * order may depend on.
+ */
+export function ticketFrontier(tickets: readonly TicketRecord[]): TicketRecord[] {
+  const byId = new Map(tickets.map((record) => [record.frontmatter.id, record]));
+  return tickets
+    .filter((record) => ticketTakeable(record, byId))
+    .sort((a, b) => {
+      const maps = [a.frontmatter.map, b.frontmatter.map];
+      if (maps[0] !== maps[1]) return maps[0]! < maps[1]! ? -1 : 1;
+      return a.frontmatter.id < b.frontmatter.id ? -1 : a.frontmatter.id > b.frontmatter.id ? 1 : 0;
+    });
+}
+
+/** Everything one frontier rendering reads from — three store reads, underived. */
+export interface FrontierFacts {
+  tickets: readonly TicketRecord[];
+  maps: readonly MapRecord[];
+  nodes: readonly RoadmapNodeRecord[];
+}
+
+/**
+ * How a ticket names the chart it hangs off: the slug of the node that map
+ * charts, which is the spelling every map and ticket verb accepts. A map id
+ * whose record or whose node is absent prints the id itself — both are
+ * `validate` findings, and a listing that dropped the column would hide which
+ * destination the question belongs to.
+ */
+function mapLabels(facts: FrontierFacts): Map<string, string> {
+  const nodeNames = new Map(facts.nodes.map(({ frontmatter }) => [frontmatter.id, frontmatter.name]));
+  return new Map(
+    facts.maps.map(({ frontmatter }) => [
+      frontmatter.id,
+      nodeNames.get(frontmatter.node) ?? frontmatter.id,
+    ]),
+  );
+}
+
+/**
+ * `nahel roadmap frontier` (F8): what can be started now, per kind. Pure over
+ * records already read, so two reads of an unchanged store are byte-identical
+ * (HC1) and the verb writes nothing at all.
+ */
+export function renderFrontier(facts: FrontierFacts): string {
+  const labels = mapLabels(facts);
+  const tickets = ticketFrontier(facts.tickets);
+  const lines = [`tickets (${tickets.length}):`];
+  if (tickets.length === 0) lines.push("  (none)");
+  for (const record of tickets) {
+    const ticket = record.frontmatter;
+    lines.push(`  ${ticket.id}  ${ticket.type}  map=${labels.get(ticket.map) ?? ticket.map}`);
+    const question = ticketQuestion(record);
+    if (question !== "") lines.push(`      ${question}`);
+  }
+  const hints = [
+    tickets[0] === undefined
+      ? undefined
+      : `↳ nahel roadmap ticket show ${tickets[0].frontmatter.id}  — the question in full`,
   ];
   hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
   return lines.join("\n");

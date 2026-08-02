@@ -646,7 +646,9 @@ describe("nahel roadmap — usage surface", () => {
 
   test("an unknown subcommand exits non-zero naming what is expected", async () => {
     const { root, env } = await setup();
-    expect(await roadmapCommand.run(["frontier"], env, root)).toBe(1);
+    // A word that is neither a reserved verb nor a node slug — `frontier`
+    // stopped being one when F8 spent it on the takeable-edge view.
+    expect(await roadmapCommand.run(["nonesuch"], env, root)).toBe(1);
     expect(stderr()).toContain("node");
   });
 });

@@ -22,6 +22,7 @@ import { closeStoreContext, mutate } from "../store/mutate";
 import {
   isRoadmapColumnEvent,
   ROADMAP_SUBCOMMANDS,
+  renderFrontier,
   renderRoadmapNode,
   renderRoadmapOverview,
   renderRoadmapZoom,
@@ -105,6 +106,11 @@ const USAGE = `usage:
   nahel roadmap node show <ref>
     Print one node — its fields, its lineage both ways, and its intent prose.
     <ref> is the node's slug or its id; both address the same node.
+
+  nahel roadmap frontier
+    The takeable edge: the decision tickets that can be answered now (open,
+    unclaimed, every blocker settled). Reads only — it refuses nothing, and an
+    entry it does not list can still be started deliberately.
 
   nahel roadmap ack
     Say "seen": records a human-attributed acknowledgement that clears the
@@ -527,6 +533,29 @@ async function zoom(ref: string, args: string[], cwd: string): Promise<number> {
 }
 
 /**
+ * `nahel roadmap frontier` (F8): the takeable edge. A pure read of the same
+ * three collections the zoom's chart line reads, handed to the renderer that
+ * applies F8's per-kind predicate — nothing here writes, and nothing anywhere
+ * refuses work because a blocker is open.
+ */
+async function frontier(args: string[], cwd: string): Promise<number> {
+  if (args.length > 0) {
+    throw new UsageError(
+      `roadmap frontier takes no arguments — it lists the whole store's takeable edge (got ${JSON.stringify(args[0])})`,
+    );
+  }
+  const layout = await openStore(cwd);
+  console.log(
+    renderFrontier({
+      tickets: await readTickets(layout),
+      maps: await readMaps(layout),
+      nodes: await readRoadmapNodes(layout),
+    }),
+  );
+  return 0;
+}
+
+/**
  * `nahel roadmap ack` (F5): record that a human has looked at the roadmap. The
  * act IS the whole verb — it carries no ref, no payload, and touches no record,
  * so there is nothing to parse and nothing to name. Under an AGENT actor it is
@@ -582,6 +611,7 @@ export const roadmapCommand: Command = {
       // `nahel roadmap node show <ref>` instead — the verbs win the word.
       if (group === undefined) return overview(cwd);
       if (group === "ack") return ack(rest, env, cwd, actorOverride);
+      if (group === "frontier") return frontier(rest, cwd);
       if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
       if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);
       // Anything that is not a reserved verb is a node REF, not an unknown

@@ -5,6 +5,7 @@ import { CORE_EVENT_TYPES } from "../schema/events";
 import { generateId, ID_PATTERN } from "../schema/id";
 import {
   ticketFrontmatterSchema,
+  type ObservationFrontmatter,
   type TicketFrontmatter,
 } from "../schema/records";
 import {
@@ -311,6 +312,171 @@ async function ticketRelease(
   return 0;
 }
 
+/**
+ * The observation `resolve` distills (F7). Its BODY carries the decision on
+ * the first line — what `nahel recall` prints as the fact — then the question
+ * and the map's destination, because `distill` is about to throw the ticket's
+ * own copy of the question away and the decision must stay readable from
+ * `recall` and `progress` alone.
+ *
+ * The name is derived from the ticket id rather than from the decision prose:
+ * a slug is a schema-hardened field, and no slugification of free text is
+ * total. Search reaches the words through the body, which recall scores too.
+ */
+function decisionObservation(
+  ticket: TicketFrontmatter,
+  destination: string,
+  question: string,
+  decision: string,
+  eventId: string,
+  now: string,
+  id: string,
+): { frontmatter: ObservationFrontmatter; body: string } {
+  const lines = [
+    decision,
+    "",
+    `Decided by resolving ${ticket.type} ticket ${ticket.id}, charting: ${destination}`,
+  ];
+  if (question !== "") lines.push(`Question: ${question}`);
+  return {
+    frontmatter: {
+      id,
+      name: `decision-${ticket.id}`,
+      created: now,
+      tags: ["decision", ticket.type],
+      sources: [eventId],
+    },
+    body: `${lines.join("\n")}\n`,
+  };
+}
+
+/** Parse the one required text flag `resolve` and `close` each take. */
+function requireText(args: string[], flag: "decision" | "reason", verb: string): {
+  ref: string;
+  text: string;
+} {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { [flag]: { type: "string" } },
+    allowPositionals: true,
+  });
+  if (positionals.length !== 1) {
+    throw new UsageError(`roadmap ticket ${verb} takes exactly one <ref> (a ticket id)`);
+  }
+  const text = values[flag];
+  if (typeof text !== "string" || text.trim() === "") {
+    throw new UsageError(
+      flag === "decision"
+        ? "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, indexed on the map, and distilled into an observation)"
+        : "a close states why the question was ruled away — pass a non-empty --reason <why> (it becomes the map's Out of scope line)",
+    );
+  }
+  return { ref: positionals[0]!, text: text.trim() };
+}
+
+/**
+ * `resolve`: the decision, the ticket, the observation and the map's index
+ * line, under ONE write-ahead event (F7). The event id is minted first because
+ * the observation's `sources` must cite the very event carrying it.
+ */
+async function ticketResolve(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
+  const { ref, text: decision } = requireText(args, "decision", "resolve");
+  const ctx = await commandContext(cwd, env, actorOverride);
+  const current = await requireTicket(ctx.layout, ref);
+  requireState(current.frontmatter, ["open", "claimed"], "resolve");
+  const map = await readMap(ctx.layout, current.frontmatter.map);
+
+  const eventId = generateId(ctx.env);
+  const now = ctx.env.now();
+  // The claim goes with the state: nothing stays assigned once it is decided.
+  const { claimant: _released, ...rest } = current.frontmatter;
+  const resolved: TicketFrontmatter = {
+    ...rest,
+    state: "resolved",
+    decision,
+    resolution: eventId,
+    updated: now,
+  };
+  const observation = decisionObservation(
+    current.frontmatter,
+    map.frontmatter.destination,
+    current.body.trim(),
+    decision,
+    eventId,
+    now,
+    generateId(ctx.env),
+  );
+  await mutate(ctx, {
+    target: "sequence",
+    eventType: CORE_EVENT_TYPES.ticketResolved,
+    eventId,
+    writes: [
+      { target: "ticket", frontmatter: resolved, body: current.body },
+      { target: "observation", frontmatter: observation.frontmatter, body: observation.body },
+      {
+        target: "map",
+        frontmatter: {
+          ...map.frontmatter,
+          decisions: [...map.frontmatter.decisions, { ticket: resolved.id, decision }],
+          updated: now,
+        },
+        body: map.body,
+      },
+    ],
+  });
+  await closeStoreContext(ctx);
+  return 0;
+}
+
+/**
+ * `close`: rule the question away. The ticket and the map's Out of scope line
+ * ride one event, the same shape `resolve` does — a closed question never
+ * becomes a decision, so nothing is indexed and nothing is distilled.
+ */
+async function ticketClose(
+  args: string[],
+  env: Env,
+  cwd: string,
+  actorOverride?: string,
+): Promise<number> {
+  const { ref, text: reason } = requireText(args, "reason", "close");
+  const ctx = await commandContext(cwd, env, actorOverride);
+  const current = await requireTicket(ctx.layout, ref);
+  requireState(current.frontmatter, ["open", "claimed"], "close");
+  const map = await readMap(ctx.layout, current.frontmatter.map);
+
+  const now = ctx.env.now();
+  const { claimant: _released, ...rest } = current.frontmatter;
+  await mutate(ctx, {
+    target: "sequence",
+    eventType: CORE_EVENT_TYPES.ticketClosed,
+    eventId: generateId(ctx.env),
+    writes: [
+      {
+        target: "ticket",
+        frontmatter: { ...rest, state: "closed", reason, updated: now },
+        body: current.body,
+      },
+      {
+        target: "map",
+        frontmatter: {
+          ...map.frontmatter,
+          out_of_scope: [...map.frontmatter.out_of_scope, { reason, ticket: rest.id }],
+          updated: now,
+        },
+        body: map.body,
+      },
+    ],
+  });
+  await closeStoreContext(ctx);
+  return 0;
+}
+
 /** The single-ref argument shape the four lifecycle verbs share. */
 export function onlyRef(args: string[], verb: string): string {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true });
@@ -333,6 +499,8 @@ export async function runTicketSubcommand(
   if (sub === "show") return ticketShow(args, cwd);
   if (sub === "claim") return ticketClaim(args, env, cwd, actorOverride);
   if (sub === "release") return ticketRelease(args, env, cwd, actorOverride);
+  if (sub === "resolve") return ticketResolve(args, env, cwd, actorOverride);
+  if (sub === "close") return ticketClose(args, env, cwd, actorOverride);
   throw new UsageError(
     sub === undefined
       ? "missing subcommand — expected `roadmap ticket new`, `update`, `show`, `claim`, `release`, `resolve`, `close`, or `distill`"

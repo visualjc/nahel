@@ -863,3 +863,50 @@ The NEXT delta this PRD states.
     expect((await validate(fixture.root)).out).toContain("roadmap.document-collision");
   });
 });
+
+describe("the design doc's line is keyed to the act, not to the path (F10)", () => {
+  test("a design doc that already mentions the archive path still gains the release line", async () => {
+    const fixture = await released();
+    // The path is prose anyone may already have written down — a roadmap note,
+    // a link, an earlier paragraph. It says nothing about whether THIS act ran.
+    await writeFile(
+      join(fixture.root, DESIGN_DOC),
+      `${DESIGN_TEXT}\nSee also ${ARCHIVED_PATH} once that delta closes.\n`,
+      "utf8",
+    );
+
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+
+    const design = (await text(fixture.root, DESIGN_DOC))!;
+    // The pre-existing mention did not suppress the line the act owes.
+    expect(occurrences(design, ARCHIVED_PATH)).toBe(2);
+    expect(design).toContain("shipped");
+    const archival = (await events(fixture.layout)).find(
+      (event) => event.type === CORE_EVENT_TYPES.prdArchived,
+    )!;
+    expect(design).toContain(`archival event ${archival.id}`);
+    // And convergence is judged by the same sentinel, so validate is clean.
+    expect((await validate(fixture.root)).code).toBe(0);
+  });
+
+  test("the pre-existing mention does not fake convergence when the append never ran", async () => {
+    const fixture = await released();
+    await writeFile(
+      join(fixture.root, DESIGN_DOC),
+      `${DESIGN_TEXT}\nSee also ${ARCHIVED_PATH} once that delta closes.\n`,
+      "utf8",
+    );
+    // Kill the act at the design doc, its final step.
+    await withFrozen(join(fixture.root, "docs", "design"), async () => {
+      expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).not.toBe("");
+    });
+
+    const before = await validate(fixture.root);
+    expect(before.code).toBe(1);
+    expect(before.out).toContain("journal.divergence");
+    expect(before.out).toContain(DESIGN_DOC);
+
+    expect((await validate(fixture.root, ["--repair"])).code).toBe(0);
+    expect(occurrences((await text(fixture.root, DESIGN_DOC))!, ARCHIVED_PATH)).toBe(2);
+  });
+});

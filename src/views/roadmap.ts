@@ -14,7 +14,7 @@ import type {
 } from "../schema/records";
 import { compareEvents } from "../store/journal";
 import type { MapRecord, RoadmapNodeRecord, TicketRecord } from "../store/layout";
-import { descendantIds } from "./snapshot";
+import { buildItemTree, descendantIds } from "./snapshot";
 import { renderItemTree } from "./status";
 
 /**
@@ -1230,14 +1230,19 @@ export function renderFrontier(facts: FrontierFacts): string {
     );
   }
   lines.push(...renderItemTree(items, new Set(facts.items.map((item) => item.id))));
+  const firstListed = buildItemTree(items)[0];
 
   const hints = [
     tickets[0] === undefined
       ? undefined
       : `↳ nahel roadmap ticket show ${tickets[0].frontmatter.id}  — the question in full`,
-    items[0] === undefined
+    // The item on the FIRST rendered LINE, which is the tree's first root —
+    // not the first in the flat `created` → `id` order, which a child created
+    // before its parent (or in the same second) takes the lead in. A hint that
+    // named a line further down would read as a hint about something else.
+    firstListed === undefined
       ? undefined
-      : `↳ nahel progress --item ${items[0].id}  — what has happened on it so far`,
+      : `↳ nahel progress --item ${firstListed.item.id}  — what has happened on it so far`,
   ];
   hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
   return lines.join("\n");

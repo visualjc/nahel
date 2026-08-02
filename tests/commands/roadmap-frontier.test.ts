@@ -355,6 +355,141 @@ describe("the work-item half of the frontier (F8)", () => {
   });
 });
 
+describe("`nahel roadmap frontier <ref>` — one node's takeable edge (F8)", () => {
+  test("scopes to that node's chart and to the work under its epic, and names it", async () => {
+    const { root, env, node, map } = await setup();
+    const epic = lastId(await item(env, root, ["new", "plan", "payments-epic", "full"]));
+    await ok(env, root, ["node", "update", node, "--epic", epic]);
+    const mine = await work(env, root, "add-refunds", ["--parent", epic]);
+    const question = await ticket(env, root, map, "which deploy target do we own?");
+
+    // A second node, charted and epic'd of its own — everything about it is
+    // takeable, and none of it belongs to the first node's frontier.
+    const other = lastId(
+      await ok(env, root, [
+        "node",
+        "new",
+        "feature",
+        "billing-portal",
+        "--horizon",
+        "next",
+        "--intent",
+        "Self-serve billing.",
+      ]),
+    );
+    const otherMap = lastId(
+      await ok(env, root, ["map", "new", "--node", other, "--destination", "a portal"]),
+    );
+    const otherTicket = await ticket(env, root, otherMap, "which billing provider?");
+    const otherItem = await work(env, root, "portal-shell");
+
+    const scoped = await frontier(env, root, ["deployment-devops-workflows"]);
+    expect(scoped).toContain("frontier of deployment-devops-workflows");
+    expect(scoped).toContain(question);
+    expect(scoped).toContain(mine);
+    expect(scoped).not.toContain(otherTicket);
+    expect(scoped).not.toContain(otherItem);
+    // …while the store-wide view still holds everything.
+    const wide = await frontier(env, root);
+    for (const id of [question, mine, otherTicket, otherItem]) expect(wide).toContain(id);
+  });
+
+  test("the node's id and the map's own id address the same frontier as the slug", async () => {
+    const { root, env, node, map } = await setup();
+    await ticket(env, root, map, "which deploy target do we own?");
+
+    const bySlug = await frontier(env, root, ["deployment-devops-workflows"]);
+    expect(await frontier(env, root, [node])).toBe(bySlug);
+    expect(await frontier(env, root, [map])).toBe(bySlug);
+  });
+
+  test("a blocker OUTSIDE the scope still holds an in-scope item back", async () => {
+    const { root, env, node } = await setup();
+    const epic = lastId(await item(env, root, ["new", "plan", "payments-epic", "full"]));
+    await ok(env, root, ["node", "update", node, "--epic", epic]);
+    // The dependency hangs off no node at all — the predicate is evaluated over
+    // the whole store, and only the RESULT is narrowed to the scope.
+    const outside = await work(env, root, "shared-schema");
+    const waiting = await work(env, root, "add-refunds", ["--parent", epic, "--depends-on", outside]);
+
+    expect(await frontier(env, root, ["deployment-devops-workflows"])).not.toContain(waiting);
+    await item(env, root, ["update", outside, "--status", "done"]);
+    expect(await frontier(env, root, ["deployment-devops-workflows"])).toContain(waiting);
+  });
+
+  test("a node with no chart and no epic renders both sections at zero, never an error", async () => {
+    const { root, env } = await setup();
+    await ok(env, root, [
+      "node",
+      "new",
+      "feature",
+      "billing-portal",
+      "--horizon",
+      "later",
+      "--intent",
+      "Self-serve billing.",
+    ]);
+
+    const scoped = await frontier(env, root, ["billing-portal"]);
+    expect(scoped).toContain("frontier of billing-portal");
+    expect(scoped).toContain("tickets (0)");
+    expect(scoped).toContain("work items (0)");
+  });
+
+  test("a ref naming no node is refused by name, with the near misses", async () => {
+    const { root, env } = await setup();
+
+    errs = [];
+    expect(await roadmapCommand.run(["frontier", "deployment-devops"], env, root)).toBe(1);
+    expect(stderr()).toContain("deployment-devops-workflows");
+    errs = [];
+  });
+
+  test("more than one ref is refused — the frontier is scoped to one node", async () => {
+    const { root, env } = await setup();
+
+    errs = [];
+    expect(await roadmapCommand.run(["frontier", "a", "b"], env, root)).toBe(1);
+    expect(stderr()).toContain("one");
+    errs = [];
+  });
+});
+
+describe("an empty frontier says WHY, and never reads as an empty store (F8)", () => {
+  test("a store with nothing in it states both sections at zero", async () => {
+    const { root, env } = await setup();
+
+    const listed = await frontier(env, root);
+    expect(listed).toContain("tickets (0):\n  (none)");
+    expect(listed).toContain("work items (0):\n  (none)");
+  });
+
+  test("held-back tickets are counted by the reason they are held", async () => {
+    const { root, env, map } = await setup();
+    const first = await ticket(env, root, map, "which deploy target do we own?");
+    await ticket(env, root, map, "which CD provider?", [first]);
+    await ok(env, root, ["ticket", "claim", first], "agent:codex");
+
+    const listed = await frontier(env, root);
+    expect(listed).toContain("tickets (0):\n  (none) — 1 blocked, 1 claimed");
+  });
+
+  test("held-back work items are counted the same way, and a decided one is not a near miss", async () => {
+    const { root, env } = await setup();
+    const running = await work(env, root, "wire-the-gateway");
+    await work(env, root, "add-refunds", ["--depends-on", running]);
+    const claimed = await work(env, root, "unrelated-chore");
+    await item(env, root, ["update", running, "--status", "in-progress"]);
+    expect(await claimCommand.run([claimed], env, root, "human:jim")).toBe(0);
+    expect(stderr()).toBe("");
+
+    const listed = await frontier(env, root);
+    // `wire-the-gateway` is in-progress — started work is not a near miss at
+    // all, so only the two BACKLOG items held back are counted.
+    expect(listed).toContain("work items (0):\n  (none) — 1 blocked by a dependency, 1 claimed");
+  });
+});
+
 describe("the frontier carries the reader onward (F8)", () => {
   test("a takeable ticket earns a runnable hint at the question in full", async () => {
     const { root, env, map } = await setup();

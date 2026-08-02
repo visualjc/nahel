@@ -74,3 +74,81 @@ describe("timestampFromEpochSeconds — and back again", () => {
     expect(timestampFromEpochSeconds(now - 24 * 3600)).toBe("2026-08-01T09:15:00Z");
   });
 });
+
+/**
+ * The SHAPE is not the instant (codex review, F4): `\d{4}-\d{2}-\d{2}T…` admits
+ * February 30th, month 13 and hour 24, none of which is a moment in time.
+ * Arithmetic over one of those produces a number that looks like an answer,
+ * which is worse than no answer at all — so the calendar fields are checked,
+ * and anything impossible reads exactly like a malformed string: undefined.
+ */
+describe("epochSeconds — the calendar, not just the shape", () => {
+  test("a day the month does not have is not an instant", () => {
+    for (const bad of [
+      "2026-02-30T00:00:00Z",
+      "2026-04-31T00:00:00Z",
+      "2026-06-31T00:00:00Z",
+      "2026-09-31T00:00:00Z",
+      "2026-11-31T00:00:00Z",
+      "2026-01-32T00:00:00Z",
+      "2026-01-00T00:00:00Z",
+    ]) {
+      expect(epochSeconds(bad)).toBeUndefined();
+    }
+  });
+
+  test("the last real day of each month IS an instant", () => {
+    for (const good of [
+      "2026-01-31T00:00:00Z",
+      "2026-02-28T00:00:00Z",
+      "2026-04-30T00:00:00Z",
+      "2026-12-31T23:59:59Z",
+    ]) {
+      expect(epochSeconds(good)).toBeDefined();
+    }
+  });
+
+  test("February 29th exists exactly in the years the leap rule says it does", () => {
+    expect(epochSeconds("2024-02-29T00:00:00Z")).toBeDefined();
+    expect(epochSeconds("2000-02-29T00:00:00Z")).toBeDefined();
+    expect(epochSeconds("2023-02-29T00:00:00Z")).toBeUndefined();
+    expect(epochSeconds("1900-02-29T00:00:00Z")).toBeUndefined();
+    expect(epochSeconds("2100-02-29T00:00:00Z")).toBeUndefined();
+  });
+
+  test("a month outside 1–12 is not an instant", () => {
+    expect(epochSeconds("2026-13-01T00:00:00Z")).toBeUndefined();
+    expect(epochSeconds("2026-00-01T00:00:00Z")).toBeUndefined();
+    expect(epochSeconds("2026-99-01T00:00:00Z")).toBeUndefined();
+  });
+
+  test("a clock field outside its range is not an instant — including the leap second", () => {
+    expect(epochSeconds("2026-01-01T24:00:00Z")).toBeUndefined();
+    expect(epochSeconds("2026-01-01T00:60:00Z")).toBeUndefined();
+    // nahel's format is plain UTC seconds; the journal never writes :60.
+    expect(epochSeconds("2026-01-01T00:00:60Z")).toBeUndefined();
+    expect(epochSeconds("2026-01-01T23:59:59Z")).toBeDefined();
+  });
+});
+
+describe("timestampFromEpochSeconds — the representable calendar", () => {
+  test("the four-digit year is the format's whole range, and its edges round-trip", () => {
+    expect(timestampFromEpochSeconds(epochSeconds("0000-01-01T00:00:00Z")!)).toBe(
+      "0000-01-01T00:00:00Z",
+    );
+    expect(timestampFromEpochSeconds(epochSeconds("9999-12-31T23:59:59Z")!)).toBe(
+      "9999-12-31T23:59:59Z",
+    );
+  });
+
+  test("one second outside either edge is unrepresentable, not a malformed year", () => {
+    expect(timestampFromEpochSeconds(epochSeconds("0000-01-01T00:00:00Z")! - 1)).toBeUndefined();
+    expect(timestampFromEpochSeconds(epochSeconds("9999-12-31T23:59:59Z")! + 1)).toBeUndefined();
+  });
+
+  test("a count that is not a whole, safe number of seconds is refused", () => {
+    for (const bad of [Number.NaN, Infinity, -Infinity, 1.5, 2 ** 53]) {
+      expect(timestampFromEpochSeconds(bad)).toBeUndefined();
+    }
+  });
+});

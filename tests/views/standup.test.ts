@@ -93,33 +93,90 @@ function charted(env: Env, status: WorkItemFrontmatter["status"] = "backlog") {
   return { epic, child, node, birth, items: [epic, { ...child, status }] };
 }
 
+/** The resolved cutoff, failing the test loudly when the spec was refused. */
+function since(spec: string, now = NOW): string {
+  const resolved = resolveSince(spec, now);
+  if ("error" in resolved) throw new Error(`expected ${spec} to resolve: ${resolved.error}`);
+  return resolved.since;
+}
+
+/** The refusal reason, failing the test loudly when the spec resolved. */
+function refusal(spec: string, now = NOW): string {
+  const resolved = resolveSince(spec, now);
+  if (!("error" in resolved)) throw new Error(`expected ${spec} to be refused`);
+  return resolved.error;
+}
+
 describe("resolveSince — relative windows off the injected clock, never a Date", () => {
   test("a day window subtracts whole days from the injected now", () => {
-    expect(resolveSince("7d", NOW)).toBe("2026-07-26T09:15:00Z");
-    expect(resolveSince("1d", NOW)).toBe("2026-08-01T09:15:00Z");
+    expect(since("7d")).toBe("2026-07-26T09:15:00Z");
+    expect(since("1d")).toBe("2026-08-01T09:15:00Z");
   });
 
   test("an hour window subtracts whole hours", () => {
-    expect(resolveSince("24h", NOW)).toBe("2026-08-01T09:15:00Z");
-    expect(resolveSince("2h", NOW)).toBe("2026-08-02T07:15:00Z");
+    expect(since("24h")).toBe("2026-08-01T09:15:00Z");
+    expect(since("2h")).toBe("2026-08-02T07:15:00Z");
   });
 
   test("a relative window and its equivalent absolute timestamp resolve identically", () => {
-    expect(resolveSince("7d", NOW)).toBe(resolveSince("2026-07-26T09:15:00Z", NOW));
+    expect(since("7d")).toBe(since("2026-07-26T09:15:00Z"));
   });
 
   test("an absolute timestamp in the journal's own format passes through unchanged", () => {
-    expect(resolveSince("2026-01-01T00:00:00Z", NOW)).toBe("2026-01-01T00:00:00Z");
+    expect(since("2026-01-01T00:00:00Z")).toBe("2026-01-01T00:00:00Z");
   });
 
   test("a zero window is the instant itself, not an error", () => {
-    expect(resolveSince("0d", NOW)).toBe(NOW);
+    expect(since("0d")).toBe(NOW);
   });
 
-  test("anything else is undefined — the caller says what the accepted forms are", () => {
+  test("an unrecognized spelling is refused, and the reason names both accepted forms", () => {
     for (const bad of ["", "7", "d", "7w", "-1d", "7 d", "7D", "yesterday", "2026-08-02"]) {
-      expect(resolveSince(bad, NOW)).toBeUndefined();
+      const reason = refusal(bad);
+      expect(reason).toContain("7d");
+      expect(reason).toContain("24h");
+      expect(reason).toContain("timestamp");
     }
+  });
+});
+
+/**
+ * A window is a question about time, and some strings that LOOK like one name
+ * no time at all (codex review, F4). Each is refused with its own sentence,
+ * because "February 30th is not a date" and "a billion days reaches past the
+ * calendar" are different mistakes and only a named one is fixable.
+ */
+describe("resolveSince — specs that name no instant", () => {
+  test("a timestamp of the right shape but an impossible date is refused, and SAID so", () => {
+    for (const bad of [
+      "2026-02-30T00:00:00Z",
+      "2026-13-01T00:00:00Z",
+      "2026-01-01T24:00:00Z",
+      "2023-02-29T00:00:00Z",
+    ]) {
+      const reason = refusal(bad);
+      expect(reason).toContain(bad);
+      expect(reason).toContain("no real instant");
+    }
+  });
+
+  test("a window reaching past the representable calendar is refused, never rendered", () => {
+    for (const huge of ["999999999d", "800000d", "99999999999h"]) {
+      const reason = refusal(huge);
+      expect(reason).toContain(huge);
+      // The bug this replaces: a malformed year rendered as if it were a date.
+      expect(reason).not.toMatch(/^standup/);
+    }
+    // The boundary holds on the other side: a large but reachable window works.
+    expect(since("100000d")).toBe("1752-08-16T09:15:00Z");
+  });
+
+  test("a window whose digits exceed a safe integer is refused, not silently rounded", () => {
+    expect(refusal("99999999999999999999999d")).toContain("too large");
+  });
+
+  test("a clock reading that names no instant refuses rather than dating the window", () => {
+    expect(refusal("7d", "2026-02-30T00:00:00Z")).toContain("clock reading");
   });
 });
 

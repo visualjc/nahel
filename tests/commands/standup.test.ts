@@ -166,6 +166,25 @@ describe("nahel standup — the window flag", () => {
     expect(written).toContain('"yesterday"');
   });
 
+  test("a timestamp naming no real instant is refused, naming the problem", async () => {
+    const { root, env } = await setup();
+    for (const impossible of ["2026-02-30T00:00:00Z", "2026-01-01T24:00:00Z"]) {
+      const written = await standupFails(env, root, ["--since", impossible]);
+      expect(written).toContain(impossible);
+      expect(written).toContain("no real instant");
+    }
+  });
+
+  test("an oversized window is refused cleanly — never a standup with a malformed year", async () => {
+    const { root, env } = await setup();
+    const before = logs.length;
+    const written = await standupFails(env, root, ["--since", "999999999d"]);
+    expect(written).toContain("999999999d");
+    expect(written).toContain("calendar");
+    // The bug this replaces: a rendered header carrying an impossible year.
+    expect(logs.slice(before).join("\n")).not.toContain("standup since");
+  });
+
   test("an uninitialized repo is refused with the init pointer, not an empty standup", async () => {
     const root = await makeTempDir("nahel-standup-bare-");
     dirs.push(root);

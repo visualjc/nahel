@@ -2000,6 +2000,41 @@ describe("validate — journal well-formedness", () => {
     expect(findings[0]!.message).toContain("e2e2e2e2");
   });
 
+  /**
+   * The record schema's `ts` is a SHAPE check (`\d{4}-\d{2}-\d{2}T…`), so an
+   * event dated February 30th parses cleanly and reaches every reader that
+   * orders or ages the journal. Timestamp arithmetic refuses it (schema/time),
+   * which would otherwise make the compaction-age leg go quiet for a reason
+   * nobody could see — so the defect is REPORTED here, at the seam, rather
+   * than swallowed downstream (codex review, F4).
+   */
+  test("an event dated on a day that does not exist is an error naming the event", async () => {
+    const fixture = await setupFixture(dirs);
+    const segment = sessionSegmentPath(fixture.layout, "s4s4s4s4");
+    await writeFile(segment, rawEventLine({ id: "c0c0c0c0", ts: "2026-02-30T00:00:00Z" }));
+
+    const findings = findingsFor(await validateStore(fixture.layout), "journal.timestamp");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("error");
+    expect(findings[0]!.path).toBe(segment);
+    expect(findings[0]!.message).toContain("c0c0c0c0");
+    expect(findings[0]!.message).toContain("2026-02-30T00:00:00Z");
+    expect(findings[0]!.fix).toBeDefined();
+  });
+
+  test("an event on an impossible clock field is caught too; real instants are quiet", async () => {
+    const fixture = await setupFixture(dirs);
+    await writeFile(
+      sessionSegmentPath(fixture.layout, "s5s5s5s5"),
+      rawEventLine({ id: "c1c1c1c1", ts: "2026-01-01T24:00:00Z" }),
+    );
+    expect(findingsFor(await validateStore(fixture.layout), "journal.timestamp")).toHaveLength(1);
+
+    const clean = await setupFixture(dirs);
+    await createItem(clean);
+    expect(findingsFor(await validateStore(clean.layout), "journal.timestamp")).toEqual([]);
+  });
+
   test("a duplicate event id across segments is an error naming both segments", async () => {
     const fixture = await setupFixture(dirs);
     await writeFile(

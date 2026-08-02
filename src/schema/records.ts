@@ -136,8 +136,16 @@ export function archivedPrdPath(path: string): string {
  *
  * `append` keys on a MARKER rather than on the line itself: a product design doc
  * is permanent and gets rewritten by people (F10), so "has this act landed" must
- * survive the sentence being reworded. The marker is the archived path — the
- * pointer the line exists to carry.
+ * survive the sentence being reworded. The marker must therefore be
+ * EVENT-SCOPED — text only this act could have written, such as its own event
+ * id. A marker naming something the document might plausibly already contain (a
+ * path, a slug) is worse than no marker at all: it suppresses the line the act
+ * owes, and then reports the act as converged.
+ *
+ * The same rule is why a `move` is judged by its own `header` (which names the
+ * event) and not by the destination merely existing: a document at the target
+ * path may be another delta's, and unlinking the source into it destroys a live
+ * PRD.
  */
 export const documentEditSchema = z.discriminatedUnion("op", [
   z.strictObject({

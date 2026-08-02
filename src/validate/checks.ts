@@ -2131,8 +2131,9 @@ function checkDivergence(state: ParsedState): Finding[] {
  *   removes the source.
  *
  * An `append` is judged by its MARKER, not by the line: a design doc is
- * permanent and gets reworded, and the act has landed as long as the pointer
- * it carried is in the document.
+ * permanent and gets reworded, and the act has landed as long as the pointer it
+ * carried — event-scoped, so nothing else can have written it — is still in the
+ * document.
  */
 function checkArchival(state: ParsedState): Finding[] {
   const findings: Finding[] = [];

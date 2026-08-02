@@ -78,11 +78,25 @@ function archiveStamp(node: RoadmapNodeFrontmatter, release: string, eventId: st
   ].join("\n");
 }
 
+/**
+ * The sentinel that says THIS archival's line is in a document. Event-scoped,
+ * never the archived path: a path is prose anyone may already have written down
+ * — a link, an earlier paragraph, a note about the delta that was about to
+ * close — and keying on one would let an unrelated mention suppress the line the
+ * act owes and then report the act as converged. The event id names one act and
+ * nothing else, and it is the same journal pointer the archived PRD's header
+ * carries, so a human rewording the sentence keeps convergence as long as the
+ * pointer survives — which is exactly what the pointer is for.
+ */
+function archivalSentinel(eventId: string): string {
+  return `archival event ${eventId}`;
+}
+
 /** The line the product design doc gains: what shipped, and where its delta is filed. */
 function designNote(node: RoadmapNodeFrontmatter, archived: string, eventId: string): string {
   return (
     `- **${node.name}** shipped — its delta is closed and the PRD that stated it ` +
-    `is archived at \`${archived}\` (archival event ${eventId}).`
+    `is archived at \`${archived}\` (${archivalSentinel(eventId)}).`
   );
 }
 
@@ -277,7 +291,7 @@ export async function runArchiveSubcommand(
       edit: {
         op: "append",
         path: designDoc,
-        marker: archived,
+        marker: archivalSentinel(eventId),
         line: designNote(node, archived, eventId),
       },
     });

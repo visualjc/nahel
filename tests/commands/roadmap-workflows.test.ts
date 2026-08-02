@@ -213,3 +213,57 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("once");
   });
 });
+
+/**
+ * The migration is DOCUMENTED VOCABULARY too (the F9 precedent): the glossary
+ * is where this project's terms are defined, and the two rules a migration can
+ * only get wrong once — coverage rather than a count, and the set journaled
+ * before the nodes — are exactly the rules a second store's migrating agent
+ * will look up rather than re-derive. The event type is asserted here as well
+ * as in the doc, because a payload key spelled two ways is a set no reviewer
+ * can read back.
+ */
+describe("the vocabulary the migration is recorded under (F6)", () => {
+  /** One glossary entry, by its bolded term — the line is the definition. */
+  async function entry(term: string): Promise<string> {
+    const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
+    const line = glossary.split("\n").find((each) => each.startsWith(`- **${term}** —`));
+    expect(line).toBeDefined();
+    return line!;
+  }
+
+  test("the glossary defines the migration rule as coverage, enumerated from the store", async () => {
+    const defined = await entry("Roadmap migration");
+    expect(defined).toContain("coverage");
+    expect(defined).toContain("not a count");
+    expect(defined).toContain("backlog");
+    expect(defined).toContain("`nahel status`");
+    expect(defined).toContain("`nahel/workflows/migrate-roadmap.md`");
+  });
+
+  test("the glossary states the journal-first discipline and the event that carries the set", async () => {
+    const defined = await entry("Roadmap migration");
+    expect(defined).toContain(`\`${MIGRATION_SELECTED_EVENT_TYPE}\``);
+    expect(defined).toContain("`included`");
+    expect(defined).toContain("`excluded`");
+    expect(defined).toContain("near-miss");
+    expect(defined).toContain("journal order");
+    // Recorded like every other open-extension type: logged, never self-recorded.
+    expect(defined).toContain("nahel log");
+    expect(defined).toContain("self-record");
+    // The ordering is the criterion, so the entry must state both ends of it.
+    const setAt = defined.indexOf(MIGRATION_SELECTED_EVENT_TYPE);
+    const nodesAt = defined.indexOf("before the first node");
+    expect(setAt).toBeGreaterThan(-1);
+    expect(nodesAt).toBeGreaterThan(setAt);
+  });
+
+  test("the glossary states that migration writes node records only", async () => {
+    const defined = await entry("Roadmap migration");
+    expect(defined).toContain("one-way");
+    expect(defined).toContain("`epic`");
+    expect(defined).toContain("nahel/items/");
+    // And that the judgment is the agent's, not the CLI's (HC1).
+    expect(defined).toContain("judgment");
+  });
+});

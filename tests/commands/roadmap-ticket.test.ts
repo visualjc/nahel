@@ -299,6 +299,46 @@ describe("the claim is advisory assignment, not the intervention claim (F7)", ()
   });
 });
 
+describe("nahel roadmap --help — the ticket verbs as they actually behave", () => {
+  /** The help lines mentioning a term — the help IS the contract readers get. */
+  function linesAbout(help: string, term: string): string[] {
+    return help.split("\n").filter((line) => line.includes(term));
+  }
+
+  test("close documents BOTH dispositions, and never claims invalidation writes Out of scope", async () => {
+    // Help describing a syntax the CLI no longer accepts is worse than none: an
+    // agent reading it composes a refused command. And help claiming that an
+    // invalidated close files the question under Out of scope teaches the exact
+    // falsehood the disposition split exists to prevent.
+    const { root, env } = await charted();
+    const help = (await ok(env, root, ["--help"])).join("\n");
+
+    const signature = linesAbout(help, "nahel roadmap ticket close");
+    expect(signature).toHaveLength(1);
+    expect(signature[0]).toContain("--out-of-scope");
+    expect(signature[0]).toContain("--invalidated-by");
+    expect(help).toContain("--invalidated-by <ticket-or-event-id>");
+
+    // The section's NAME is claimed for the out-of-scope disposition only.
+    const outOfScope = linesAbout(help, "Out of scope");
+    expect(outOfScope.length).toBeGreaterThan(0);
+    for (const line of outOfScope) expect(line).not.toContain("invalidated");
+    const invalidated = linesAbout(help, "invalidated");
+    expect(invalidated.length).toBeGreaterThan(1);
+    for (const line of invalidated) expect(line).not.toContain("Out of scope");
+  });
+
+  test("the other five ticket verbs are documented by their real signatures", async () => {
+    const { root, env } = await charted();
+    const help = (await ok(env, root, ["--help"])).join("\n");
+    expect(help).toContain("nahel roadmap ticket new --map <ref> --type <t> --question <text>");
+    expect(help).toContain("nahel roadmap ticket claim <ref>");
+    expect(help).toContain("nahel roadmap ticket release <ref>");
+    expect(help).toContain("nahel roadmap ticket resolve <ref> --decision <one-liner>");
+    expect(help).toContain("nahel roadmap ticket distill <ref>");
+  });
+});
+
 describe("nahel roadmap ticket show — the ticket's own facts", () => {
   test("prints the lifecycle facts F8's frontier reads, and the question", async () => {
     const { root, env, map, ticket } = await charted();

@@ -356,6 +356,25 @@ describe("nahel roadmap archive — the released delta is closed (F10)", () => {
     ).toHaveLength(1);
   });
 
+  test("a product carrying no design doc: the PRD still closes, and nothing is invented", async () => {
+    const fixture = await released({ designDoc: null });
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+
+    expect(await text(fixture.root, ARCHIVED_PATH)).not.toBeNull();
+    expect(await text(fixture.root, PRD_PATH)).toBeNull();
+    expect(Object.values(await prdRefs(fixture))).toEqual([
+      ARCHIVED_PATH,
+      ARCHIVED_PATH,
+      ARCHIVED_PATH,
+      ARCHIVED_PATH,
+      ARCHIVED_PATH,
+    ]);
+    // No design doc to update means no document step, not a refusal and not a
+    // file conjured at some default path.
+    expect(await text(fixture.root, DESIGN_DOC)).toBeNull();
+    expect((await validate(fixture.root)).code).toBe(0);
+  });
+
   test("a node with no PRD, and a ref that names nothing, are refused by name", async () => {
     const fixture = await released();
     expect(await fails(fixture.env, fixture.root, ["archive", "nahel"])).toContain("no `prd`");

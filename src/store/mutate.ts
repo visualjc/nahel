@@ -504,7 +504,7 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
 }
 
 /** What applying a document edit did — repair reports only what it changed. */
-export type DocumentOutcome = "applied" | "already" | "unrepairable";
+type DocumentOutcome = "applied" | "already" | "unrepairable";
 
 /**
  * Prepend the archival stamp to a document, BELOW its frontmatter when it has
@@ -546,7 +546,7 @@ function appendLine(text: string, line: string): string {
  * `validate` names it), or an `append` target that does not exist; nothing is
  * invented in either case.
  */
-export async function applyDocumentEdit(
+async function applyDocumentEdit(
   layout: StoreLayout,
   edit: DocumentEdit,
 ): Promise<DocumentOutcome> {

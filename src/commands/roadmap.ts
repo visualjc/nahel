@@ -5,11 +5,10 @@ import { CORE_EVENT_TYPES, ROADMAP_ACKED_EVENT_TYPE } from "../schema/events";
 import { generateId, ID_PATTERN } from "../schema/id";
 import {
   roadmapNodeFrontmatterSchema,
-  type JournalEvent,
   type RoadmapNodeFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { appendEvent, readJournal } from "../store/journal";
+import { appendEvent } from "../store/journal";
 import {
   itemExists,
   openStore,
@@ -23,7 +22,6 @@ import {
 } from "../store/layout";
 import { closeStoreContext, mutate } from "../store/mutate";
 import {
-  isRoadmapColumnEvent,
   ROADMAP_SUBCOMMANDS,
   renderFrontier,
   renderRoadmapNode,

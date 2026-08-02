@@ -169,6 +169,43 @@ describe("validate — the advisory shapes are warnings", () => {
     expect(findings[0]!.message).toContain("0aaaaaaa");
   });
 
+  test("a blocker on ANOTHER map is a warning — blocking edges are between siblings", async () => {
+    // A real ticket, so the missing-blocker check stays silent, but on a
+    // different map: F8's frontier holds a ticket until its blockers resolve,
+    // so a cross-map edge gates this map's work on a destination it does not
+    // share. Advisory like every blocking rule — reported, never refused.
+    const fixture = await setup();
+    const here = await charted(fixture);
+    const elsewhere = await createMap(fixture, {
+      node: await createNode(fixture, "another-product"),
+    });
+    const foreign = await createTicket(fixture, { map: elsewhere.id, type: "task" });
+    const blocked = await createTicket(fixture, {
+      map: here.map.id,
+      type: "task",
+      blockers: [foreign.id],
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.ticket-blocker-missing")).toEqual([]);
+    const cross = findingsFor(findings, "roadmap.ticket-blocker-cross-map");
+    expect(cross).toHaveLength(1);
+    expect(cross[0]!.severity).toBe("warning");
+    expect(cross[0]!.message).toContain(blocked.id);
+    expect(cross[0]!.message).toContain(foreign.id);
+    expect(cross[0]!.message).toContain(elsewhere.id);
+
+    // A same-map edge is the normal case and says nothing.
+    await createTicket(fixture, {
+      map: here.map.id,
+      type: "task",
+      blockers: [here.ticket.id],
+    });
+    expect(
+      findingsFor(await validateStore(fixture.layout), "roadmap.ticket-blocker-cross-map"),
+    ).toHaveLength(1);
+  });
+
   test("a ticket blocking itself is a warning — a well-formed id link, and an odd shape", async () => {
     const fixture = await setup();
     const node = await createNode(fixture, "a-product");

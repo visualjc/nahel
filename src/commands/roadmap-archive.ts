@@ -121,30 +121,27 @@ function referenceWrites(
   node: RoadmapNodeFrontmatter,
   items: readonly { frontmatter: WorkItemFrontmatter; body: string }[],
   nodes: readonly { frontmatter: RoadmapNodeFrontmatter; body: string }[],
-  prd: string,
   archived: string,
   now: string,
 ): SequenceWrite[] {
-  const writes: SequenceWrite[] = [];
-  const holders = items.filter(({ frontmatter }) => frontmatter.prd === prd);
   const rank = (item: WorkItemFrontmatter): number => {
     if (item.type === "plan") return 0;
     return item.id === node.epic ? 1 : 2;
   };
-  const ordered = [...holders].sort(
+  const ordered = [...items].sort(
     (a, b) =>
       rank(a.frontmatter) - rank(b.frontmatter) ||
       (a.frontmatter.id < b.frontmatter.id ? -1 : 1),
   );
-  for (const { frontmatter, body } of ordered) {
-    writes.push({
-      target: "item",
-      frontmatter: { ...frontmatter, prd: archived, updated: now },
-      body,
-    });
-  }
+  const writes: SequenceWrite[] = ordered.map(({ frontmatter, body }) => ({
+    target: "item",
+    frontmatter: { ...frontmatter, prd: archived, updated: now },
+    body,
+  }));
   for (const { frontmatter, body } of nodes) {
-    if (frontmatter.id === node.id || frontmatter.prd !== prd) continue;
+    // The feature node itself is written first, by the caller — it is the one
+    // reference the act is ABOUT, not one the catch-all sweep found.
+    if (frontmatter.id === node.id) continue;
     writes.push({
       target: "roadmap-node",
       frontmatter: { ...frontmatter, prd: archived, updated: now },
@@ -229,15 +226,15 @@ export async function runArchiveSubcommand(
   const now = ctx.env.now();
   const nodes = await readRoadmapNodes(ctx.layout);
   const byId = new Map(nodes.map(({ frontmatter }) => [frontmatter.id, frontmatter]));
+  // Every record holding the old path, re-read for its BODY: the snapshot and
+  // the node listing carry frontmatter, and a record write carries both.
   const itemRecords = await Promise.all(
-    items
-      .filter((item) => item.prd === prd)
-      .map(async (item) => readItem(ctx.layout, item.id)),
+    items.filter((item) => item.prd === prd).map((item) => readItem(ctx.layout, item.id)),
   );
   const nodeRecords = await Promise.all(
     nodes
       .filter(({ frontmatter }) => frontmatter.prd === prd)
-      .map(async ({ frontmatter }) => readRoadmapNode(ctx.layout, frontmatter.id)),
+      .map(({ frontmatter }) => readRoadmapNode(ctx.layout, frontmatter.id)),
   );
 
   const writes: SequenceWrite[] = [
@@ -258,7 +255,7 @@ export async function runArchiveSubcommand(
       body: record.body,
     },
     // 3-5. the plan item, the epic, and every other record sharing the path
-    ...referenceWrites(node, itemRecords, nodeRecords, prd, archived, now),
+    ...referenceWrites(node, itemRecords, nodeRecords, archived, now),
   ];
   // 6. the product design doc: permanent, updated in place, never archived
   const designDoc = productDesignDoc(byId, node);

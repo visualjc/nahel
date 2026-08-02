@@ -84,6 +84,17 @@ nothing is ever written back onto the item; never hand-edit anything under
    time; a set you have to correct afterwards is a set the first event got
    wrong, and that is what the journal will show.
 
+   `nahel log` prints the id of the event it wrote — that line is your
+   confirmation the set landed.
+
+   **Do not batch this step and the node creations into one script.** Journal
+   timestamps are second-precision and every CLI invocation writes
+   its own segment, so two acts in the same second have **no provable order**.
+   A migration run end to end in one breath renders its nodes interleaved with
+   the set that chose them, and the ordering this step exists to establish
+   becomes unreadable. Compose each node's intent as its own deliberate act;
+   step 6 checks that the journal came out readable.
+
 4. Create the product node — one per store:
 
        nahel roadmap node new product <product-node-slug> --horizon now \
@@ -118,6 +129,15 @@ nothing is ever written back onto the item; never hand-edit anything under
    trace back), and every node must name an included id — **no orphan** node,
    and **nothing invented** that the logged set never selected. If the two
    disagree, the nodes are what you fix; the set is already journaled.
+
+   Then read the migration back as a reviewer will:
+
+       nahel progress
+
+   Your `roadmap.migration-selected` line must sit **above every**
+   `roadmap.node-created` line. If it does not, the acts shared a second (see
+   step 3) and the journal cannot prove the order — say so plainly in step 7's
+   note rather than leaving a reader to discover it.
 
 7. Prove the direction, then leave the store clean:
 

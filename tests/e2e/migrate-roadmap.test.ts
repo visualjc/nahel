@@ -71,6 +71,13 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout;
 }
 
+/** The timestamp one `nahel progress` line opens with (ISO-8601, sorts as text). */
+function tsOf(line: string): string {
+  const ts = line.split("  ", 1)[0]!;
+  expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  return ts;
+}
+
 /** The payload of one `nahel progress` line — everything after the first `{`. */
 function payloadOf(line: string): Record<string, unknown> {
   const at = line.indexOf("{");
@@ -143,6 +150,14 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
           "--data", `excluded=${JSON.stringify(excluded)}`),
         "log roadmap.migration-selected",
       );
+      // The doc forbids batching this step with the node creations, and this is
+      // that rule obeyed: journal timestamps are second-precision and every
+      // invocation writes its own segment, so acts inside one second are
+      // ordered ambiguously BY DESIGN (store/journal.ts says so). A scripted
+      // migration would leave F6's first criterion unprovable rather than met —
+      // so the test crosses the second boundary a real migration crosses while
+      // its author is composing the first node's intent.
+      await Bun.sleep(1_100);
 
       // ── step 4: the product node ──────────────────────────────────────────
       const product = ok(
@@ -173,7 +188,14 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       const selectionAt = timeline.indexOf(selections[0]!);
       const nodeLines = timeline.filter((line) => line.includes(NODE_CREATED));
       expect(nodeLines).toHaveLength(4); // one product + three features
-      for (const line of nodeLines) expect(timeline.indexOf(line)).toBeGreaterThan(selectionAt);
+      for (const line of nodeLines) {
+        // Rendered order: the set is above every node in the timeline a
+        // reviewer actually reads…
+        expect(timeline.indexOf(line)).toBeGreaterThan(selectionAt);
+        // …and the unambiguous half of the total order agrees, so the reading
+        // does not depend on how two same-second segments happened to merge.
+        expect(tsOf(line) > tsOf(selections[0]!)).toBe(true);
+      }
 
       const set = payloadOf(selections[0]!);
       expect(set["included"]).toEqual(included);
@@ -208,10 +230,13 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       }
 
       // ── AC 4: each migration act names the node and the item it covers ────
-      for (const record of featureRecords) {
-        expect(typeof record["name"]).toBe("string");
-        expect(typeof record["epic"]).toBe("string");
-        expect(included).toContain(record["epic"]);
+      for (const line of nodeLines) {
+        const record = recordOf(line);
+        if (record["kind"] !== "feature") continue;
+        // One event carries both halves, so auditing a migration act needs no
+        // second lookup: the node's slug and the id of the item it covers.
+        expect(line).toContain(String(record["name"]));
+        expect(included).toContain(String(record["epic"]));
       }
 
       // ── AC 3: `nahel roadmap` shows every migrated item, and only those ───

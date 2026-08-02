@@ -174,6 +174,22 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(selectionAt).toBeLessThan(firstNodeAt);
   });
 
+  test("and says why the two acts may not be batched: same-second acts have no order", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    // Journal timestamps are second-precision and every invocation writes its
+    // own segment (store/journal.ts), so a migration scripted end to end
+    // renders its set INTERLEAVED with its nodes — the ordering criterion is a
+    // property of the pace, and a doc that omits it ships an unprovable act.
+    expect(body).toContain("second-precision");
+    expect(body).toContain("own segment");
+    expect(body).toContain("no provable order");
+    expect(body).toContain("Do not batch");
+    // And the check that catches it having happened anyway: the reviewer's own
+    // read, with the ordering stated as the thing to look for.
+    expect(body).toContain("nahel progress");
+    expect(body).toContain("above every");
+  });
+
   test("the type the doc teaches is one `nahel log` accepts, not a reserved self-recorded type", async () => {
     const { body } = await shippedWorkflow("migrate-roadmap.md");
     expect(body).toContain(MIGRATION_SELECTED_EVENT_TYPE);

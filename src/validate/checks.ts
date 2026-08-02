@@ -2167,7 +2167,12 @@ function checkArchival(state: ParsedState): Finding[] {
             message:
               `event ${event.id} moved ${edit.from} to ${edit.to}, but the document at ${edit.to} carries a ` +
               "different act's stamp — repair will not unlink a live document into an archive it did not write",
-            fix: "rename one of the two documents — the archive holds one file per delta, and an archived PRD is never overwritten — then re-run `nahel roadmap archive`",
+            // The recovery is repair, NOT the verb: by the time this fires the
+            // event is journaled and the record refs already point at the
+            // archived path, so re-running `nahel roadmap archive` only earns
+            // the already-archived refusal. Freeing the destination is the one
+            // thing missing — repair has been holding the move all along.
+            fix: "move the document already at that path aside (the archive holds one file per delta, and an archived PRD is never overwritten), then run `nahel validate --repair` — it completes the journaled move",
           });
           continue;
         }

@@ -497,3 +497,93 @@ describe("nahel roadmap <ref> — zooming a node (F3)", () => {
     expect(await journalEvents(layout)).toEqual(before);
   });
 });
+
+describe("nahel roadmap <ref> — refs that miss, and where they point (F3)", () => {
+  /** Run the command expecting a refusal, and return what it printed on stderr. */
+  async function refuse(env: Env, root: string, args: string[]): Promise<string> {
+    expect(await roadmapCommand.run(args, env, root)).toBe(1);
+    return stderr();
+  }
+
+  test("an unknown ref exits non-zero and NAMES the near-miss slugs", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    const message = await refuse(env, root, ["detached-state"]);
+    expect(message).toContain('"detached-state"');
+    expect(message).toContain("detached-state-repo");
+    // A slug sharing nothing with the ref is not offered as a guess.
+    expect(message).not.toContain("architecture-docs-wiki");
+  });
+
+  test("near misses are alphabetical and capped, so the guess list cannot sprawl", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+    for (const suffix of ["a", "b", "c", "d", "e", "f"]) {
+      await newNode(env, root, [
+        "feature",
+        `deploy-${suffix}`,
+        "--horizon",
+        "next",
+        "--intent",
+        "one of many",
+        "--parent",
+        "nahel",
+      ]);
+    }
+
+    const message = await refuse(env, root, ["deploy"]);
+    const named = ["a", "b", "c", "d", "e", "f"].filter((suffix) =>
+      message.includes(`deploy-${suffix}`),
+    );
+    expect(named).toEqual(["a", "b", "c", "d", "e"]);
+    expect(message.indexOf("deploy-a")).toBeLessThan(message.indexOf("deploy-b"));
+  });
+
+  test("a ref that resembles nothing is still told where the list is", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    const message = await refuse(env, root, ["zzzzzz"]);
+    expect(message).toContain("nahel roadmap");
+    expect(message).not.toContain("did you mean");
+  });
+
+  test("a WORK-ITEM id is not an unknown ref — it points at the item's own view", async () => {
+    const { root, env } = await setup();
+    const { epic } = await product(env, root);
+
+    const message = await refuse(env, root, [epic]);
+    expect(message).toContain(`nahel progress --item ${epic}`);
+    expect(message).toContain("work item");
+    expect(message).not.toContain("does not name");
+  });
+
+  test("two refs are refused — the zoom takes exactly one", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    expect(await refuse(env, root, ["nahel", "detached-state-repo"])).toContain("one ref");
+  });
+
+  test("a node named after a subcommand is reached through `node show`, and the verb keeps the word", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+    await newNode(env, root, ["feature", "map", "--horizon", "now", "--intent", "an awkward slug"]);
+
+    // The verb wins the word: `roadmap map` is still the map subcommand.
+    expect(await refuse(env, root, ["map"])).toContain("map");
+    logs = [];
+    expect(await roadmapCommand.run(["node", "show", "map"], env, root)).toBe(0);
+    expect(logs.join("\n")).toContain("map  feature  horizon=now");
+  });
+
+  test("a rendering with nothing under it still ends with a hint — back to the product level", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    const out = await view(env, root, ["architecture-docs-wiki"]);
+    const last = out.split("\n").filter((line) => line !== "").pop();
+    expect(last).toBe("↳ nahel roadmap  — back to the product level");
+  });
+});

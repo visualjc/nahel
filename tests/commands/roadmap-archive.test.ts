@@ -18,6 +18,7 @@ import {
   writeConfig,
   type StoreLayout,
 } from "../../src/store/layout";
+import { createStoreContext, mutate } from "../../src/store/mutate";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
@@ -373,6 +374,46 @@ describe("nahel roadmap archive — the released delta is closed (F10)", () => {
     // file conjured at some default path.
     expect(await text(fixture.root, DESIGN_DOC)).toBeNull();
     expect((await validate(fixture.root)).code).toBe(0);
+  });
+
+  test("an agent's archival is refused while a human holds a claim on one of the records it must move", async () => {
+    const fixture = await released();
+    // A human takes one of the catch-all records — the claim covers it and
+    // everything under it, and the choke point refuses agent mutations there.
+    // Recorded through the store as the human (`nahel claim` also captures a
+    // git baseline, which a temp store has no repo for).
+    const human = await createStoreContext(fixture.root, fixture.env, {
+      actorOverride: "human:jim",
+    });
+    const claimed = await readItem(fixture.layout, fixture.others[0]);
+    await mutate(human, {
+      target: "item",
+      eventType: CORE_EVENT_TYPES.itemClaimed,
+      frontmatter: { ...claimed.frontmatter, claimed_by: "jim" },
+      body: claimed.body,
+    });
+
+    const said = await fails(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    expect(said).toContain(fixture.others[0]);
+    expect(said).toContain("claim");
+    // A refusal writes NOTHING: not the event, not the move, not one reference.
+    expect(await text(fixture.root, PRD_PATH)).not.toBeNull();
+    expect(await text(fixture.root, ARCHIVED_PATH)).toBeNull();
+    expect(await prdRefs(fixture)).toEqual({
+      [fixture.node]: PRD_PATH,
+      [fixture.plan]: PRD_PATH,
+      [fixture.epic]: PRD_PATH,
+      [fixture.others[0]]: PRD_PATH,
+      [fixture.others[1]]: PRD_PATH,
+    });
+    expect(
+      (await events(fixture.layout)).filter(
+        (event) => event.type === CORE_EVENT_TYPES.prdArchived,
+      ),
+    ).toHaveLength(0);
+    // And the human, whose claim it is, closes the delta themselves.
+    expect(await roadmapCommand.run(["archive", fixture.nodeName], fixture.env, fixture.root, "human:jim")).toBe(0);
+    expect(await text(fixture.root, ARCHIVED_PATH)).not.toBeNull();
   });
 
   test("a node with no PRD, and a ref that names nothing, are refused by name", async () => {

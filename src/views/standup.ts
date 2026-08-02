@@ -7,7 +7,7 @@ import {
   RELEASE_VERSION_PAYLOAD_KEY,
 } from "../schema/events";
 import type { JournalEvent, WorkItemFrontmatter } from "../schema/records";
-import { epochSeconds, timestampFromEpochSeconds } from "../schema/time";
+import { epochSeconds, timestampFromEpochSeconds, TIMESTAMP_PATTERN } from "../schema/time";
 import { compareEvents } from "../store/journal";
 import type { RoadmapNodeRecord } from "../store/layout";
 import { payloadText, roadmapNodeSummary } from "./roadmap";
@@ -34,26 +34,72 @@ const RELATIVE_SINCE = /^([0-9]+)([dh])$/;
 const RELATIVE_UNIT_SECONDS: Record<string, number> = { d: 86400, h: 3600 };
 
 /**
+ * A resolved window, or the reason it is not one. A discriminated result rather
+ * than `undefined`, because the ways a `--since` can fail are different
+ * mistakes with different repairs — a misspelling, a date the calendar does not
+ * have, a duration reaching past every year the format can spell — and a single
+ * "invalid" would never tell the reader which of the three it was.
+ */
+export type SinceResolution = { since: string } | { error: string };
+
+/** What the flag accepts, spelled the same way in every refusal below. */
+const ACCEPTED_FORMS =
+  "expected a window (7d, 24h) or an ISO-8601 UTC timestamp (2026-07-26T09:15:00Z)";
+
+/**
  * Resolve `--since` to the window's lower edge: a relative form (`7d`, `24h`)
  * subtracted from the injected clock reading, or an absolute timestamp in the
- * journal's own format passed through unchanged. Undefined when the spec is
- * neither — the caller says what the accepted forms are.
+ * journal's own format passed through unchanged.
  *
  * `now` is `env.now()`'s value, handed in as DATA. The relative and absolute
  * forms therefore land on the same instant when they name the same instant,
  * which is what makes `--since 7d` and its equivalent timestamp render
  * byte-identically under a fixed `Env` (F4's acceptance criterion).
+ *
+ * Nothing here rounds, clamps or guesses. A spec that names no instant is
+ * REFUSED, with the reason: a standup header carrying a year the format cannot
+ * spell would be a rendered lie, and a window quietly clamped to the epoch
+ * would report the wrong days as though they were the days that were asked for.
  */
-export function resolveSince(spec: string, now: string): string | undefined {
+export function resolveSince(spec: string, now: string): SinceResolution {
   const relative = RELATIVE_SINCE.exec(spec);
-  if (relative !== null) {
-    const nowSeconds = epochSeconds(now);
-    if (nowSeconds === undefined) return undefined;
-    return timestampFromEpochSeconds(
-      nowSeconds - Number(relative[1]) * RELATIVE_UNIT_SECONDS[relative[2]!]!,
-    );
+  if (relative !== null) return resolveRelative(spec, relative, now);
+  if (!TIMESTAMP_PATTERN.test(spec)) return { error: ACCEPTED_FORMS };
+  if (epochSeconds(spec) === undefined) {
+    return {
+      error:
+        `${spec} has the shape of a timestamp but names no real instant — ` +
+        "check the month, day, hour, minute and second",
+    };
   }
-  return epochSeconds(spec) === undefined ? undefined : spec;
+  return { since: spec };
+}
+
+/** The relative branch: a count of whole units subtracted from the reading. */
+function resolveRelative(
+  spec: string,
+  relative: RegExpExecArray,
+  now: string,
+): SinceResolution {
+  const count = Number(relative[1]);
+  const seconds = count * RELATIVE_UNIT_SECONDS[relative[2]!]!;
+  if (!Number.isSafeInteger(count) || !Number.isSafeInteger(seconds)) {
+    return { error: `${spec} is too large to be a window — its length is not an exact number` };
+  }
+  const nowSeconds = epochSeconds(now);
+  if (nowSeconds === undefined) {
+    // Unreachable through systemEnv, which always formats a real instant;
+    // reachable through a fixed one, and a window dated off a non-instant is
+    // not a window.
+    return { error: `the clock reading ${now} names no real instant` };
+  }
+  const cutoff = timestampFromEpochSeconds(nowSeconds - seconds);
+  if (cutoff === undefined) {
+    return {
+      error: `${spec} reaches outside the representable calendar (years 0000–9999) from ${now}`,
+    };
+  }
+  return { since: cutoff };
 }
 
 /** Everything one standup renders from — store reads, no derivation done yet. */

@@ -167,8 +167,10 @@ describe("resolveSince — specs that name no instant", () => {
       // The bug this replaces: a malformed year rendered as if it were a date.
       expect(reason).not.toMatch(/^standup/);
     }
-    // The boundary holds on the other side: a large but reachable window works.
-    expect(since("100000d")).toBe("1752-08-16T09:15:00Z");
+    // The boundary holds on the other side: a large but reachable window works,
+    // and lands on the same day the platform's own calendar puts it (checked
+    // independently, 274 years back through the Gregorian century rules).
+    expect(since("100000d")).toBe("1752-10-17T09:15:00Z");
   });
 
   test("a window whose digits exceed a safe integer is refused, not silently rounded", () => {

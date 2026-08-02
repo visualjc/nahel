@@ -1855,9 +1855,35 @@ function checkClaimedActiveRuns(state: ParsedState): Finding[] {
   return findings;
 }
 
-/** Journal well-formedness: monotonic seq per segment, globally unique ids. */
+/**
+ * Journal well-formedness: real timestamps, monotonic seq per segment, globally
+ * unique ids.
+ *
+ * The TIMESTAMP leg is the seam between the record schema and timestamp
+ * arithmetic (`schema/time.ts`). `ts` is validated as a SHAPE, and that gate
+ * has to stay loose — tightening it to the calendar would make a store carrying
+ * one impossible date unreadable, including by the `validate` run that would
+ * tell you about it — so `2026-02-30T00:00:00Z` parses cleanly and reaches
+ * every reader that orders or ages the journal. Arithmetic REFUSES it, which
+ * would otherwise retire the compaction-age threshold for a reason nobody could
+ * see. So it is reported here, once, as the corruption it is.
+ */
 function checkJournal(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
+  for (const segment of state.input.segments) {
+    for (const event of segment.events) {
+      if (epochSeconds(event.ts) !== undefined) continue;
+      findings.push({
+        severity: "error",
+        check: "journal.timestamp",
+        path: segment.path,
+        message:
+          `event ${event.id} is dated ${event.ts}, which is not a real instant — ` +
+          "every time-ordered read of the journal (ordering, windows, ages) rests on it",
+        fix: "the segment was edited or written by a non-nahel tool — restore it from git (segments are append-only)",
+      });
+    }
+  }
   for (const segment of state.input.segments) {
     let previous: JournalEvent | undefined;
     for (const event of segment.events) {
@@ -2125,6 +2151,10 @@ function checkMaintenance(state: ParsedState): Finding[] {
     });
   }
 
+  // Either reading may be unreadable rather than absent — an impossible date in
+  // an archived segment, which `journal.timestamp` above reports by name. The
+  // age leg then measures nothing rather than measuring a fiction; the reader
+  // is already being told exactly which event to repair.
   const nowSeconds = state.input.now === undefined ? undefined : epochSeconds(state.input.now);
   const oldestSeconds = oldest === undefined ? undefined : epochSeconds(oldest);
   if (nowSeconds !== undefined && oldestSeconds !== undefined) {

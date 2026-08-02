@@ -16,6 +16,7 @@ import {
   WORK_ITEM_TYPES,
 } from "./enums";
 import { ID_ALPHABET, ID_LENGTH, ID_PATTERN } from "./id";
+import { TIMESTAMP_PATTERN } from "./time";
 
 /**
  * Zod schemas + inferred types for every schema-v1 record (PRD F1).
@@ -31,10 +32,19 @@ const idField = z
     `must be an ${ID_LENGTH}-char lowercase base32 id (alphabet: ${ID_ALPHABET})`,
   );
 
+/**
+ * The stored timestamp field. A SHAPE check only, and deliberately so: it is a
+ * parse gate over state that already exists on disk, and tightening it to the
+ * calendar would turn a store carrying one impossible date into a store that
+ * cannot be read AT ALL — including by the `validate` run that would tell you
+ * about it. `epochSeconds` refuses impossible instants where they are USED, and
+ * `validate`'s `journal.timestamp` check reports them; the seam is stated in
+ * both places rather than hidden in either.
+ */
 const timestampField = z
   .string()
   .regex(
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
+    TIMESTAMP_PATTERN,
     "must be an ISO-8601 UTC timestamp with second precision: YYYY-MM-DDTHH:MM:SSZ",
   );
 

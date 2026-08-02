@@ -50,13 +50,14 @@ function parseFlags(argv: string[]): { since: string } {
 async function runStandup(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const flags = parseFlags(argv);
-    const since = resolveSince(flags.since, ctx.env.now());
-    if (since === undefined) {
-      throw new UsageError(
-        `invalid --since ${JSON.stringify(flags.since)} — expected a window (7d, 24h) ` +
-          "or a timestamp like 2026-07-26T09:15:00Z",
-      );
+    // The window is resolved BEFORE the store is opened: a spec that names no
+    // instant is refused with the reason it names none, and nothing is read or
+    // printed on the way — never a header carrying an impossible year.
+    const resolved = resolveSince(flags.since, ctx.env.now());
+    if ("error" in resolved) {
+      throw new UsageError(`invalid --since ${JSON.stringify(flags.since)} — ${resolved.error}`);
     }
+    const since = resolved.since;
     const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of rendering a misleadingly quiet window.

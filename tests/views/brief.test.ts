@@ -93,6 +93,9 @@ function makeInputs(overrides: Partial<BriefInputs> = {}): BriefInputs {
     contextPath: "CONTEXT.md",
     adrPath: "docs/adr",
     merge: { configured: "human", defaulted: true, effective: "human" },
+    // The actor the brief is being rendered FOR (Phase 4 F5): the
+    // awaiting-your-eyes line is measured from this actor's own last act.
+    reader: { kind: "human", id: "jim" },
     warnings: [],
     ...overrides,
   };
@@ -669,6 +672,41 @@ describe("renderBrief — roadmap changes since your last touch (Phase 4 F5)", (
     expect(brief).toContain("1 agent act on 1 node —");
   });
 
+  test("a human whose only prior activity is NOT roadmap work still gets the line", () => {
+    // The case the surface exists for: a human comes back to find nodes agents
+    // built AFK. Requiring a prior ROADMAP act of theirs would hide it.
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "human", architecture: "human" },
+        reader: { kind: "human", id: "jim" },
+        events: [
+          {
+            id: "priorwrk",
+            ts: "2026-08-01T09:00:00Z",
+            seq: 0,
+            type: "item.updated",
+            actor: { kind: "human", id: "jim" },
+            payload: { target: "item" },
+          },
+          roadmapEvent("2026-08-01T11:00:00Z", "agent", { id: "n1", name: "alpha" }),
+        ],
+      }),
+    );
+    expect(brief).toContain(AWAITING);
+    expect(brief).toContain("since your last touch (2026-08-01T09:00:00Z)");
+  });
+
+  test("an AGENT reader gets no line — the brief renders it for a human's eyes", () => {
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "human", architecture: "human" },
+        reader: { kind: "agent", id: "claude-code" },
+        events: [HUMAN_TOUCH, roadmapEvent("2026-08-01T11:00:00Z", "agent", { id: "n1", name: "alpha" })],
+      }),
+    );
+    expect(brief).not.toContain(AWAITING);
+  });
+
   test("under governance.product: agent there is no line at all — no header, no count", () => {
     const brief = renderBrief(
       makeInputs({
@@ -735,8 +773,10 @@ describe("renderBrief — roadmap changes since your last touch (Phase 4 F5)", (
         errSpy.mockRestore();
       }
     };
+    // Rendered FOR the human: composeBrief resolves the reader the way every
+    // mutation resolves its actor (config entry, NAHEL_ACTOR override).
     const brief = async (): Promise<string> =>
-      composeBrief(store.layout, await readConfig(store.layout));
+      composeBrief(store.layout, await readConfig(store.layout), NO_WARNINGS, "human:jim");
 
     await run(configCommand, ["set", "governance", "--data", '{"product":"human","architecture":"human"}'], "human:jim");
     await run(
@@ -772,6 +812,43 @@ describe("renderBrief — roadmap changes since your last touch (Phase 4 F5)", (
     const swarm = await brief();
     expect(swarm).not.toContain(AWAITING);
     expect(swarm).toContain("product: agent");
+  });
+
+  test("composeBrief: the human who walked away sees the roadmap agents built while gone", async () => {
+    const { roadmapCommand } = await import("../../src/commands/roadmap");
+    const store = await populatedWithProduct();
+    // The fixture's only human act is jim claiming task-alpha — ordinary work,
+    // nothing to do with the roadmap. He has never touched a node.
+    const config = await readConfig(store.layout);
+
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      for (const name of ["alpha", "beta"]) {
+        expect(
+          await roadmapCommand.run(
+            ["node", "new", "feature", name, "--horizon", "now", "--intent", "a delta"],
+            store.env,
+            store.root,
+          ),
+        ).toBe(0); // config actor: agent:claude-code
+      }
+    } finally {
+      logSpy.mockRestore();
+    }
+
+    const asJim = await composeBrief(store.layout, config, NO_WARNINGS, "human:jim");
+    expect(asJim).toContain(AWAITING);
+    expect(asJim).toContain("2 agent acts on 2 nodes");
+    expect(asJim).toContain("alpha");
+    expect(asJim).toContain("beta");
+
+    // The same store read by the agent that did the work: no line.
+    expect(await composeBrief(store.layout, config)).not.toContain(AWAITING);
+
+    // And a human who has never acted here at all: no window, no line.
+    expect(
+      await composeBrief(store.layout, config, NO_WARNINGS, "human:newcomer"),
+    ).not.toContain(AWAITING);
   });
 });
 

@@ -11,14 +11,17 @@ import type { Actor, Governance, JournalEvent } from "../../src/schema/records";
  * not looked at yet. Visibility, not enforcement — nothing here refuses
  * anything; it decides what `nahel brief` says.
  *
- * Three rules the rest of the codebase must never answer twice:
- *   1. Under `governance.product: agent` there is NO surface at all — the
- *      agent-as-PO owns the roadmap outright (ADR-0008 as amended 2026-08-01).
- *   2. The window opens after the last HUMAN-attributed roadmap act (a node
- *      created or updated, or `nahel roadmap ack`). Provenance is read from
- *      the journal, exactly as merge authority reads it — an ack run under an
- *      agent actor clears nothing.
- *   3. Same-second acts fail SAFE, and safe here means visible: a human act
+ * Four rules the rest of the codebase must never answer twice:
+ *   1. Under `governance.product: agent` — and for an AGENT reader — there is
+ *      NO surface at all: the agent-as-PO owns the roadmap outright (ADR-0008
+ *      as amended 2026-08-01), and the line is for a human's eyes.
+ *   2. The window opens at the READER's last recorded act of any type — they
+ *      were here then — and advances to any later human-attributed roadmap act
+ *      by anyone (a node created or updated, or `nahel roadmap ack`). A reader
+ *      with no recorded activity at all has no window, and so no line.
+ *   3. Provenance is read from the journal, exactly as merge authority reads
+ *      it: an ack run under an agent actor clears nothing.
+ *   4. Same-second acts fail SAFE, and safe here means visible: a human act
  *      and an agent act in the same second are ordered by a lottery (each CLI
  *      invocation mints its own session segment), so the agent act stays
  *      raised rather than being hidden by an order nobody chose.
@@ -70,7 +73,7 @@ describe("awaitingRoadmapReview — the surface exists only where a human owns p
       nodeEvent("2026-08-01T11:00:01Z", AGENT, { id: "n2", name: "beta" }),
     ];
     expect(
-      awaitingRoadmapReview({ product: "agent", architecture: "human" }, events),
+      awaitingRoadmapReview({ product: "agent", architecture: "human" }, HUMAN, events),
     ).toBeUndefined();
   });
 
@@ -79,7 +82,7 @@ describe("awaitingRoadmapReview — the surface exists only where a human owns p
       nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
     ];
-    const status = awaitingRoadmapReview({ product, architecture: "human" }, events)!;
+    const status = awaitingRoadmapReview({ product, architecture: "human" }, HUMAN, events)!;
     expect(status).toBeDefined();
     expect(status.changes).toBe(1);
     expect(status.nodes).toEqual([{ id: "n1", name: "alpha" }]);
@@ -92,19 +95,121 @@ describe("awaitingRoadmapReview — the surface exists only where a human owns p
       nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
     ];
-    expect(awaitingRoadmapReview(undefined, events)!.changes).toBe(1);
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)!.changes).toBe(1);
+  });
+
+  test("an AGENT reader gets no surface at all — the line is for a human's eyes", () => {
+    const events = [
+      nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+    ];
+    expect(awaitingRoadmapReview(undefined, AGENT, events)).toBeUndefined();
   });
 });
 
-describe("awaitingRoadmapReview — the window opens after the last HUMAN roadmap act", () => {
-  test("a first-touch human sees nothing: no window exists to measure `since` against", () => {
-    // Agents built the whole roadmap and no human has ever touched it — there
-    // is no "your last touch", so the line is ABSENT, not an empty header.
+/**
+ * The baseline is the READER's (F5: "for the reading actor … since that
+ * actor's last recorded activity"). A human who has been working in this repo —
+ * on items, on runs, on anything — was HERE at their last act, so agent roadmap
+ * work after it is work they have not seen, whether or not they have ever
+ * touched a roadmap node. Requiring a prior ROADMAP act would hide exactly the
+ * case the surface exists for: a human returning to twenty nodes agents built
+ * AFK.
+ */
+describe("awaitingRoadmapReview — the reader's own last act opens the window", () => {
+  /** One act by the reader that has nothing to do with the roadmap. */
+  function otherEvent(ts: string, actor: Actor, type = "item.updated"): JournalEvent {
+    counter += 1;
+    return {
+      id: `othr${String(counter).padStart(4, "0")}`,
+      ts,
+      seq: 0,
+      type,
+      actor,
+      payload: { target: "item" },
+    };
+  }
+
+  test("a human with only NON-roadmap activity sees what agents built after it", () => {
+    const events = [
+      otherEvent("2026-08-01T09:00:00Z", HUMAN),
+      nodeEvent("2026-08-01T10:00:00Z", AGENT, { id: "n1", name: "alpha" }, CORE_EVENT_TYPES.roadmapNodeCreated),
+      nodeEvent("2026-08-01T10:00:01Z", AGENT, { id: "n2", name: "beta" }, CORE_EVENT_TYPES.roadmapNodeCreated),
+    ];
+    const status = awaitingRoadmapReview(undefined, HUMAN, events)!;
+    expect(status.changes).toBe(2);
+    expect(status.nodes.map((node) => node.name)).toEqual(["alpha", "beta"]);
+    expect(status.since).toBe("2026-08-01T09:00:00Z");
+  });
+
+  test("a reader with NO recorded activity at all sees nothing — the true first touch", () => {
+    // Another human's roadmap act is not this reader's baseline: they have
+    // never been here, so there is no "since your last touch" to state.
+    const newcomer: Actor = { kind: "human", id: "newcomer" };
+    const events = [
+      nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+    ];
+    expect(awaitingRoadmapReview(undefined, newcomer, events)).toBeUndefined();
+  });
+
+  test("the reader is matched by identity, not by kind — another human's acts are not theirs", () => {
+    const ana: Actor = { kind: "human", id: "ana" };
+    const events = [
+      otherEvent("2026-08-01T09:00:00Z", ana),
+      nodeEvent("2026-08-01T10:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+    ];
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
+    expect(awaitingRoadmapReview(undefined, ana, events)!.changes).toBe(1);
+  });
+
+  test("ANY human's roadmap act advances the baseline — clearing stays everyone's act", () => {
+    const ana: Actor = { kind: "human", id: "ana" };
+    const events = [
+      otherEvent("2026-08-01T09:00:00Z", HUMAN),
+      nodeEvent("2026-08-01T10:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+      // Ana looks at the roadmap and re-horizons the node jim never saw move.
+      nodeEvent("2026-08-01T11:00:00Z", ana, { id: "n1", name: "alpha" }),
+    ];
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
+
+    const status = awaitingRoadmapReview(undefined, HUMAN, [
+      ...events,
+      nodeEvent("2026-08-01T12:00:00Z", AGENT, { id: "n2", name: "beta" }),
+    ])!;
+    expect(status.changes).toBe(1);
+    expect(status.since).toBe("2026-08-01T11:00:00Z");
+  });
+
+  test("the baseline never moves BACKWARD: an older act of the reader's cannot undo a clear", () => {
+    const events = [
+      nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+      ackEvent("2026-08-01T12:00:00Z", HUMAN),
+      // Out of order on purpose: the LATEST of the reader's acts is the ack.
+      otherEvent("2026-08-01T09:00:00Z", HUMAN),
+    ];
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
+  });
+
+  test("the same-second inversion holds against the reader's own baseline too", () => {
+    const events = [
+      otherEvent("2026-08-01T09:00:00Z", HUMAN),
+      nodeEvent("2026-08-01T09:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+    ];
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)!.changes).toBe(1);
+  });
+});
+
+describe("awaitingRoadmapReview — any human's roadmap act clears it", () => {
+  test("a reader who has never acted at all sees nothing — absent, not an empty header", () => {
+    // Agents built the whole roadmap and this human has never been here, so
+    // there is no "your last touch" to measure `since` against.
     const events = [
       nodeEvent("2026-08-01T10:00:00Z", AGENT, { id: "n1", name: "alpha" }, CORE_EVENT_TYPES.roadmapNodeCreated),
       nodeEvent("2026-08-01T10:00:01Z", AGENT, { id: "n2", name: "beta" }, CORE_EVENT_TYPES.roadmapNodeCreated),
     ];
-    expect(awaitingRoadmapReview(undefined, events)).toBeUndefined();
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
   });
 
   test("with nothing agent-authored since the human's act, there is no line", () => {
@@ -112,7 +217,7 @@ describe("awaitingRoadmapReview — the window opens after the last HUMAN roadma
       nodeEvent("2026-08-01T10:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
     ];
-    expect(awaitingRoadmapReview(undefined, events)).toBeUndefined();
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
   });
 
   test("any human-attributed roadmap mutation clears it, and the next agent act re-raises", () => {
@@ -121,13 +226,13 @@ describe("awaitingRoadmapReview — the window opens after the last HUMAN roadma
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T12:00:00Z", HUMAN, { id: "n2", name: "beta" }),
     ];
-    expect(awaitingRoadmapReview(undefined, cleared)).toBeUndefined();
+    expect(awaitingRoadmapReview(undefined, HUMAN, cleared)).toBeUndefined();
 
     const reraised = [
       ...cleared,
       nodeEvent("2026-08-01T13:00:00Z", AGENT, { id: "n3", name: "gamma" }),
     ];
-    const status = awaitingRoadmapReview(undefined, reraised)!;
+    const status = awaitingRoadmapReview(undefined, HUMAN, reraised)!;
     expect(status.changes).toBe(1);
     expect(status.nodes).toEqual([{ id: "n3", name: "gamma" }]);
     // The window opens after the CLEAR, not after the original first touch.
@@ -140,9 +245,9 @@ describe("awaitingRoadmapReview — the window opens after the last HUMAN roadma
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       ackEvent("2026-08-01T12:00:00Z", HUMAN),
     ];
-    expect(awaitingRoadmapReview(undefined, cleared)).toBeUndefined();
+    expect(awaitingRoadmapReview(undefined, HUMAN, cleared)).toBeUndefined();
 
-    const status = awaitingRoadmapReview(undefined, [
+    const status = awaitingRoadmapReview(undefined, HUMAN, [
       ...cleared,
       nodeEvent("2026-08-01T13:00:00Z", AGENT, { id: "n1", name: "alpha" }),
     ])!;
@@ -156,7 +261,7 @@ describe("awaitingRoadmapReview — the window opens after the last HUMAN roadma
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       ackEvent("2026-08-01T12:00:00Z", AGENT),
     ];
-    const status = awaitingRoadmapReview(undefined, events)!;
+    const status = awaitingRoadmapReview(undefined, HUMAN, events)!;
     expect(status.changes).toBe(1);
     expect(status.nodes).toEqual([{ id: "n1", name: "alpha" }]);
     expect(status.since).toBe("2026-08-01T10:00:00Z");
@@ -170,7 +275,7 @@ describe("awaitingRoadmapReview — the window opens after the last HUMAN roadma
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n2", name: "beta" }),
       ackEvent("2026-08-01T11:00:00Z", HUMAN),
     ];
-    const status = awaitingRoadmapReview(undefined, events)!;
+    const status = awaitingRoadmapReview(undefined, HUMAN, events)!;
     expect(status.changes).toBe(1);
     expect(status.nodes).toEqual([{ id: "n2", name: "beta" }]);
     expect(status.since).toBe("2026-08-01T11:00:00Z");
@@ -179,7 +284,7 @@ describe("awaitingRoadmapReview — the window opens after the last HUMAN roadma
 
 describe("awaitingRoadmapReview — what the count and the node list mean", () => {
   test("counts ACTS but lists NODES: two acts on one node are one node, twice touched", () => {
-    const status = awaitingRoadmapReview(undefined, [
+    const status = awaitingRoadmapReview(undefined, HUMAN, [
       nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:01Z", AGENT, { id: "n1", name: "alpha" }),
@@ -189,7 +294,7 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
   });
 
   test("a renamed node is listed under the name its LATEST act carries", () => {
-    const status = awaitingRoadmapReview(undefined, [
+    const status = awaitingRoadmapReview(undefined, HUMAN, [
       nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T11:00:01Z", AGENT, { id: "n1", name: "alpha-renamed" }),
@@ -210,7 +315,7 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
         }),
       );
     }
-    const status = awaitingRoadmapReview(undefined, events)!;
+    const status = awaitingRoadmapReview(undefined, HUMAN, events)!;
     expect(status.changes).toBe(total);
     expect(status.nodes).toHaveLength(AWAITING_ROADMAP_NODE_CAP);
     expect(status.nodes[0]).toEqual({ id: "n1", name: "node-0" });
@@ -227,7 +332,7 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n2", name: "beta" }, "note"),
       nodeEvent("2026-08-01T11:00:01Z", AGENT, { id: "n3", name: "gamma" }, "item.updated"),
     ];
-    expect(awaitingRoadmapReview(undefined, events)).toBeUndefined();
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
   });
 
   test("a human `note` carrying a node payload clears nothing — types, not payload shapes", () => {
@@ -236,7 +341,7 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
       nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
       nodeEvent("2026-08-01T12:00:00Z", HUMAN, { id: "n1", name: "alpha" }, "note"),
     ];
-    expect(awaitingRoadmapReview(undefined, events)!.changes).toBe(1);
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)!.changes).toBe(1);
   });
 
   test("an act with an unreadable payload is still surfaced, keyed by its own act id", () => {
@@ -250,7 +355,7 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
       actor: AGENT,
       payload: { target: "roadmap-node" },
     };
-    const status = awaitingRoadmapReview(undefined, [
+    const status = awaitingRoadmapReview(undefined, HUMAN, [
       nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
       malformed,
     ])!;

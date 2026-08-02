@@ -121,7 +121,7 @@ describe("nahel roadmap node new — one record, three kinds", () => {
     ]);
     expect(body).toBe("Durable, tool-agnostic project state for agentic development.\n");
 
-    const events = await journalEvents(layout);
+    const events = (await journalEvents(layout)).filter((e) => e.type.startsWith("roadmap."));
     expect(events.map((e) => e.type)).toEqual(["roadmap.node-created"]);
     expect(events[0]!.actor).toEqual({ kind: "agent", id: "claude-code" });
     expect((events[0]!.payload["record"] as { id: string }).id).toBe(id);

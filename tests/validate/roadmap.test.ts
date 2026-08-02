@@ -6,7 +6,13 @@ import { generateId } from "../../src/schema/id";
 import type { RoadmapNodeFrontmatter } from "../../src/schema/records";
 import { mutate } from "../../src/store/mutate";
 import { validateStore } from "../../src/validate";
-import { findingsFor, setupFixture, signConstitution, type ValidateFixture } from "./helpers";
+import {
+  createItem,
+  findingsFor,
+  setupFixture,
+  signConstitution,
+  type ValidateFixture,
+} from "./helpers";
 
 /**
  * Roadmap node integrity (Phase 4 F1). Every fixture is built through the real
@@ -384,5 +390,102 @@ describe("validate — node records are schema-checked and journal-compared like
     const findings = await validateStore(fixture.layout);
     expect(findingsFor(findings, "journal.payload")).toEqual([]);
     expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+  });
+});
+
+/**
+ * The two derivation anomalies F2 turns into warnings (Phase 4 F2). Both are
+ * advisory: the rollup still derives a status, nothing was refused at write
+ * time, and neither fails `nahel validate`.
+ */
+describe("validate — the F2 derivation warnings", () => {
+  test("a node naming an epic no item record carries is a warning naming both ends", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const node = await createNode(fixture, {
+      name: "dangling-epic",
+      parent: product.id,
+      epic: "aaaaaaaa",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    const epicMissing = findingsFor(findings, "roadmap.epic-missing");
+    expect(epicMissing).toHaveLength(1);
+    expect(epicMissing[0]!.severity).toBe("warning");
+    expect(epicMissing[0]!.path).toContain(`${node.id}.md`);
+    expect(epicMissing[0]!.message).toContain(node.id);
+    expect(epicMissing[0]!.message).toContain("dangling-epic");
+    expect(epicMissing[0]!.message).toContain("aaaaaaaa");
+    // Advisory only — a dangling epic never fails validate.
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("an epic whose every child was dropped is a warning naming the node and the epic", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "demo-epic", type: "plan", lane: "full" });
+    await createItem(fixture, { name: "abandoned", status: "dropped", parent: epic.id });
+    const node = await createNode(fixture, {
+      name: "all-dropped-feature",
+      parent: product.id,
+      epic: epic.id,
+    });
+
+    const findings = await validateStore(fixture.layout);
+    const dropped = findingsFor(findings, "roadmap.epic-all-dropped");
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]!.severity).toBe("warning");
+    expect(dropped[0]!.path).toContain(`${node.id}.md`);
+    expect(dropped[0]!.message).toContain("all-dropped-feature");
+    expect(dropped[0]!.message).toContain(epic.id);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a healthy epic — one live child — warns about neither", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "demo-epic", type: "plan", lane: "full" });
+    await createItem(fixture, { name: "live-work", status: "in-progress", parent: epic.id });
+    await createNode(fixture, { name: "healthy-feature", parent: product.id, epic: epic.id });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.epic-missing")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.epic-all-dropped")).toEqual([]);
+  });
+
+  test("an EMPTY epic warns about neither — no children is not the same as all dropped", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "demo-epic", type: "plan", lane: "full" });
+    await createNode(fixture, { name: "empty-feature", parent: product.id, epic: epic.id });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.epic-missing")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.epic-all-dropped")).toEqual([]);
+  });
+
+  test("a node with no epic at all warns about neither", async () => {
+    const fixture = await setup();
+    await healthyTree(fixture);
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.epic-missing")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.epic-all-dropped")).toEqual([]);
+  });
+
+  test("an epic whose record is on disk but UNPARSEABLE is a schema error, not epic-missing", async () => {
+    const fixture = await setup();
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "demo-epic", type: "plan", lane: "full" });
+    await createNode(fixture, { name: "a-feature", parent: product.id, epic: epic.id });
+    await writeFile(
+      join(fixture.layout.itemsDir, `${epic.id}.md`),
+      `---\nid: ${epic.id}\nname: demo-epic\ntype: nonsense\n---\n`,
+    );
+
+    const findings = await validateStore(fixture.layout);
+    // The unreadable epic is reported ONCE, as what it is: a corrupt record.
+    expect(findingsFor(findings, "schema.item").length).toBeGreaterThan(0);
+    expect(findingsFor(findings, "roadmap.epic-missing")).toEqual([]);
   });
 });

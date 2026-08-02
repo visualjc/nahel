@@ -455,6 +455,18 @@ describe("the vocabulary the two types are recorded under (F9)", () => {
     }
   });
 
+  /**
+   * The association rule is RESOLUTION, not string equality (Phase 4 epic
+   * review, superseding the earlier coverage-by-ref reading). The glossary is
+   * where a workflow author learns what "covers" means, so a stale spelling
+   * here teaches people to expect a stage that no longer moves.
+   */
+  test("the glossary states the association rule as resolution — a dangling epic covers nothing", async () => {
+    const defined = await entry("Lifecycle event");
+    expect(defined).toContain("resolves to");
+    expect(defined).toContain("no record carries");
+  });
+
   test("the glossary states how they are recorded: through `nahel log`, never self-recorded", async () => {
     const defined = await entry("Lifecycle event");
     expect(defined).toContain("nahel log");

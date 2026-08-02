@@ -4,11 +4,13 @@ import type { Env } from "../schema/env";
 import { MUTATION_EVENT_TYPES } from "../schema/events";
 import {
   observationFrontmatterSchema,
+  roadmapNodeFrontmatterSchema,
   runSchema,
   workItemFrontmatterSchema,
   type Actor,
   type JournalEvent,
   type ObservationFrontmatter,
+  type RoadmapNodeFrontmatter,
   type Run,
   type WorkItemFrontmatter,
 } from "../schema/records";
@@ -28,9 +30,11 @@ import {
   readConfig,
   readItem,
   readObservation,
+  readRoadmapNode,
   readRun,
   writeItem,
   writeObservation,
+  writeRoadmapNode,
   writeRun,
   type StoreLayout,
 } from "./layout";
@@ -142,6 +146,20 @@ export type Mutation =
       eventType: string;
       frontmatter: ObservationFrontmatter;
       body: string;
+    }
+  /**
+   * Roadmap node creation and update (`nahel roadmap node`, Phase 4 F1):
+   * journaled write-ahead like every mutation. The event carries NO item ref
+   * even when the node names an epic — the node→item relationship is stored
+   * one way, on the node, so nothing about it reaches the work item (F1's
+   * canonical direction). Claims cover work items, never the intent above
+   * them, so a claimed epic does not freeze its node.
+   */
+  | {
+      target: "roadmap-node";
+      eventType: string;
+      frontmatter: RoadmapNodeFrontmatter;
+      body: string;
     };
 
 export interface MutationResult {
@@ -225,10 +243,11 @@ function mutationEventFields(mutation: Mutation): {
       payload: { target: "run", record: mutation.run },
     };
   }
-  // Observations carry no item/run refs — sources in the record are the link.
+  // Observations and roadmap nodes carry no item/run refs — an observation's
+  // link is its `sources`, a node's is its own `epic` field.
   return {
     payload: {
-      target: "observation",
+      target: mutation.target,
       record: mutation.frontmatter,
       body: mutation.body,
     },
@@ -246,12 +265,14 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
       ? workItemFrontmatterSchema.parse(mutation.frontmatter)
       : mutation.target === "run"
         ? runSchema.parse(mutation.run)
-        : observationFrontmatterSchema.parse(mutation.frontmatter);
+        : mutation.target === "roadmap-node"
+          ? roadmapNodeFrontmatterSchema.parse(mutation.frontmatter)
+          : observationFrontmatterSchema.parse(mutation.frontmatter);
 
   // Claim enforcement: agents may not mutate a claimed item or anything in a
-  // claimed subtree. Humans pass — the claim is theirs. Observations touch no
-  // item, so no claim can cover them.
-  if (ctx.actor.kind === "agent" && mutation.target !== "observation") {
+  // claimed subtree. Humans pass — the claim is theirs. Observations and
+  // roadmap nodes touch no item, so no claim can cover them.
+  if (ctx.actor.kind === "agent" && (mutation.target === "item" || mutation.target === "run")) {
     const targetItem = mutation.target === "item" ? mutation.frontmatter.id : mutation.run.item;
     const incomingParent =
       mutation.target === "item" ? mutation.frontmatter.parent : undefined;
@@ -281,6 +302,8 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
     await writeItem(ctx.layout, record as WorkItemFrontmatter, mutation.body);
   } else if (mutation.target === "run") {
     await writeRun(ctx.layout, record as Run);
+  } else if (mutation.target === "roadmap-node") {
+    await writeRoadmapNode(ctx.layout, record as RoadmapNodeFrontmatter, mutation.body);
   } else {
     await writeObservation(ctx.layout, record as ObservationFrontmatter, mutation.body);
   }
@@ -289,7 +312,7 @@ export async function mutate(ctx: StoreContext, mutation: Mutation): Promise<Mut
 
 /** One record materialized by replayPending. */
 export interface RepairedRecord {
-  target: "item" | "run" | "observation";
+  target: "item" | "run" | "observation" | "roadmap-node";
   id: string;
   /** The mutation event whose payload was replayed. */
   eventId: string;
@@ -312,6 +335,12 @@ interface PendingObservation {
   body: string;
 }
 
+interface PendingRoadmapNode {
+  event: JournalEvent;
+  record: RoadmapNodeFrontmatter;
+  body: string;
+}
+
 /**
  * Detect records behind their latest mutation event (the write-ahead crash
  * window) and materialize them deterministically from the event payloads.
@@ -330,6 +359,7 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
   const itemFinalists = new Map<string, PendingItem[]>();
   const runFinalists = new Map<string, PendingRun[]>();
   const observationFinalists = new Map<string, PendingObservation[]>();
+  const roadmapNodeFinalists = new Map<string, PendingRoadmapNode[]>();
 
   const segments = await listSegments(layout);
   const paths = [
@@ -341,6 +371,7 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     const segmentItems = new Map<string, PendingItem>();
     const segmentRuns = new Map<string, PendingRun>();
     const segmentObservations = new Map<string, PendingObservation>();
+    const segmentRoadmapNodes = new Map<string, PendingRoadmapNode>();
     for await (const event of mergeSegments([path])) {
       // Mutations are identified by event TYPE (the choke point's core
       // mutation types), never by payload shape — a mutation-shaped payload
@@ -369,6 +400,15 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
           );
         }
         segmentObservations.set(record.id, { event, record, body });
+      } else if (payload["target"] === "roadmap-node" && payload["record"] !== undefined) {
+        const record = roadmapNodeFrontmatterSchema.parse(payload["record"]);
+        const body = payload["body"];
+        if (typeof body !== "string") {
+          throw new Error(
+            `mutation event ${event.id} has a roadmap-node payload without a string body — cannot replay`,
+          );
+        }
+        segmentRoadmapNodes.set(record.id, { event, record, body });
       }
     }
     for (const [id, pending] of segmentItems) {
@@ -379,6 +419,9 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     }
     for (const [id, pending] of segmentObservations) {
       observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), pending]);
+    }
+    for (const [id, pending] of segmentRoadmapNodes) {
+      roadmapNodeFinalists.set(id, [...(roadmapNodeFinalists.get(id) ?? []), pending]);
     }
   }
 
@@ -451,6 +494,29 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
       const pending = candidates[candidates.length - 1]!;
       await writeObservation(layout, pending.record, pending.body);
       repaired.push({ target: "observation", id, eventId: pending.event.id });
+    }
+  }
+  for (const [id, finalists] of [...roadmapNodeFinalists.entries()].sort(([a], [b]) =>
+    a < b ? -1 : 1,
+  )) {
+    let current: Awaited<ReturnType<typeof readRoadmapNode>> | undefined;
+    try {
+      current = await readRoadmapNode(layout, id);
+    } catch {
+      current = undefined;
+    }
+    const candidates = latestCandidates(finalists);
+    const inSync =
+      current !== undefined &&
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(current!.frontmatter) === JSON.stringify(candidate.record) &&
+          current!.body === candidate.body,
+      );
+    if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
+      await writeRoadmapNode(layout, pending.record, pending.body);
+      repaired.push({ target: "roadmap-node", id, eventId: pending.event.id });
     }
   }
   return repaired;

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { CORE_EVENT_TYPES, MUTATION_EVENT_TYPES } from "../../src/schema/events";
+import {
+  CORE_EVENT_TYPES,
+  MUTATION_EVENT_TYPES,
+  SELF_RECORDED_EVENT_TYPES,
+} from "../../src/schema/events";
 import { journalEventSchema } from "../../src/schema/records";
 
 const baseEvent = {
@@ -23,8 +27,23 @@ describe("schema/events", () => {
       itemClaimed: "item.claimed",
       itemHandback: "item.handback",
       observationCreated: "observation.created",
+      roadmapNodeCreated: "roadmap.node-created",
+      roadmapNodeUpdated: "roadmap.node-updated",
       note: "note",
     });
+  });
+
+  test("the roadmap node mutations are self-recorded by their own verb — `nahel log` cannot forge them", () => {
+    // Same reservation as every other mutation type: readers trust these by
+    // TYPE alone (F4 reads the event that set a node's horizon, F5 its actor),
+    // so a type an agent could hand-append through `log` is a type it could
+    // forge. The label names the verb, not `nahel item`/`nahel run`.
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.roadmapNodeCreated)).toBe(
+      "`nahel roadmap node`",
+    );
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.roadmapNodeUpdated)).toBe(
+      "`nahel roadmap node`",
+    );
   });
 
   test("the mutation subset is exactly the core types minus the note observation type", () => {

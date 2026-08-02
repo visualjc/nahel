@@ -15,6 +15,8 @@ export const CORE_EVENT_TYPES = {
   itemClaimed: "item.claimed",
   itemHandback: "item.handback",
   observationCreated: "observation.created",
+  roadmapNodeCreated: "roadmap.node-created",
+  roadmapNodeUpdated: "roadmap.node-updated",
   note: "note",
 } as const;
 
@@ -49,6 +51,8 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.runEnded,
   CORE_EVENT_TYPES.runPaused,
   CORE_EVENT_TYPES.observationCreated,
+  CORE_EVENT_TYPES.roadmapNodeCreated,
+  CORE_EVENT_TYPES.roadmapNodeUpdated,
 ]);
 
 /** The dispatch bracket: intent (carrying the composed invocation) and outcome. */
@@ -101,6 +105,10 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   ...[...MUTATION_EVENT_TYPES].map(
     (type) => [type, "`nahel item`/`nahel run`"] as [string, string],
   ),
+  // Later entries win: the roadmap mutations are journaled by their own verb,
+  // not by `nahel item`/`nahel run` like the rest of the mutation set.
+  [CORE_EVENT_TYPES.roadmapNodeCreated, "`nahel roadmap node`"],
+  [CORE_EVENT_TYPES.roadmapNodeUpdated, "`nahel roadmap node`"],
   [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
   [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],
   [DISPATCH_ENDED_EVENT_TYPE, "`nahel dispatch`"],

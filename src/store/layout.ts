@@ -5,6 +5,7 @@ import {
   configSchema,
   distilledSchema,
   observationFrontmatterSchema,
+  roadmapNodeFrontmatterSchema,
   runSchema,
   skillsLockSchema,
   skillsManifestSchema,
@@ -12,12 +13,13 @@ import {
   type Config,
   type Distilled,
   type ObservationFrontmatter,
+  type RoadmapNodeFrontmatter,
   type Run,
   type SkillsLock,
   type SkillsManifest,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { requireValidId } from "../schema/id";
+import { ID_PATTERN, requireValidId } from "../schema/id";
 import { readFrontmatterFile, writeFileAtomic, writeFrontmatterFile } from "./frontmatter";
 
 /**
@@ -42,6 +44,13 @@ export interface StoreLayout {
    */
   distilledDir: string;
   observationsDir: string;
+  /**
+   * `nahel/roadmap/` — one markdown record per roadmap node (Phase 4 F1). A
+   * directory of per-node files, exactly like items/ and observations/: node
+   * creation touches one new file, so two worktrees charting different parts
+   * of the roadmap merge as a directory union (ADR-0012 merge-safe state).
+   */
+  roadmapDir: string;
   /** `skills.yaml` — the pinned-skill manifest, at the repo root (PRD F7). */
   skillsManifestPath: string;
   /** `skills.lock` — the resolved manifest, at the repo root (PRD F7). */
@@ -62,6 +71,7 @@ export function storeLayout(root: string): StoreLayout {
     journalArchiveDir: join(journalDir, "archive"),
     distilledDir: join(journalDir, "distilled"),
     observationsDir: join(nahelDir, "observations"),
+    roadmapDir: join(nahelDir, "roadmap"),
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
   };
@@ -459,6 +469,84 @@ export async function writeObservation(
 ): Promise<void> {
   const valid = observationFrontmatterSchema.parse(frontmatter);
   await writeFrontmatterFile(observationPath(layout, valid.id), valid, body);
+}
+
+/** Path of a roadmap node record. The id is validated before any join. */
+export function roadmapNodePath(layout: StoreLayout, id: string): string {
+  return join(layout.roadmapDir, `${requireValidId(id, "roadmap node")}.md`);
+}
+
+/** A roadmap node record: validated frontmatter plus its intent prose. */
+export interface RoadmapNodeRecord {
+  frontmatter: RoadmapNodeFrontmatter;
+  body: string;
+}
+
+/** Read and validate one roadmap node record. */
+export async function readRoadmapNode(
+  layout: StoreLayout,
+  id: string,
+): Promise<RoadmapNodeRecord> {
+  const { frontmatter, body } = await readFrontmatterFile(roadmapNodePath(layout, id));
+  return { frontmatter: roadmapNodeFrontmatterSchema.parse(frontmatter), body };
+}
+
+/** Validate and atomically write one roadmap node record. */
+export async function writeRoadmapNode(
+  layout: StoreLayout,
+  frontmatter: RoadmapNodeFrontmatter,
+  body: string,
+): Promise<void> {
+  const valid = roadmapNodeFrontmatterSchema.parse(frontmatter);
+  await writeFrontmatterFile(roadmapNodePath(layout, valid.id), valid, body);
+}
+
+/**
+ * Ids of every roadmap node record on disk, sorted; [] when the directory is
+ * absent (nothing charted yet — the dir appears with the first node, the same
+ * on-demand shape `nahel/journal/distilled/` has).
+ */
+export async function listRoadmapNodes(layout: StoreLayout): Promise<string[]> {
+  const entries = await readdir(layout.roadmapDir).catch(() => [] as string[]);
+  return entries
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => name.slice(0, -3))
+    .sort();
+}
+
+/**
+ * Every roadmap node record, in id order — the one deterministic read the
+ * derived-status and view layers work over (they need the whole tree: parents,
+ * sideways links, and lineage are all cross-node facts).
+ */
+export async function readRoadmapNodes(layout: StoreLayout): Promise<RoadmapNodeRecord[]> {
+  const records: RoadmapNodeRecord[] = [];
+  for (const id of await listRoadmapNodes(layout)) {
+    records.push(await readRoadmapNode(layout, id));
+  }
+  return records;
+}
+
+/**
+ * Resolve a node reference — a slug or an id — to its record, or null when
+ * nothing matches. Both spellings address the same node (F1): an id is tried
+ * as a record path first, and anything else (or a well-formed id with no
+ * record) falls through to a name match. Duplicate slugs are refused at
+ * creation and reported by `nahel validate`, so the id-ordered first match
+ * here is deterministic even on a store where a merge produced two.
+ */
+export async function resolveRoadmapNode(
+  layout: StoreLayout,
+  ref: string,
+): Promise<RoadmapNodeRecord | null> {
+  if (ID_PATTERN.test(ref)) {
+    const text = await readTextFile(roadmapNodePath(layout, ref));
+    if (text !== null) return readRoadmapNode(layout, ref);
+  }
+  for (const record of await readRoadmapNodes(layout)) {
+    if (record.frontmatter.name === ref) return record;
+  }
+  return null;
 }
 
 /**

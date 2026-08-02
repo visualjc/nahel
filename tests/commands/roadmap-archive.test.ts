@@ -588,3 +588,84 @@ describe("archival interrupted at every boundary of the sequence (F10)", () => {
     expect(await text(fixture.root, ARCHIVED_PATH)).toBeNull();
   });
 });
+
+describe("the closed-delta doctrine (F10)", () => {
+  async function entry(term: string): Promise<string> {
+    const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
+    const line = glossary.split("\n").find((each) => each.startsWith(`- **${term}** —`));
+    expect(line).toBeDefined();
+    return line!;
+  }
+
+  test("the glossary defines the PRD lifecycle: live until released, archived after, never reopened", async () => {
+    const defined = await entry("PRD lifecycle");
+    expect(defined).toContain("`docs/prds/archived/`");
+    expect(defined).toContain("nahel roadmap archive");
+    // The four stamped elements and the pointer that makes the act auditable.
+    expect(defined).toContain("journal");
+    expect(defined).toContain("code and tests are the truth");
+    // The doctrine itself, and the escape hatch it leaves open.
+    expect(defined).toContain("never");
+    expect(defined).toContain("predecessor");
+    // The design doc is the other half of the sentence: permanent, in place.
+    expect(defined).toContain("design doc");
+  });
+
+  test("a new node continuing a released one is lineage, not a reopened delta", async () => {
+    const fixture = await released();
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    await writeFile(join(fixture.root, "docs/prds/detached-state-v2.md"), PRD_TEXT, "utf8");
+    await ok(fixture.env, fixture.root, [
+      "node",
+      "new",
+      "feature",
+      "detached-state-repo-v2",
+      "--horizon",
+      "next",
+      "--intent",
+      "The next delta on the same feature.",
+      "--parent",
+      "nahel",
+      "--predecessor",
+      fixture.nodeName,
+      "--prd",
+      "docs/prds/detached-state-v2.md",
+    ]);
+
+    const report = await validate(fixture.root);
+    expect(report.code).toBe(0);
+    expect(report.out).not.toContain("roadmap.closed-delta");
+    // The archived PRD is untouched by the successor: one stamp, one document.
+    expect(occurrences((await text(fixture.root, ARCHIVED_PATH))!, "> **Archived")).toBe(1);
+  });
+
+  test("F1's dangling-predecessor warning composes with the closed-delta one — two facts, two findings", async () => {
+    const fixture = await released();
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    // A node that is NOT released, pointing at the CLOSED delta, and naming a
+    // predecessor no record carries: three independent mistakes on one record.
+    await ok(fixture.env, fixture.root, [
+      "node",
+      "new",
+      "feature",
+      "detached-state-repo-again",
+      "--horizon",
+      "now",
+      "--intent",
+      "Continuing work against a closed delta.",
+      "--parent",
+      "nahel",
+      "--predecessor",
+      "zzzzzzzz",
+      "--prd",
+      ARCHIVED_PATH,
+    ]);
+
+    const report = await validate(fixture.root);
+    expect(report.out).toContain("roadmap.closed-delta");
+    expect(report.out).toContain("roadmap.predecessor-missing");
+    expect(report.out).toContain("zzzzzzzz");
+    // Both are warnings: neither was refused at write time, and validate passes.
+    expect(report.code).toBe(0);
+  });
+});

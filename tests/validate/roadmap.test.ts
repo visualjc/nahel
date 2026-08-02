@@ -223,9 +223,12 @@ describe("validate — soft structural shape (F1: warned about, never refused)",
       body: "intent\n",
     });
 
+    // Both shape rules fire for both members and the walk terminates: each is
+    // a feature under a feature, and neither can reach a product.
     const findings = findingsFor(await validateStore(fixture.layout), "roadmap.shape");
-    expect(findings).toHaveLength(2);
+    expect(findings).toHaveLength(4);
     for (const finding of findings) expect(finding.severity).toBe("warning");
+    expect(findings.filter((f) => f.message.includes("no product ancestor"))).toHaveLength(2);
   });
 });
 

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { ID_PATTERN } from "../schema/id";
-import { workItemFrontmatterSchema } from "../schema/records";
+import { roadmapNodeFrontmatterSchema, workItemFrontmatterSchema } from "../schema/records";
 import { readFrontmatterFile } from "../store/frontmatter";
 import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
@@ -10,6 +10,7 @@ import {
   listDistilledMarkers,
   listItems,
   listObservations,
+  listRoadmapNodes,
   listRuns,
   observationPath,
   readConfigText,
@@ -17,6 +18,7 @@ import {
   readSkillsLockText,
   readSkillsManifestText,
   readTextFile,
+  roadmapNodePath,
   runRecordPath,
   type StoreLayout,
 } from "../store/layout";
@@ -91,6 +93,36 @@ async function collectDocPresence(
 }
 
 /**
+ * Existence on disk of every schema-valid ADR path any roadmap node
+ * cross-references (F1), keyed by the path as written — the node-side twin of
+ * collectDocPresence, collected here so the checks stay pure. Only paths the
+ * hardened schema field accepts are probed; anything else is already a
+ * schema.roadmap-node finding, not a path to touch.
+ */
+async function collectAdrPresence(
+  layout: StoreLayout,
+  input: ValidationInput,
+): Promise<Record<string, boolean>> {
+  const adrField = roadmapNodeFrontmatterSchema.shape.adrs.element;
+  const presence: Record<string, boolean> = {};
+  for (const raw of input.roadmapNodes) {
+    const adrs = raw.frontmatter?.["adrs"];
+    if (!Array.isArray(adrs)) continue;
+    for (const entry of adrs) {
+      const parsed = adrField.safeParse(entry);
+      if (!parsed.success || parsed.data in presence) continue;
+      try {
+        presence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
+      } catch {
+        // Unreadable (e.g. the path names a directory): not a usable document.
+        presence[parsed.data] = false;
+      }
+    }
+  }
+  return presence;
+}
+
+/**
  * Collect everything validate checks in one tolerant store read pass:
  * raw config text, raw item/run/observation records, hot state, and the
  * per-line journal segment scan. Deterministically ordered (ids sorted).
@@ -104,6 +136,7 @@ export async function collectValidationInput(
     items: [],
     runs: [],
     observations: [],
+    roadmapNodes: [],
     segments: await scanSegments(layout),
     skillsManifestPath: layout.skillsManifestPath,
     skillsLockPath: layout.skillsLockPath,
@@ -165,6 +198,17 @@ export async function collectValidationInput(
     }
     input.observations.push(await collectFrontmatterRecord(id, observationPath(layout, id)));
   }
+  for (const id of (await listRoadmapNodes(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.roadmapNodes.push({
+        id,
+        path: join(layout.roadmapDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
+    input.roadmapNodes.push(await collectFrontmatterRecord(id, roadmapNodePath(layout, id)));
+  }
 
   // Knowledge-document presence (prd: F1/ADR-0013; investigation: F5): stat
   // each schema-valid path once so the pure item.*-missing checks judge
@@ -174,6 +218,8 @@ export async function collectValidationInput(
   // finding, not a path to probe.
   input.prdPresence = await collectDocPresence(layout, input, "prd");
   input.investigationPresence = await collectDocPresence(layout, input, "investigation");
+  // ADR cross-references on roadmap nodes (F1), same rules and same purity.
+  input.adrPresence = await collectAdrPresence(layout, input);
 
   // Prototype refs (Phase 2 F5.2): read-only git plumbing, the same store-layer
   // privilege the claim baseline holds. Never throws — a checkout that is not a

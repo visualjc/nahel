@@ -13,6 +13,7 @@ import {
   configSchema,
   distilledSchema,
   observationFrontmatterSchema,
+  roadmapNodeFrontmatterSchema,
   runSchema,
   skillsLockSchema,
   skillsManifestSchema,
@@ -20,6 +21,7 @@ import {
   type Config,
   type JournalEvent,
   type ObservationFrontmatter,
+  type RoadmapNodeFrontmatter,
   type Run,
   type SkillsLock,
   type SkillsManifest,
@@ -95,6 +97,8 @@ export interface ValidationInput {
   items: RawFrontmatterRecord[];
   runs: RawRunRecord[];
   observations: RawFrontmatterRecord[];
+  /** Roadmap node records from `nahel/roadmap/` (Phase 4 F1). */
+  roadmapNodes: RawFrontmatterRecord[];
   segments: SegmentScan[];
   /** `skills.yaml` — undefined text means absent (a repo may use no skills). */
   skillsManifestPath: string;
@@ -133,6 +137,12 @@ export interface ValidationInput {
    */
   investigationPresence?: Record<string, boolean>;
   /**
+   * Existence on disk of every schema-valid ADR path any roadmap node
+   * cross-references (F1), collected exactly like prdPresence. Optional:
+   * without it the roadmap.adr-missing warning is skipped.
+   */
+  adrPresence?: Record<string, boolean>;
+  /**
    * The repo's prototype refs — local branches with their tips, the resolved
    * default branch, and the remote-tracking prototype refs (Phase 2 F5.2),
    * collected by index.ts so the never-merge checks stay pure. Optional, and an
@@ -160,6 +170,10 @@ interface ParsedState {
   /** Ids with a run directory on disk, valid or not. */
   runDirs: Set<string>;
   observations: Map<string, { record: ObservationFrontmatter; body: string; path: string }>;
+  /** Roadmap nodes that parsed cleanly, by id (Phase 4 F1). */
+  roadmapNodes: Map<string, { record: RoadmapNodeFrontmatter; body: string; path: string }>;
+  /** Ids with a node file on disk, valid or not (dangling = no file at all). */
+  roadmapNodeFiles: Set<string>;
   /** Every valid event across all segments, in the ts → seq → id total order. */
   events: JournalEvent[];
   eventIds: Set<string>;
@@ -201,6 +215,8 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     runs: new Map(),
     runDirs: new Set(input.runs.map((raw) => raw.id)),
     observations: new Map(),
+    roadmapNodes: new Map(),
+    roadmapNodeFiles: new Set(input.roadmapNodes.map((raw) => raw.id)),
     events: [],
     eventIds: new Set(),
     skillsManifest: undefined,
@@ -380,6 +396,14 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
       schema: observationFrontmatterSchema,
       keep: (raw: RawFrontmatterRecord, record: ObservationFrontmatter) =>
         state.observations.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
+    },
+    {
+      check: "schema.roadmap-node",
+      what: "roadmap node",
+      raws: input.roadmapNodes,
+      schema: roadmapNodeFrontmatterSchema,
+      keep: (raw: RawFrontmatterRecord, record: RoadmapNodeFrontmatter) =>
+        state.roadmapNodes.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
     },
   ] as const;
   for (const kind of frontmatterKinds) {
@@ -581,6 +605,159 @@ function checkRefs(state: ParsedState): Finding[] {
         path,
         message: `observation ${record.id} is about item ${record.item}, which does not exist`,
         fix: "if the item's record write crashed, `nahel validate --repair` materializes it from the journal; otherwise fix or remove the observation's item field",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Roadmap node references (Phase 4 F1). Severity follows the record's own
+ * semantics, not one blanket rule:
+ *
+ * - `parent` is a record-to-record ref the store owns, and nodes are never
+ *   deleted, so a missing one is a lost write or a hand deletion — an ERROR,
+ *   exactly like an item's parent.
+ * - `predecessor` and the initiative's sideways `features` links are WARNINGS
+ *   naming both ends, as F1 states: the link is recorded first and the target
+ *   may arrive by a later merge, and a link to a non-`feature` node is an odd
+ *   shape rather than corruption. Nothing here was ever refused at write time.
+ * - duplicate slugs are an ERROR: `nahel roadmap node` refuses them at
+ *   creation, but node files are disjoint, so a merge can land two cleanly and
+ *   this is the only place the collision can surface.
+ */
+function checkRoadmapRefs(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const byName = new Map<string, string[]>();
+  for (const { record, path } of state.roadmapNodes.values()) {
+    byName.set(record.name, [...(byName.get(record.name) ?? []), record.id]);
+    if (record.parent !== undefined && !state.roadmapNodeFiles.has(record.parent)) {
+      findings.push({
+        severity: "error",
+        check: "refs.roadmap-parent",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) has parent ${record.parent}, which does not exist`,
+        fix: "create the parent node or `nahel roadmap node update <ref> --clear-parent`",
+      });
+    }
+    if (record.predecessor !== undefined && !state.roadmapNodeFiles.has(record.predecessor)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.predecessor-missing",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) names predecessor ${record.predecessor}, which does not exist`,
+        fix: "the predecessor node may arrive by a later merge — otherwise fix it with `nahel roadmap node update <ref> --predecessor <ref>` or `--clear-predecessor`",
+      });
+    }
+    for (const linked of record.features) {
+      const target = state.roadmapNodes.get(linked);
+      if (!state.roadmapNodeFiles.has(linked)) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.initiative-link",
+          path,
+          message: `roadmap node ${record.id} (${record.name}) links feature ${linked}, which does not exist`,
+          fix: "the linked node may arrive by a later merge — otherwise re-link with `nahel roadmap node update <ref> --feature <ref>`",
+        });
+      } else if (target !== undefined && target.record.kind !== "feature") {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.initiative-link",
+          path,
+          message:
+            `roadmap node ${record.id} (${record.name}) links ${linked} (${target.record.name}) sideways, ` +
+            `but that node's kind is ${target.record.kind}, not feature`,
+          fix: "initiative links point at feature nodes — re-link with `nahel roadmap node update <ref> --feature <ref>`",
+        });
+      }
+    }
+  }
+  for (const [name, ids] of [...byName.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    if (ids.length > 1) {
+      findings.push({
+        severity: "error",
+        check: "roadmap.duplicate-name",
+        message: `roadmap slug ${JSON.stringify(name)} is held by ${ids.sort().join(" and ")} — slugs are unique per store`,
+        fix: "rename all but one with `nahel roadmap node update <id> --name <slug>` — every view addresses nodes by name",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * ADR cross-reference existence (F1): a product node's ADR path should name a
+ * file on disk, but a missing one is a WARNING naming the node and the path —
+ * never an error and never a refused mutation, exactly like an item's PRD
+ * (the document may arrive by a later merge, ADR-0012). Skipped entirely when
+ * the collector supplied no presence data.
+ */
+function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.adrPresence;
+  if (presence === undefined) return findings;
+  for (const { record, path } of state.roadmapNodes.values()) {
+    for (const adr of record.adrs) {
+      if (presence[adr] === false) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.adr-missing",
+          path,
+          message: `roadmap node ${record.id} (${record.name}) references ADR ${adr}, which does not exist on disk`,
+          fix: "write the ADR or fix the node's reference with `nahel roadmap node update <ref> --adr <path>` — an ADR may arrive by a later merge",
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+/**
+ * Structural shape (F1): the per-kind rules are SOFT — the authoring agent
+ * infers placement and nothing is ever refused — so an odd tree is a WARNING
+ * with the node named. Two shapes are reported: a feature parented to a
+ * feature (which is usually a work item, not a roadmap node), and a non-product
+ * node with no product ancestor (intent hanging off nothing). The ancestor walk
+ * carries a seen-set, so a parent cycle terminates and its members simply read
+ * as having no product ancestor — which is exactly what they have.
+ */
+function checkRoadmapShape(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  for (const { record, path } of state.roadmapNodes.values()) {
+    const parent = record.parent === undefined ? undefined : state.roadmapNodes.get(record.parent);
+    if (record.kind === "feature" && parent?.record.kind === "feature") {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is a feature parented to feature ` +
+          `${parent.record.id} (${parent.record.name}) — a feature's children are usually work items, not nodes`,
+        fix: "re-parent it under a product node, or make it a work item under the parent feature's epic — this is advisory, nothing was refused",
+      });
+    }
+    if (record.kind === "product") continue;
+    const seen = new Set<string>([record.id]);
+    let current = parent;
+    let productAncestor = false;
+    while (current !== undefined && !seen.has(current.record.id)) {
+      seen.add(current.record.id);
+      if (current.record.kind === "product") {
+        productAncestor = true;
+        break;
+      }
+      current =
+        current.record.parent === undefined
+          ? undefined
+          : state.roadmapNodes.get(current.record.parent);
+    }
+    if (!productAncestor) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) has no product ancestor — its intent hangs off nothing`,
+        fix: "parent it (directly or through its tree) under a product node with `nahel roadmap node update <ref> --parent <ref>` — this is advisory, nothing was refused",
       });
     }
   }
@@ -1155,11 +1332,14 @@ function checkCycles(state: ParsedState): Finding[] {
 }
 
 /** A mutation event's parsed payload, or why it cannot be replayed. */
+type MutationTarget = "item" | "run" | "observation" | "roadmap-node";
+
 type Mutation =
   | { target: "item"; record: WorkItemFrontmatter; body: string }
   | { target: "run"; record: Run }
   | { target: "observation"; record: ObservationFrontmatter; body: string }
-  | { target: "item" | "run" | "observation"; invalid: string };
+  | { target: "roadmap-node"; record: RoadmapNodeFrontmatter; body: string }
+  | { target: MutationTarget; invalid: string };
 
 /**
  * Parse a mutation event's payload record, when the event is a mutation.
@@ -1195,6 +1375,15 @@ function mutationRecord(event: JournalEvent): Mutation | undefined {
     }
     return { target: "observation", record: result.data, body };
   }
+  if (payload["target"] === "roadmap-node") {
+    const result = roadmapNodeFrontmatterSchema.safeParse(payload["record"]);
+    if (!result.success) return { target: "roadmap-node", invalid: zodIssues(result.error) };
+    const body = payload["body"];
+    if (typeof body !== "string") {
+      return { target: "roadmap-node", invalid: "payload body is not a string" };
+    }
+    return { target: "roadmap-node", record: result.data, body };
+  }
   // A core mutation type whose payload lacks the target/record replay fields:
   // the choke point always writes them, so this event cannot be replayed.
   return {
@@ -1202,7 +1391,9 @@ function mutationRecord(event: JournalEvent): Mutation | undefined {
       ? "item"
       : event.type.startsWith("observation.")
         ? "observation"
-        : "run",
+        : event.type.startsWith("roadmap.")
+          ? "roadmap-node"
+          : "run",
     invalid: "payload carries no target/record mutation fields",
   };
 }
@@ -1252,8 +1443,9 @@ function checkClaims(state: ParsedState): Finding[] {
   for (const event of state.events) {
     const mutation = mutationRecord(event);
     if (mutation === undefined || "invalid" in mutation) continue;
-    // Observations touch no item — no claim can cover them (mutate() parity).
-    if (mutation.target === "observation") continue;
+    // Observations and roadmap nodes touch no item — no claim can cover them
+    // (mutate() parity: a claim freezes work, never the intent above it).
+    if (mutation.target === "observation" || mutation.target === "roadmap-node") continue;
 
     const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
     if (event.actor.kind === "agent") {
@@ -1426,14 +1618,21 @@ function checkDivergence(state: ParsedState): Finding[] {
     record: ObservationFrontmatter;
     body: string;
   };
+  type RoadmapNodeFinalist = {
+    event: JournalEvent;
+    record: RoadmapNodeFrontmatter;
+    body: string;
+  };
   const itemFinalists = new Map<string, ItemFinalist[]>();
   const runFinalists = new Map<string, RunFinalist[]>();
   const observationFinalists = new Map<string, ObservationFinalist[]>();
+  const roadmapNodeFinalists = new Map<string, RoadmapNodeFinalist[]>();
   for (const segment of state.input.segments) {
     // Per segment, event order is causal order: later overwrites earlier.
     const segmentItems = new Map<string, ItemFinalist>();
     const segmentRuns = new Map<string, RunFinalist>();
     const segmentObservations = new Map<string, ObservationFinalist>();
+    const segmentRoadmapNodes = new Map<string, RoadmapNodeFinalist>();
     for (const event of segment.events) {
       const mutation = mutationRecord(event);
       if (mutation === undefined || "invalid" in mutation) continue;
@@ -1445,6 +1644,12 @@ function checkDivergence(state: ParsedState): Finding[] {
         });
       } else if (mutation.target === "run") {
         segmentRuns.set(mutation.record.id, { event, record: mutation.record });
+      } else if (mutation.target === "roadmap-node") {
+        segmentRoadmapNodes.set(mutation.record.id, {
+          event,
+          record: mutation.record,
+          body: mutation.body,
+        });
       } else {
         segmentObservations.set(mutation.record.id, {
           event,
@@ -1461,6 +1666,9 @@ function checkDivergence(state: ParsedState): Finding[] {
     }
     for (const [id, finalist] of segmentObservations) {
       observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), finalist]);
+    }
+    for (const [id, finalist] of segmentRoadmapNodes) {
+      roadmapNodeFinalists.set(id, [...(roadmapNodeFinalists.get(id) ?? []), finalist]);
     }
   }
 
@@ -1528,6 +1736,29 @@ function checkDivergence(state: ParsedState): Finding[] {
         ...(disk === undefined ? {} : { path: disk.path }),
         message:
           `observation ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
+          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
+        fix: repairFix,
+      });
+    }
+  }
+  for (const [id, finalists] of roadmapNodeFinalists) {
+    const disk = state.roadmapNodes.get(id);
+    const candidates = latestCandidates(finalists);
+    const inSync =
+      disk !== undefined &&
+      candidates.some(
+        (candidate) =>
+          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
+          disk.body === candidate.body,
+      );
+    if (!inSync) {
+      const pending = candidates[candidates.length - 1]!;
+      findings.push({
+        severity: "error",
+        check: "journal.divergence",
+        ...(disk === undefined ? {} : { path: disk.path }),
+        message:
+          `roadmap node ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
           `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
         fix: repairFix,
       });
@@ -1944,6 +2175,9 @@ export function validate(input: ValidationInput): Finding[] {
   const { state, findings } = parseState(input);
   findings.push(
     ...checkRefs(state),
+    ...checkRoadmapRefs(state),
+    ...checkRoadmapAdrRefs(state),
+    ...checkRoadmapShape(state),
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),

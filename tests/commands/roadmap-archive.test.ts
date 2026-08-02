@@ -6,7 +6,12 @@ import { logCommand } from "../../src/commands/log";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import { validateCommand } from "../../src/commands/validate";
 import type { Env } from "../../src/schema/env";
-import { CORE_EVENT_TYPES, RELEASE_ANNOUNCED_EVENT_TYPE } from "../../src/schema/events";
+import {
+  CORE_EVENT_TYPES,
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  QA_SWEEP_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+} from "../../src/schema/events";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
 import { readJournal } from "../../src/store/journal";
@@ -995,5 +1000,63 @@ describe("the boundary AFTER the last write of the sequence (F10)", () => {
       "already",
     );
     await expectComplete(fixture);
+  });
+});
+
+/**
+ * The association rule reads the item TREE, not the ref alone (F2: an event
+ * covers a node iff its `item` resolves to that node's epic item or a
+ * descendant of it). A node whose epic id names no record resolves to nothing,
+ * so it covers nothing — and no lifecycle event aimed at the dead id can carry
+ * such a node past its own development. That matters most here: `released` is
+ * F10's precondition, and a stage advanced over a missing epic would let an
+ * archival close a delta whose work nobody can find.
+ */
+describe("a dangling epic covers no lifecycle events (F2's rule, F10's gate)", () => {
+  test("a release logged at a since-lost epic does not advance the stage, and archival refuses", async () => {
+    const fixture = await released();
+    await writeFile(join(fixture.root, "docs/prds/ghost-delta.md"), PRD_TEXT, "utf8");
+    const epic = await newItem(fixture.env, fixture.root, ["feature", "ghost-epic", "full"]);
+    const node = lastId(
+      await ok(fixture.env, fixture.root, [
+        "node",
+        "new",
+        "feature",
+        "ghost-delta",
+        "--horizon",
+        "now",
+        "--intent",
+        "Points at an epic that is not there.",
+        "--parent",
+        "nahel",
+        "--epic",
+        epic,
+        "--prd",
+        "docs/prds/ghost-delta.md",
+      ]),
+    );
+    for (const type of [
+      QA_SWEEP_EVENT_TYPE,
+      DEPLOY_COMPLETED_EVENT_TYPE,
+      RELEASE_ANNOUNCED_EVENT_TYPE,
+    ]) {
+      await log(fixture.env, fixture.root, [type, "--item", epic, "--data", "version=9.9.9"]);
+    }
+    // Then the epic record goes — a merge that dropped it, a hand deletion.
+    // The events still name it, and the node still points at it.
+    await rm(join(fixture.layout.itemsDir, `${epic}.md`));
+
+    // The stage stays at the dev rollup's own word for a missing epic.
+    const zoom = await ok(fixture.env, fixture.root, ["ghost-delta"]);
+    expect(zoom.join("\n")).toContain("unknown");
+    expect(zoom.join("\n")).not.toContain("released");
+
+    const said = await fails(fixture.env, fixture.root, ["archive", "ghost-delta"]);
+    expect(said).toContain("unknown");
+    expect(said).toContain("released only");
+    expect(await text(fixture.root, "docs/prds/ghost-delta.md")).not.toBeNull();
+    expect(await text(fixture.root, "docs/prds/archived/ghost-delta.md")).toBeNull();
+    // And validate does not ask anyone to archive it either.
+    expect((await validate(fixture.root)).out).not.toContain(node);
   });
 });

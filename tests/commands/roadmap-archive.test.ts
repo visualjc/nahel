@@ -910,3 +910,49 @@ describe("the design doc's line is keyed to the act, not to the path (F10)", () 
     expect(occurrences((await text(fixture.root, DESIGN_DOC))!, ARCHIVED_PATH)).toBe(2);
   });
 });
+
+/**
+ * The difference between "there is no design doc to update" and "the design doc
+ * I was told to update is not there". The first legitimately omits the step —
+ * an absent `design_doc` field states nothing was configured. The second is a
+ * write that could not happen after the event was already journaled, and it
+ * must behave exactly as a failed RECORD write does: the command fails, the
+ * journal carries the truth, `validate` names the pending state, and `--repair`
+ * completes it as soon as the document is back. What it must never do is exit 0
+ * reporting that a file it never touched was updated.
+ */
+describe("a configured design doc that cannot be written (F10)", () => {
+  test("the archive fails loudly, and the journal already carries what is pending", async () => {
+    const fixture = await released();
+    await rm(join(fixture.root, DESIGN_DOC));
+
+    const said = await fails(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    expect(said).toContain(DESIGN_DOC);
+    expect(said).toContain("validate");
+    // Everything before the final step DID land — the event, the move, the
+    // references — which is precisely why the failure has to be loud.
+    expect(await text(fixture.root, ARCHIVED_PATH)).not.toBeNull();
+    expect(await text(fixture.root, PRD_PATH)).toBeNull();
+
+    const before = await validate(fixture.root);
+    expect(before.code).toBe(1);
+    expect(before.out).toContain("roadmap.design-doc-missing");
+    expect(before.out).toContain(DESIGN_DOC);
+
+    // Repair cannot append to a document that is not there, and says so
+    // rather than inventing one.
+    const refused = await validate(fixture.root, ["--repair"]);
+    expect(refused.code).toBe(1);
+    expect(await text(fixture.root, DESIGN_DOC)).toBeNull();
+
+    // Restore the design doc and the same repair completes the act.
+    await writeFile(join(fixture.root, DESIGN_DOC), DESIGN_TEXT, "utf8");
+    const repaired = await validate(fixture.root, ["--repair"]);
+    expect(repaired.out).toContain("repaired");
+    expect(repaired.code).toBe(0);
+    expect(await text(fixture.root, DESIGN_DOC)).toContain(ARCHIVED_PATH);
+    expect(await fails(fixture.env, fixture.root, ["archive", fixture.nodeName])).toContain(
+      "already",
+    );
+  });
+});

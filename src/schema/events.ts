@@ -214,6 +214,63 @@ export const RETRACTION_EVENT_PAYLOAD_KEY = "event";
 export const RETRACTION_REASON_PAYLOAD_KEY = "reason";
 
 /**
+ * `roadmap.migration-selected` (Phase 4 F6): the complete selected set a
+ * roadmap migration journals as its FIRST act — `included`, every work-item id
+ * that gets a feature node, and `excluded`, every near-miss as `{id, reason}`.
+ *
+ * An OPEN-EXTENSION type: the selection is a judgment, and the CLI never judges
+ * (HC1), so the migrating agent records it through `nahel log` exactly as
+ * `nahel/workflows/migrate-roadmap.md` instructs. Named here because two
+ * readers now key on it — the audit below, and the supersession that retires an
+ * attempt — and a set spelled two ways is a set no reviewer can read back.
+ */
+export const MIGRATION_SELECTED_EVENT_TYPE = "roadmap.migration-selected";
+/** Its payload keys: the ids that get nodes, and the near-misses with reasons. */
+export const MIGRATION_INCLUDED_PAYLOAD_KEY = "included";
+export const MIGRATION_EXCLUDED_PAYLOAD_KEY = "excluded";
+/** The key inside one `excluded` entry that carries why it was ruled out. */
+export const MIGRATION_EXCLUSION_REASON_KEY = "reason";
+
+/**
+ * Migration ATTRIBUTION (PR #26 follow-up C2): the payload key a
+ * `roadmap.node-created` event carries when the node was created BY a
+ * migration, naming the selection event it was created for
+ * (`nahel roadmap node new ... --migration <selection-event-id>`).
+ *
+ * It rides the creation event rather than the node record because it is a fact
+ * about the ACT, not about the intent: the node states what the product is
+ * meant to do, and it would still state exactly that had it been charted by
+ * hand. Attribution is also what keeps the audit honest without a heuristic —
+ * ordinary charting after a migration carries nothing, so later nodes are
+ * invisible to the audit by construction rather than by a time window.
+ */
+export const MIGRATION_ATTRIBUTION_PAYLOAD_KEY = "migration";
+
+/**
+ * `roadmap.migration-superseded` (PR #26 follow-up C3): a migration attempt
+ * declared failed, and its nodes retired — the recovery that used to require
+ * `git revert` on a store whose whole claim is that it records what happened.
+ *
+ * SELF-RECORDED and a MUTATION type, because it is one: the act moves every
+ * attributed node record under `nahel/roadmap/failed/<selection-event-id>/` in
+ * a write-ahead sequence, so a kill anywhere leaves the journal ahead of the
+ * filesystem — the one crash shape `validate --repair` rolls forward. A
+ * loggable supersession would be a supersession an agent could claim without
+ * moving anything.
+ *
+ * Payload `{selection, reason, nodes}`: the attempt it retires, why (prose for
+ * the human reading it back), and the node ids it moved. The journal keeps the
+ * failed attempt exactly where it was — a supersession is a correction, never a
+ * deletion — and after one there is NO active selection, so exactly one fresh
+ * selection may follow.
+ */
+export const MIGRATION_SUPERSEDED_EVENT_TYPE = "roadmap.migration-superseded";
+/** Its payload keys: the retired attempt, why it was retired, and what moved. */
+export const MIGRATION_SELECTION_PAYLOAD_KEY = "selection";
+export const MIGRATION_SUPERSEDED_REASON_KEY = "reason";
+export const MIGRATION_NODES_PAYLOAD_KEY = "nodes";
+
+/**
  * The one payload key of each lifecycle type that a VIEW renders (F9's shapes,
  * F2's render table): a deploy's `environment` and a release's `version`. Named
  * here, beside the types, because the renderer and the glossary that teaches

@@ -491,6 +491,33 @@ export function roadmapNodePath(layout: StoreLayout, id: string): string {
   return join(layout.roadmapDir, `${requireValidId(id, "roadmap node")}.md`);
 }
 
+/**
+ * `nahel/roadmap/failed/` — where a SUPERSEDED migration's node records go
+ * (PR #26 follow-up C3), one directory per retired selection event.
+ *
+ * A subdirectory of the roadmap rather than a directory of its own, because
+ * that is exactly what makes the records stop rendering with no reader
+ * changing: listRecordIds scans one directory level and keeps only `*.md`
+ * entries, so a directory named `failed` is skipped by every list, every view
+ * and every check — while the files stay in the store, in git, and readable by
+ * a human asking what the failed attempt had charted.
+ */
+export const FAILED_ROADMAP_DIR = "failed";
+
+/** Path a superseded migration's node record is parked at. Both ids validated. */
+export function failedRoadmapNodePath(
+  layout: StoreLayout,
+  selection: string,
+  id: string,
+): string {
+  return join(
+    layout.roadmapDir,
+    FAILED_ROADMAP_DIR,
+    requireValidId(selection, "migration selection"),
+    `${requireValidId(id, "roadmap node")}.md`,
+  );
+}
+
 /** A roadmap node record: validated frontmatter plus its intent prose. */
 export interface RoadmapNodeRecord {
   frontmatter: RoadmapNodeFrontmatter;

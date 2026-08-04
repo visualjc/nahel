@@ -763,6 +763,7 @@ export const ROADMAP_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "ack",
   "archive",
   "frontier",
+  "migration",
 ]);
 
 /**

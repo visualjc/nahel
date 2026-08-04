@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Env } from "../schema/env";
-import { MUTATION_EVENT_TYPES } from "../schema/events";
+import { MUTATION_EVENT_TYPES, supersededNodeIds } from "../schema/events";
 import {
   documentEditSchema,
   mapFrontmatterSchema,
@@ -782,6 +782,10 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
   // Keyed by target and id: two record kinds may legitimately share an id
   // space, and the sequence writes of one event span several kinds.
   const finalists = new Map<string, PendingWrite[]>();
+  // Records the journal says were RETIRED (C3): a superseded migration's nodes
+  // left the roadmap by a journaled act, so their absence is not the crash
+  // window — replaying their creation event would undo the supersession.
+  const retired = new Set<string>();
 
   const segments = await listSegments(layout);
   const paths = [
@@ -792,6 +796,7 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
     // Per segment, append order is causal order: later overwrites earlier.
     const latest = new Map<string, PendingWrite>();
     for await (const event of mergeSegments([path])) {
+      for (const id of supersededNodeIds(event)) retired.add(`roadmap-node:${id}`);
       for (const write of eventWrites(event)) {
         latest.set(`${write.target}:${write.record.id}`, write);
       }
@@ -800,6 +805,7 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
       finalists.set(key, [...(finalists.get(key) ?? []), pending]);
     }
   }
+  for (const key of retired) finalists.delete(key);
 
   const repaired: RepairedRecord[] = [];
   for (const target of REPLAY_ORDER) {

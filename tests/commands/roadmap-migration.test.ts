@@ -14,7 +14,6 @@ import {
   MIGRATION_NODES_PAYLOAD_KEY,
   MIGRATION_SELECTED_EVENT_TYPE,
   MIGRATION_SELECTION_PAYLOAD_KEY,
-  MIGRATION_SUPERSEDED_EVENT_TYPE,
   MIGRATION_SUPERSEDED_REASON_KEY,
 } from "../../src/schema/events";
 import type { JournalEvent } from "../../src/schema/records";
@@ -381,7 +380,7 @@ describe("nahel roadmap migration supersede — a failed attempt is retired in-s
 
     // One event, carrying the whole act — the attempt, the reason, the nodes.
     const superseded = (await events(layout)).filter(
-      (event) => event.type === MIGRATION_SUPERSEDED_EVENT_TYPE,
+      (event) => event.type === CORE_EVENT_TYPES.migrationSuperseded,
     );
     expect(superseded).toHaveLength(1);
     expect(superseded[0]!.payload[MIGRATION_SELECTION_PAYLOAD_KEY]).toBe(fixture.selection);
@@ -510,7 +509,7 @@ describe("nahel roadmap migration supersede — a failed attempt is retired in-s
     // while claiming an attempt is undone is exactly the false history this
     // bundle rules out — and the legacy migration keeps rendering.
     expect(
-      (await events(layout)).filter((event) => event.type === MIGRATION_SUPERSEDED_EVENT_TYPE),
+      (await events(layout)).filter((event) => event.type === CORE_EVENT_TYPES.migrationSuperseded),
     ).toEqual([]);
     expect(await listRoadmapNodes(layout)).toHaveLength(1);
   });
@@ -602,6 +601,7 @@ describe("supersession refuses to strand what later work points at (C3)", () => 
       await ok(env, root, [
         "map",
         "new",
+        "--node",
         fixture.nodes[0]!,
         "--destination",
         "the destination we are charting",
@@ -638,7 +638,7 @@ describe("supersession interrupted at every boundary of the sequence (C3)", () =
     }
     // The event landed; not one record moved.
     expect(
-      (await events(layout)).filter((event) => event.type === MIGRATION_SUPERSEDED_EVENT_TYPE),
+      (await events(layout)).filter((event) => event.type === CORE_EVENT_TYPES.migrationSuperseded),
     ).toHaveLength(1);
     expect((await shape(fixture)).failed).toEqual([]);
 

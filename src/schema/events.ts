@@ -28,6 +28,7 @@ export const CORE_EVENT_TYPES = {
   ticketClosed: "roadmap.ticket-closed",
   ticketDistilled: "roadmap.ticket-distilled",
   prdArchived: "roadmap.prd-archived",
+  migrationSuperseded: "roadmap.migration-superseded",
   note: "note",
 } as const;
 
@@ -104,6 +105,7 @@ export const MUTATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.ticketClosed,
   CORE_EVENT_TYPES.ticketDistilled,
   CORE_EVENT_TYPES.prdArchived,
+  CORE_EVENT_TYPES.migrationSuperseded,
 ]);
 
 /**
@@ -247,9 +249,10 @@ export const MIGRATION_EXCLUSION_REASON_KEY = "reason";
 export const MIGRATION_ATTRIBUTION_PAYLOAD_KEY = "migration";
 
 /**
- * `roadmap.migration-superseded` (PR #26 follow-up C3): a migration attempt
- * declared failed, and its nodes retired — the recovery that used to require
- * `git revert` on a store whose whole claim is that it records what happened.
+ * `CORE_EVENT_TYPES.migrationSuperseded` (PR #26 follow-up C3): a migration
+ * attempt declared failed, and its nodes retired — the recovery that used to
+ * require `git revert` on a store whose whole claim is that it records what
+ * happened.
  *
  * SELF-RECORDED and a MUTATION type, because it is one: the act moves every
  * attributed node record under `nahel/roadmap/failed/<selection-event-id>/` in
@@ -264,11 +267,33 @@ export const MIGRATION_ATTRIBUTION_PAYLOAD_KEY = "migration";
  * deletion — and after one there is NO active selection, so exactly one fresh
  * selection may follow.
  */
-export const MIGRATION_SUPERSEDED_EVENT_TYPE = "roadmap.migration-superseded";
 /** Its payload keys: the retired attempt, why it was retired, and what moved. */
 export const MIGRATION_SELECTION_PAYLOAD_KEY = "selection";
 export const MIGRATION_SUPERSEDED_REASON_KEY = "reason";
 export const MIGRATION_NODES_PAYLOAD_KEY = "nodes";
+
+/**
+ * The node ids one event RETIRED — the `nodes` a `roadmap.migration-superseded`
+ * event moved out of the roadmap, and [] for every other event.
+ *
+ * Read by both halves of the write-ahead recovery machinery, which is why it
+ * lives here rather than beside either one: a retired record is missing ON
+ * PURPOSE, so `validate` must not report it as a record behind its creation
+ * event and `validate --repair` must not write it back. Getting that wrong in
+ * one of the two would make repair and the report disagree about the same
+ * store, and a repair that resurrects what an act deliberately retired is worse
+ * than no repair at all.
+ *
+ * Ids are never reused, so retirement is permanent and needs no ordering rule.
+ */
+export function supersededNodeIds(event: {
+  type: string;
+  payload: Record<string, unknown>;
+}): string[] {
+  if (event.type !== CORE_EVENT_TYPES.migrationSuperseded) return [];
+  const nodes = event.payload[MIGRATION_NODES_PAYLOAD_KEY];
+  return Array.isArray(nodes) ? nodes.filter((id): id is string => typeof id === "string") : [];
+}
 
 /**
  * The one payload key of each lifecycle type that a VIEW renders (F9's shapes,
@@ -363,6 +388,7 @@ export const SELF_RECORDED_EVENT_TYPES: ReadonlyMap<string, string> = new Map([
   [CORE_EVENT_TYPES.roadmapNodeUpdated, "`nahel roadmap node`"],
   ...WAYFINDER_EVENT_TYPES,
   [CORE_EVENT_TYPES.prdArchived, "`nahel roadmap archive`"],
+  [CORE_EVENT_TYPES.migrationSuperseded, "`nahel roadmap migration supersede`"],
   [ROADMAP_ACKED_EVENT_TYPE, "`nahel roadmap ack`"],
   [CONFIG_UPDATED_EVENT_TYPE, "`nahel config set`"],
   [DISPATCH_STARTED_EVENT_TYPE, "`nahel dispatch`"],

@@ -39,6 +39,7 @@ import { epicCoverage, loadSnapshot } from "../views/snapshot";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
 import { ARCHIVE_USAGE, runArchiveSubcommand } from "./roadmap-archive";
 import { MAP_USAGE, runMapSubcommand } from "./roadmap-map";
+import { MIGRATION_USAGE, runMigrationSubcommand } from "./roadmap-migration";
 import { columnEvents, nearMissNames, resolveNodeRef } from "./roadmap-ref";
 import { runTicketSubcommand, TICKET_USAGE } from "./roadmap-ticket";
 
@@ -133,6 +134,8 @@ const USAGE = `usage:
     Run under an AGENT actor it is journaled as itself and clears nothing.
 
 ${ARCHIVE_USAGE}
+
+${MIGRATION_USAGE}
 
 ${MAP_USAGE}
 
@@ -704,6 +707,7 @@ export const roadmapCommand: Command = {
       if (group === "archive") return runArchiveSubcommand(rest, env, cwd, actorOverride);
       if (group === "frontier") return frontier(rest, cwd);
       if (group === "map") return runMapSubcommand(rest, env, cwd, actorOverride);
+      if (group === "migration") return runMigrationSubcommand(rest, env, cwd, actorOverride);
       if (group === "ticket") return runTicketSubcommand(rest, env, cwd, actorOverride);
       // Anything that is not a reserved verb is a node REF, not an unknown
       // subcommand: `nahel roadmap <slug-or-id>` is the zoom (F3). The set is

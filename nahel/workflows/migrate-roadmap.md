@@ -202,9 +202,24 @@ nothing is ever written back onto the item; never hand-edit anything under
    the selection line, then the leading `ts` of every `roadmap.node-created`
    line, and each of those must be **strictly later**. Equal timestamps are a
    same-second tie, and a same-second tie **fails the migration** — it
-   cannot be repaired by an explanatory note. No CLI verb unmakes a node, so a
-   failed migration stops here and is reported as failed; what the store does
-   about it is a decision above this workflow.
+   cannot be repaired by an explanatory note.
+
+   A failed migration is **retired, not reverted**:
+
+       nahel roadmap migration supersede <selection-event-id> --reason "<what went wrong>"
+
+   That journals the retirement beside the attempt and moves every node the
+   attempt created under `nahel/roadmap/failed/<selection-event-id>/`, where
+   nothing renders it. The journal keeps the whole story — the set, the nodes,
+   and why they were retired — because a store that quietly loses its failed
+   attempt is a store whose successful one cannot be trusted either. Do **not**
+   reach for `git revert`: a `git` history is not this store's history.
+
+   The verb refuses if any node or map charted since points at one of those
+   records, naming what points where; re-point or remove those first. After a
+   supersession the store has **no active migration**, and exactly one fresh
+   selection may follow — start again at step 1, enumerating the store as it
+   is now.
 
 7. Prove the direction, then leave the store clean:
 

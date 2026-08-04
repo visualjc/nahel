@@ -3,7 +3,6 @@ import {
   CORE_EVENT_TYPES,
   MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
   MIGRATION_SELECTED_EVENT_TYPE,
-  MIGRATION_SUPERSEDED_EVENT_TYPE,
 } from "../../src/schema/events";
 import { generateId } from "../../src/schema/id";
 import type { JournalEvent, RoadmapNodeFrontmatter } from "../../src/schema/records";
@@ -326,7 +325,7 @@ describe("two active selections suspend the coverage audit (C2)", () => {
     const first = await selection(fixture, [covered.id]);
     const second = await selection(fixture, [covered.id]);
     await appendEvent(fixture.layout, fixture.env, {
-      type: MIGRATION_SUPERSEDED_EVENT_TYPE,
+      type: CORE_EVENT_TYPES.migrationSuperseded,
       actor: fixture.agent.actor,
       session: fixture.agent.session,
       payload: { selection: first.id, reason: "the first attempt was tainted", nodes: [] },

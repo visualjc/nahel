@@ -45,8 +45,22 @@ describe("schema/events", () => {
       // Phase 4 F10: the one write-ahead event a PRD archival rides — the
       // record links AND the two document steps that reach outside the store.
       prdArchived: "roadmap.prd-archived",
+      // PR #26 follow-up C3: a failed migration attempt retired, its attributed
+      // node records moved out of the roadmap by document steps under one
+      // write-ahead event. A mutation type for the same reason archival is.
+      migrationSuperseded: "roadmap.migration-superseded",
       note: "note",
     });
+  });
+
+  test("supersession is self-recorded by its own verb — `nahel log` cannot claim a retirement", () => {
+    // The strongest case of any type here: a loggable supersession is one an
+    // agent could claim without moving a single record, leaving a journal that
+    // says an attempt was retired over a store still rendering its nodes.
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.migrationSuperseded)).toBe(
+      "`nahel roadmap migration supersede`",
+    );
+    expect(MUTATION_EVENT_TYPES.has(CORE_EVENT_TYPES.migrationSuperseded)).toBe(true);
   });
 
   test("archival is self-recorded by its own verb — `nahel log` cannot forge a closed delta", () => {

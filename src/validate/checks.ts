@@ -41,11 +41,11 @@ import {
   MIGRATION_INCLUDED_PAYLOAD_KEY,
   MIGRATION_SELECTED_EVENT_TYPE,
   MIGRATION_SELECTION_PAYLOAD_KEY,
-  MIGRATION_SUPERSEDED_EVENT_TYPE,
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
   ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
+  supersededNodeIds,
 } from "../schema/events";
 import { epochSeconds } from "../schema/time";
 import type { HotState } from "../store/hotstate";
@@ -1031,7 +1031,7 @@ function checkMigrationAudit(state: ParsedState): Finding[] {
   if (selections.length === 0) return [];
   const retired = new Set(
     state.events
-      .filter((event) => event.type === MIGRATION_SUPERSEDED_EVENT_TYPE)
+      .filter((event) => event.type === CORE_EVENT_TYPES.migrationSuperseded)
       .map((event) => event.payload[MIGRATION_SELECTION_PAYLOAD_KEY])
       .filter((id): id is string => typeof id === "string"),
   );
@@ -2491,6 +2491,15 @@ function checkDivergence(state: ParsedState): Finding[] {
     ticket: "decision ticket",
   };
 
+  // Records the journal says were RETIRED (C3), dropped for the same reason
+  // replayPending drops them: a superseded migration's node left the roadmap by
+  // a journaled act, so its absence is deliberate rather than the crash window.
+  // What is reported here and what repair materializes have to agree, or
+  // `--repair` would resurrect exactly what this check called gone.
+  for (const event of state.events) {
+    for (const id of supersededNodeIds(event)) finalists.delete(`roadmap-node:${id}`);
+  }
+
   const repairFix =
     "run `nahel validate --repair` — it replays the journaled mutation and only materializes what the journal already records";
   for (const [key, list] of finalists) {
@@ -2593,7 +2602,7 @@ function checkArchival(state: ParsedState): Finding[] {
             check: "roadmap.document-lost",
             message:
               `event ${event.id} moved ${edit.from} to ${edit.to}, and the document is at neither ` +
-              "location — no PRD is ever deleted, so this is a hand deletion",
+              "location — nothing this store moves is ever deleted, so this is a hand deletion",
             fix: "restore the document from git — `nahel validate --repair` cannot invent one",
           });
         } else if (!to) {

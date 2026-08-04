@@ -351,6 +351,31 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("nothing invented");
   });
 
+  test("every feature node is attributed to the selection it was created for (C2)", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    expect(body).toContain("--migration");
+    // The id comes from step 3's own output, so the doc must say to keep it.
+    expect(body).toContain("Keep that id");
+    // Only the feature nodes: the product node covers no item, so attributing
+    // it would claim coverage it cannot deliver.
+    expect(body).toContain("no `--migration`");
+    // And what the attribution buys: the check that reads the join back.
+    expect(body).toContain("roadmap.migration-audit");
+  });
+
+  test("a failed attempt is RETIRED in-store, not reverted in git (C3)", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    expect(body).toContain("nahel roadmap migration supersede");
+    expect(body).toContain("--reason");
+    expect(body).toContain("nahel/roadmap/failed/");
+    // The doc used to end the failure path at "no CLI verb unmakes a node".
+    expect(body).not.toContain("No CLI verb unmakes a node");
+    // A git revert would take the failure out of the store's own history.
+    expect(body).toContain("git revert");
+    // And what follows a retirement: one fresh selection, from step 1.
+    expect(body).toContain("no active migration");
+  });
+
   test("states the layer's rules: actor attribution, no hand-editing, and the degraded fallback", async () => {
     const { body } = await shippedWorkflow("migrate-roadmap.md");
     expect(body).toContain("NAHEL_ACTOR");
@@ -419,6 +444,18 @@ describe("the vocabulary the migration is recorded under (F6)", () => {
     const nodesAt = defined.indexOf("before the first node");
     expect(setAt).toBeGreaterThan(-1);
     expect(nodesAt).toBeGreaterThan(setAt);
+  });
+
+  test("the glossary defines supersession — the in-store recovery, not a git revert (C3)", async () => {
+    const defined = await entry("Migration supersession");
+    expect(defined).toContain("nahel roadmap migration supersede");
+    expect(defined).toContain("nahel/roadmap/failed/");
+    expect(defined).toContain("git revert");
+    // A correction, never a deletion: the journal keeps the failed attempt.
+    expect(defined).toContain("never a deletion");
+    // And the two refusals a reader will hit: already retired, and stranding.
+    expect(defined).toContain("already superseded");
+    expect(defined).toContain("no active selection");
   });
 
   test("the glossary states that migration writes node records only", async () => {

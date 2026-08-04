@@ -134,7 +134,11 @@ nothing is ever written back onto the item; never hand-edit anything under
    the ordering IS the audit trail, so a migration that cannot prove its own
    order has not been made. Step 6 accepts or fails it on exactly that test.
 
-4. Create the product node — one per store:
+4. Create **or reuse** the product node — one per store. Look first:
+
+       nahel roadmap
+
+   If the store has none, create it:
 
        nahel roadmap node new product <product-node-slug> --horizon now \
          --intent "<what this product is, a paragraph — not a PRD>" \
@@ -144,8 +148,22 @@ nothing is ever written back onto the item; never hand-edit anything under
    nahel's own store, `docs/roadmap.md`). Product design docs are updated in
    place forever; unlike a PRD, none is ever archived.
 
+   **If a product node already exists, reuse it** — left by an attempt that was
+   interrupted after this step, or charted at any other time — and confirm or
+   adjust its intent in place:
+
+       nahel roadmap node update <product-node-slug> \
+         --intent "<what this product is, restated>"
+
+   **Never create a second.** The product node is a store SINGLETON carrying
+   stable intent: it belongs to the store, not to any one migration attempt, so
+   it survives a retirement untouched and the next attempt inherits it. (Slugs
+   are unique per store, so a second one is refused outright anyway — the same
+   rule arriving as an error.)
+
    The product node takes **no `--migration`**: it covers no work item, so
    attributing it to the selected set would claim coverage it cannot deliver.
+   That is also why it outlives a supersession — see step 6.
 
 5. Create one feature node per **included** id — every id in the set, and no
    id the set does not name:
@@ -233,6 +251,27 @@ nothing is ever written back onto the item; never hand-edit anything under
    supersession the store has **no active migration**, and exactly one fresh
    selection may follow — start again at step 1, enumerating the store as it
    is now.
+
+   **An attempt interrupted before its first feature node** is retired the same
+   way, with one extra word:
+
+       nahel roadmap migration supersede <selection-event-id> \
+         --reason "<what went wrong>" --nothing-to-move
+
+   Steps 3 and 4 create nothing attributed — the set is an event, and the
+   product node covers no work item — so an attempt killed in there has no
+   record to move, and what supersession retires is its **authority**: the
+   store gets its next migration back. `--nothing-to-move` is the
+   acknowledgement that no record will move, and it is required because the
+   identical state is what a **finished** migration made before attribution
+   existed looks like, and that one must not be retired by anyone reading
+   "supersede" as "undo". The verb prints what it retired, that zero records
+   moved, and — as a warning to read before re-migrating — any live node still
+   covering an id the retired set named.
+
+   The product node, if step 4 got that far, **stays**. It is the store's, not
+   the attempt's, so the retry reuses it at step 4 rather than creating a
+   second.
 
 7. Prove the direction, then leave the store clean:
 

@@ -4,6 +4,7 @@ import type { Env } from "../schema/env";
 import {
   CORE_EVENT_TYPES,
   MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
+  MIGRATION_INCLUDED_PAYLOAD_KEY,
   MIGRATION_NODES_PAYLOAD_KEY,
   MIGRATION_SELECTED_EVENT_TYPE,
   MIGRATION_SELECTION_PAYLOAD_KEY,
@@ -46,16 +47,37 @@ import { commandContext, UsageError } from "./item";
  * event carrying every document step, so a kill anywhere leaves the journal
  * ahead of the filesystem — the single crash shape `validate --repair` rolls
  * forward, one idempotent move at a time.
+ *
+ * **What a supersession retires is AUTHORITY, and only sometimes records.**
+ * That distinction was learned from a blocker: the workflow journals the set
+ * FIRST and creates the product node BEFORE any feature node, and neither of
+ * those carries an attribution — the product node covers no work item. So the
+ * two ordinary crash shapes of a migration in progress (killed after the set;
+ * killed after the product node) leave an attempt with nothing attributed, and
+ * a verb that refused those left the store unable to migrate at all: the
+ * stranded attempt stayed active forever, and no fresh selection could follow
+ * it. Retiring an attempt that created nothing is a real act with a real
+ * consequence — the store gets its next migration back — so it is allowed, and
+ * gated on ACKNOWLEDGEMENT rather than on refusal: `--nothing-to-move` says the
+ * operator knows no record will move. Without it the refusal stands, because
+ * the same state is reached by a finished pre-attribution migration, and
+ * "supersede" read as "undo" would retire a good one's authority by reflex.
  */
 
 export const MIGRATION_USAGE = `  nahel roadmap migration supersede <selection-event-id> --reason <why>
+                                    [--nothing-to-move]
     Retire a failed migration attempt: journal the supersession naming the
     attempt and the reason, and move every node record attributed to it under
     nahel/roadmap/failed/<selection-event-id>/, where nothing renders it.
     The journal keeps the attempt and its nodes' creation events exactly as
     they were. Refused when the id names no ${MIGRATION_SELECTED_EVENT_TYPE}
-    event, when that attempt was already superseded, when it has no attributed
-    node to move, or when a later node or map still points at one of them.
+    event, when that attempt was already superseded, or when a later node or
+    map still points at one of the records it would retire.
+      --nothing-to-move: acknowledge that the attempt has NO attributed node,
+        so only its authority is retired and no record moves — the shape an
+        attempt killed before its first feature node leaves. Required for that
+        case, because the same state is what a finished migration made before
+        attribution existed looks like.
     After it, the store has no active migration and exactly one fresh
     selection may follow.`;
 
@@ -83,10 +105,10 @@ interface Attempt {
 
 /**
  * Resolve the attempt named on the command line, refusing every state that is
- * not "an active attempt with records to move". Each refusal names the fact it
- * is refusing on, because the recovery differs: a wrong id is retyped, an
- * already-superseded attempt needs `validate --repair` at most, and a
- * pre-attribution attempt cannot be retired by this verb at all.
+ * not an ACTIVE attempt. Each refusal names the fact it is refusing on, because
+ * the recovery differs: a wrong id is retyped, and an already-superseded
+ * attempt needs `validate --repair` at most. Whether the attempt has records to
+ * move is not a refusal here — it decides which acknowledgement the caller owes.
  */
 async function resolveAttempt(layout: StoreLayout, id: string): Promise<Attempt> {
   if (!ID_PATTERN.test(id)) {
@@ -137,16 +159,20 @@ async function resolveAttempt(layout: StoreLayout, id: string): Promise<Attempt>
         "are still in place, `nahel validate --repair` completes the move)",
     );
   }
-  if (attributed.length === 0) {
-    throw new UsageError(
-      `migration ${id} has no attributed node — no \`${CORE_EVENT_TYPES.roadmapNodeCreated}\` event ` +
-        `carries \`${MIGRATION_ATTRIBUTION_PAYLOAD_KEY}=${id}\`, so this verb has nothing to retire. ` +
-        "Either the attempt created no node yet, or it predates attribution: a supersession that " +
-        "moved no record while declaring the attempt undone would be exactly the false history the " +
-        "journal exists to prevent",
-    );
-  }
   return { selection, attributed: [...attributed].sort() };
+}
+
+/**
+ * The included ids one selection declared, read leniently — this is an advisory
+ * listing, not the audit. `validate`'s `roadmap.migration-audit` is where a
+ * malformed set is judged; refusing to print a hint because the payload is odd
+ * would withhold help exactly when the operator needs it most.
+ */
+function includedIds(selection: JournalEvent): Set<string> {
+  const raw = selection.payload[MIGRATION_INCLUDED_PAYLOAD_KEY];
+  return new Set(
+    (Array.isArray(raw) ? raw : []).filter((id): id is string => typeof id === "string"),
+  );
 }
 
 /**
@@ -190,7 +216,7 @@ async function supersede(
 ): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
-    options: { reason: { type: "string" } },
+    options: { reason: { type: "string" }, "nothing-to-move": { type: "boolean" } },
     allowPositionals: true,
   });
   if (positionals.length !== 1) {
@@ -205,9 +231,36 @@ async function supersede(
         "undoing is worse than the attempt it undoes",
     );
   }
+  const acknowledged = values["nothing-to-move"] === true;
 
   const ctx = await commandContext(cwd, env, actorOverride);
   const attempt = await resolveAttempt(ctx.layout, positionals[0]!);
+  // The acknowledgement and the store have to agree, both ways. An attempt with
+  // no attributed record is retired only when the caller SAID so, because the
+  // same state is what a finished pre-attribution migration looks like and
+  // "supersede" read as "undo" would retire a good one's authority by reflex.
+  // And the flag on an attempt that does have records is a caller describing a
+  // store they are not looking at, so it is refused rather than ignored.
+  if (attempt.attributed.length === 0 && !acknowledged) {
+    throw new UsageError(
+      `migration ${attempt.selection.id} has no attributed node — no ` +
+        `\`${CORE_EVENT_TYPES.roadmapNodeCreated}\` event carries ` +
+        `\`${MIGRATION_ATTRIBUTION_PAYLOAD_KEY}=${attempt.selection.id}\`, so there is no record to ` +
+        "move. Two different stores look like this, and they want opposite things:\n" +
+        "  - an attempt INTERRUPTED before its first feature node (the set is journaled, maybe a " +
+        "product node exists, nothing else). Retiring its authority is what lets a fresh selection " +
+        "follow, so re-run with `--nothing-to-move`;\n" +
+        "  - a FINISHED migration made before attribution existed, whose nodes are real and correct. " +
+        "It needs no repair, and retiring it would take the authority off a migration that succeeded.",
+    );
+  }
+  if (attempt.attributed.length > 0 && acknowledged) {
+    throw new UsageError(
+      `--nothing-to-move says this attempt created no node, but ${attempt.attributed.length} node ` +
+        `record(s) are attributed to migration ${attempt.selection.id} (${attempt.attributed.join(", ")}) — ` +
+        "drop the flag and they are retired with it",
+    );
+  }
   const retiring = new Set(attempt.attributed);
   const nodes = await readRoadmapNodes(ctx.layout);
   const stranded = blockers(nodes, await readMaps(ctx.layout), retiring);
@@ -256,16 +309,38 @@ async function supersede(
     },
   });
   await closeStoreContext(ctx);
-  const parked = dirname(
-    relative(
-      ctx.layout.root,
-      failedRoadmapNodePath(ctx.layout, attempt.selection.id, attempt.attributed[0]!),
-    ),
-  );
+  const first = attempt.attributed[0];
+  const parked =
+    first === undefined
+      ? undefined
+      : dirname(
+          relative(ctx.layout.root, failedRoadmapNodePath(ctx.layout, attempt.selection.id, first)),
+        );
   console.log(
-    `✅ superseded migration ${attempt.selection.id} — ${writes.length} node record(s) moved to ` +
-      `${parked}/ (the journal keeps the attempt; a fresh selection may follow)`,
+    `✅ superseded migration ${attempt.selection.id} — authority retired, ` +
+      `${writes.length} node record(s) moved${parked === undefined ? "" : ` to ${parked}/`} ` +
+      "(the journal keeps the attempt; a fresh selection may follow)",
   );
+  // The leftovers an authority-only retirement cannot reason about: live nodes
+  // covering an id the retired set named. They are not the attempt's by
+  // attribution — the verb has no standing to move them — but they are plainly
+  // about the same work, and a retry that silently charts a second node for the
+  // same epic is the collision this whole review is about. Advisory, and named.
+  if (writes.length === 0) {
+    const included = includedIds(attempt.selection);
+    const leftovers = nodes.filter(
+      ({ frontmatter }) => frontmatter.epic !== undefined && included.has(frontmatter.epic),
+    );
+    if (leftovers.length > 0) {
+      console.log(
+        `⚠️  ${leftovers.length} live node(s) still cover an id the retired set named — not this ` +
+          "attempt's by attribution, so nothing was moved, but look before you re-migrate:",
+      );
+      for (const { frontmatter } of leftovers) {
+        console.log(`  ${frontmatter.name} (${frontmatter.id}) — epic=${frontmatter.epic}`);
+      }
+    }
+  }
   return 0;
 }
 

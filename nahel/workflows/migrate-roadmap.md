@@ -97,7 +97,14 @@ nothing is ever written back onto the item; never hand-edit anything under
          --data excluded='[{"id":"<item-id>","reason":"<why this one is work, not roadmap intent>"}]'
 
    `included` is every id that gets a node; `excluded` is every near-miss with
-   its reason. Write it **before the first node exists**, and what proves the
+   its reason. **Log both lists, always** — every entry a work-item id, and
+   every near-miss an `{id, reason}` pair whose reason says something. If
+   nothing was arguable, say so with `--data excluded='[]'`: the set is read
+   strictly, and **silence** is not the statement an empty list makes. A
+   malformed or missing list is a `nahel validate` error rather than a set
+   quietly read as smaller than it was.
+
+   Write it **before the first node exists**, and what proves the
    call was made rather than reverse-engineered is one comparison: this event's
    `ts` **strictly earlier** than every `roadmap.node-created` `ts`. A set
    logged after the nodes proves nothing — a reviewer can no longer tell the
@@ -161,6 +168,12 @@ nothing is ever written back onto the item; never hand-edit anything under
    lists read side by side. Pass it on every feature node of this migration and
    on nothing else: ordinary charting, later, omits it, and that omission is
    exactly what keeps a node charted next month out of this migration's audit.
+
+   Attributing a node to a **retired attempt** — one already superseded, see
+   step 6 — is refused. Such a node would belong to no live migration, and
+   nothing would audit it: a retired attempt owes no coverage, and the audit
+   reads the active one. After a supersession, journal a fresh selected set and
+   attribute to that.
 
 6. Check the coverage in both directions — either one alone passes a broken
    migration:

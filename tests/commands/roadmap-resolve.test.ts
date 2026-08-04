@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import type { CommandContext } from "../../src/cli";
+import { logCommand } from "../../src/commands/log";
 import { recallCommand } from "../../src/commands/recall";
 import { roadmapCommand } from "../../src/commands/roadmap";
+import { validateCommand } from "../../src/commands/validate";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
 import type { JournalEvent } from "../../src/schema/records";
@@ -81,6 +83,38 @@ function lastId(printed: string[]): string {
 
 async function journalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
   return Array.fromAsync(readJournal(layout));
+}
+
+/**
+ * Journal one research note the way `work-map.md` tells an agent to, and return
+ * the event id it printed — the id that then travels to `resolve --source`.
+ */
+async function note(env: Env, root: string, summary: string): Promise<string> {
+  const out: string[] = [];
+  // The STORE's env, not a fresh one: a seeded RNG restarted from its seed
+  // mints the same id twice, and two notes must be two events.
+  const ctx: CommandContext = {
+    env,
+    cwd: root,
+    stdout: (text) => out.push(text),
+    stderr: (text) => out.push(text),
+  };
+  expect(await logCommand.run(["note", "--data", `summary=${summary}`], ctx)).toBe(0);
+  const id = /event ([0-9a-z]{8})/.exec(out.join("\n"))?.[1];
+  expect(id).toMatch(ID_PATTERN);
+  return id!;
+}
+
+/** `nahel validate` over the store, as its own command sees it. */
+async function validate(root: string): Promise<{ code: number; out: string }> {
+  const out: string[] = [];
+  const ctx: CommandContext = {
+    env: seededEnv(),
+    cwd: root,
+    stdout: (text) => out.push(text),
+    stderr: (text) => out.push(text),
+  };
+  return { code: await validateCommand.run([], ctx), out: out.join("\n") };
 }
 
 async function recall(root: string, terms: string[]): Promise<string> {
@@ -236,6 +270,90 @@ describe("nahel roadmap ticket resolve — decision, observation, derived index"
     ]);
     // No rationale was given, so the observation claims none.
     expect(observation.body).not.toContain("Rationale");
+  });
+
+  test("--source carries the research notes into the observation's provenance", async () => {
+    // The loop `work-map.md` teaches: journal what you read as `note` events,
+    // then hand those ids to the resolution. Without this the note ids are
+    // reachable only through the ticket body, which `distill` throws away —
+    // the observation would keep the decision and lose what it rests on.
+    const { root, layout, env, ticket } = await charted();
+    const first = await note(env, root, "fly.io docs: regions are per-app, not per-org");
+    const second = await note(env, root, "our deploy script already targets fly");
+
+    await ok(env, root, [
+      "ticket",
+      "resolve",
+      ticket,
+      "--decision",
+      DECISION,
+      "--source",
+      first,
+      "--source",
+      second,
+    ]);
+
+    const observation = await readObservation(layout, (await listObservations(layout))[0]!);
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    // The resolution FIRST — the act the observation is distilled from — then
+    // the research it rests on, in the order the agent cited it.
+    expect(observation.frontmatter.sources).toEqual([resolution, first, second]);
+    expect(await recall(root, ["fly.io", "deploy"])).toContain(DECISION);
+    // And the store is content with the provenance it just wrote.
+    expect((await validate(root)).code).toBe(0);
+  });
+
+  test("a repeated --source is recorded once — provenance is a set, not a tally", async () => {
+    const { root, layout, env, ticket } = await charted();
+    const source = await note(env, root, "fly.io docs: regions are per-app");
+    await ok(env, root, [
+      "ticket",
+      "resolve",
+      ticket,
+      "--decision",
+      DECISION,
+      "--source",
+      source,
+      "--source",
+      source,
+    ]);
+    const observation = await readObservation(layout, (await listObservations(layout))[0]!);
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    expect(observation.frontmatter.sources).toEqual([resolution, source]);
+  });
+
+  test("a --source that is not an id, and one naming no event, are both refused", async () => {
+    // `nahel observe` refuses both — shape at the flag, existence against the
+    // real journal — and an observation written here must be one `observe`
+    // would have accepted, or `validate`'s refs.observation-sources (an ERROR)
+    // reports every resolution the moment it lands.
+    const { root, layout, env, ticket } = await charted();
+    expect(
+      await fails(env, root, [
+        "ticket",
+        "resolve",
+        ticket,
+        "--decision",
+        DECISION,
+        "--source",
+        "not-an-id",
+      ]),
+    ).toContain("not-an-id");
+    const absent = await fails(env, root, [
+      "ticket",
+      "resolve",
+      ticket,
+      "--decision",
+      DECISION,
+      "--source",
+      "0aaaaaaa",
+    ]);
+    expect(absent).toContain("0aaaaaaa");
+    expect(absent).toContain("journal");
+
+    // Two refusals, and nothing moved under either.
+    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
+    expect(await listObservations(layout)).toEqual([]);
   });
 
   test("a --rationale with nothing in it is refused — an empty reasoning is a lie", async () => {

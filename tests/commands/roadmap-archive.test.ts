@@ -140,13 +140,37 @@ interface Released {
 }
 
 /**
+ * The three payload keys an ARCHIVAL-QUALIFIED release carries (A3): archival
+ * stamps a delta closed on a release a reader can follow back, so the version,
+ * the channel it went out on, and a pointer to the announcement must all be
+ * there. `--data` entries, so a case can drop one and watch the verb refuse.
+ */
+const FULL_RELEASE: readonly string[] = [
+  "version=0.3.0",
+  "channel=github",
+  "announcement=https://github.com/visualjc/nahel/releases/tag/v0.3.0",
+];
+
+/** The same, at the successor's version — one delta per archive slot. */
+const SUCCESSOR_RELEASE: readonly string[] = [
+  "version=0.4.0",
+  "channel=github",
+  "announcement=https://github.com/visualjc/nahel/releases/tag/v0.4.0",
+];
+
+/** `--data` flags for each entry, in order. */
+function dataArgs(entries: readonly string[]): string[] {
+  return entries.flatMap((entry) => ["--data", entry]);
+}
+
+/**
  * A released feature whose PRD is referenced FIVE times: the feature node, the
  * authoring plan item, the epic parsed from it, and two unrelated records that
  * happen to share the path. Release is logged, never hand-set — the stage the
  * verb gates on is F9's derivation over that event.
  */
 async function released(
-  options: { designDoc?: string | null } = {},
+  options: { designDoc?: string | null; release?: readonly string[] } = {},
 ): Promise<Released> {
   const root = await makeTempDir("nahel-roadmap-archive-");
   dirs.push(root);
@@ -215,8 +239,7 @@ async function released(
     RELEASE_ANNOUNCED_EVENT_TYPE,
     "--item",
     epic,
-    "--data",
-    "version=0.3.0",
+    ...dataArgs(options.release ?? FULL_RELEASE),
   ]);
   return { root, layout, env, plan, epic, others: [other1, other2], node, nodeName };
 }
@@ -276,8 +299,7 @@ async function releasedSuccessor(
     RELEASE_ANNOUNCED_EVENT_TYPE,
     "--item",
     epic,
-    "--data",
-    "version=0.4.0",
+    ...dataArgs(SUCCESSOR_RELEASE),
   ]);
   return { epic, node };
 }
@@ -1111,5 +1133,141 @@ describe("the collision's recovery actually converges (F10)", () => {
     expect(repaired.code).toBe(0);
     await expectComplete(fixture);
     expect(await text(fixture.root, "docs/prds/archived/detached-state-2024.md")).not.toBeNull();
+  });
+});
+
+/**
+ * The archival gate (PR #26 follow-up A3). `stage released` and
+ * ARCHIVAL-QUALIFIED are now deliberately different facts. The stage stays
+ * permissive — F9's ruling, unchanged: a `release.announced` carrying nothing
+ * at all still reads `released` and still renders `released ? <ts>`, because a
+ * VIEW must show what the store holds. Archival is not a view: it stamps a
+ * document closed forever, on a header that cites the release, so it demands a
+ * release a reader can follow back — nonblank `version`, `channel` and
+ * `announcement`, all three.
+ *
+ * The refusal names the release event and every key it lacks, because the fix
+ * is to re-log THAT release, and a refusal that named neither would send
+ * someone hunting through the journal for it.
+ */
+describe("the archival gate: a release a reader can follow back (A3)", () => {
+  /** What `nahel roadmap archive` said when it refused the fixture's node. */
+  async function refusal(fixture: Released): Promise<string> {
+    const said = await fails(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+    // Refused means refused: the document did not move.
+    expect(await text(fixture.root, PRD_PATH)).not.toBeNull();
+    expect(await text(fixture.root, ARCHIVED_PATH)).toBeNull();
+    return said;
+  }
+
+  /** The id of the one `release.announced` in the store. */
+  async function releaseId(fixture: Released): Promise<string> {
+    const found = (await events(fixture.layout)).filter(
+      (event) => event.type === RELEASE_ANNOUNCED_EVENT_TYPE,
+    );
+    expect(found).toHaveLength(1);
+    return found[0]!.id;
+  }
+
+  test("a release carrying only a version is refused, naming the event and BOTH missing keys", async () => {
+    const fixture = await released({ release: ["version=0.3.0"] });
+    const said = await refusal(fixture);
+
+    expect(said).toContain(await releaseId(fixture));
+    expect(said).toContain("channel");
+    expect(said).toContain("announcement");
+    expect(said).not.toContain("stage unknown");
+  });
+
+  test("one missing key is named alone — the refusal lists what is missing, not the shape", async () => {
+    const fixture = await released({
+      release: ["version=0.3.0", "channel=github"],
+    });
+    const said = await refusal(fixture);
+
+    // The clause lists exactly what is missing — the key that IS recorded is
+    // not among them, however often the re-log instruction below spells it.
+    expect(said).toContain("records no announcement —");
+  });
+
+  test("a BLANK value is a missing value — a recorded empty string says nothing", async () => {
+    const fixture = await released({
+      release: ["version=0.3.0", "channel=   ", "announcement="],
+    });
+    const said = await refusal(fixture);
+
+    expect(said).toContain("channel");
+    expect(said).toContain("announcement");
+  });
+
+  test("the stage stays permissive: the view still reads released while the verb refuses", async () => {
+    const fixture = await released({ release: ["version=0.3.0"] });
+
+    const zoom = (await ok(fixture.env, fixture.root, [fixture.nodeName])).join("\n");
+    expect(zoom).toContain("released");
+    await refusal(fixture);
+  });
+
+  test("a complete release archives, and the archival event names the release it rests on", async () => {
+    const fixture = await released();
+    const release = await releaseId(fixture);
+    await ok(fixture.env, fixture.root, ["archive", fixture.nodeName]);
+
+    const archival = (await events(fixture.layout)).find(
+      (event) => event.type === CORE_EVENT_TYPES.prdArchived,
+    )!;
+    expect(archival.payload["release"]).toBe(release);
+    // The reserved replay keys still win: the sequence is intact.
+    expect(archival.payload["target"]).toBe("sequence");
+    expect(Array.isArray(archival.payload["records"])).toBe(true);
+  });
+
+  test("a RETRACTED complete release is no release at all — the stage refusal, not the gate", async () => {
+    const fixture = await released();
+    const release = await releaseId(fixture);
+    await log(fixture.env, fixture.root, [
+      "roadmap.column-retracted",
+      "--data",
+      `event=${release}`,
+      "--data",
+      "reason=announced against the wrong epic",
+    ]);
+
+    const said = await refusal(fixture);
+    expect(said).toContain("once its feature is released");
+    expect(said).toContain("stage built");
+  });
+
+  test("validate never asks anyone to archive what the verb refuses", async () => {
+    const fixture = await released({ release: ["version=0.3.0"] });
+
+    const report = await validate(fixture.root);
+    expect(report.out).not.toContain("roadmap.prd-unarchived");
+    // It says what IS wrong instead: the release cannot carry an archival.
+    expect(report.out).toContain("roadmap.release-incomplete");
+  });
+});
+
+/**
+ * The two facts the glossary now has to keep apart (PR #26 follow-up A3):
+ * `stage released` — what a VIEW derives from any covering `release.announced`,
+ * permissive by design — and an ARCHIVAL-QUALIFIED release, the stricter thing
+ * `nahel roadmap archive` demands before it stamps a document closed forever.
+ * A glossary that spelled them as one word would teach a workflow author that
+ * a rendered `released` is an archivable one.
+ */
+describe("stage released vs archival-qualified — documented vocabulary (A3)", () => {
+  test("the glossary names both facts and states which keys the stricter one needs", async () => {
+    const glossary = await readFile(join(import.meta.dir, "../../CONTEXT.md"), "utf8");
+    const defined = glossary
+      .split("\n")
+      .find((line) => line.startsWith("- **PRD lifecycle** —"))!;
+    expect(defined).toBeDefined();
+    expect(defined).toContain("archival-qualified");
+    for (const key of ["`version`", "`channel`", "`announcement`"]) {
+      expect(defined).toContain(key);
+    }
+    // And that the view stays permissive while the verb refuses.
+    expect(defined).toContain("`released ? <ts>`");
   });
 });

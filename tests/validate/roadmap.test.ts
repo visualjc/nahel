@@ -504,8 +504,23 @@ describe("validate — the F2 derivation warnings", () => {
  * opening a new node.
  */
 describe("validate — the PRD lifecycle (F10)", () => {
+  /**
+   * The payload of an ARCHIVAL-QUALIFIED release (A3): the three keys the
+   * archival verb demands, so a case that drops one is asking about the gate
+   * rather than about the lifecycle.
+   */
+  const FULL_RELEASE = {
+    version: "0.3.0",
+    channel: "github",
+    announcement: "https://github.com/visualjc/nahel/releases/tag/v0.3.0",
+  };
+
   /** A feature node covering an epic, with a `release.announced` over it. */
-  async function releasedFeature(fixture: ValidateFixture, prd: string) {
+  async function releasedFeature(
+    fixture: ValidateFixture,
+    prd: string,
+    release: Record<string, unknown> = FULL_RELEASE,
+  ) {
     const product = await createNode(fixture, { kind: "product", name: "nahel" });
     const epic = await createItem(fixture, { name: "shipped-epic", type: "plan", lane: "full" });
     const node = await createNode(fixture, {
@@ -514,14 +529,14 @@ describe("validate — the PRD lifecycle (F10)", () => {
       epic: epic.id,
       prd,
     });
-    await appendEvent(fixture.layout, fixture.env, {
+    const announced = await appendEvent(fixture.layout, fixture.env, {
       type: RELEASE_ANNOUNCED_EVENT_TYPE,
       actor: { kind: "agent", id: "claude-code" },
       item: epic.id,
-      payload: { version: "0.3.0" },
+      payload: release,
       session: fixture.agent.session,
     });
-    return { product, epic, node };
+    return { product, epic, node, announced };
   }
 
   async function writeDoc(fixture: ValidateFixture, path: string): Promise<void> {
@@ -825,5 +840,100 @@ describe("validate — an unreadable sweep count (A2)", () => {
     expect(
       findingsFor(await validateStore(fixture.layout), "roadmap.sweep-failed-count"),
     ).toEqual([]);
+  });
+});
+
+/**
+ * The archival gate, read from the other side (PR #26 follow-up A3).
+ * `roadmap.prd-unarchived` tells a human to run `nahel roadmap archive`, so it
+ * must fire on exactly the nodes that verb ACCEPTS — a warning that names a
+ * command which then refuses is a warning nobody can act on.
+ *
+ * The two now come from one predicate. A node whose stage reads `released` on a
+ * release too thin to carry an archival is a different finding with a different
+ * fix: re-log the release, and the PRD stays live until you do. Silence there
+ * would be worse than either — the delta looks closed and nothing says why it
+ * cannot be filed.
+ */
+describe("validate — stage released vs archival-qualified (A3)", () => {
+  async function writeDoc(fixture: ValidateFixture, path: string): Promise<void> {
+    await mkdir(join(fixture.root, path, ".."), { recursive: true });
+    await writeFile(join(fixture.root, path), "# a document\n");
+  }
+
+  /** The same fixture the F10 block uses, with the release payload given. */
+  async function feature(fixture: ValidateFixture, release: Record<string, unknown>) {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "shipped-epic", type: "plan", lane: "full" });
+    const node = await createNode(fixture, {
+      name: "detached-state-repo",
+      parent: product.id,
+      epic: epic.id,
+      prd: "docs/prds/detached-state.md",
+    });
+    const announced = await appendEvent(fixture.layout, fixture.env, {
+      type: RELEASE_ANNOUNCED_EVENT_TYPE,
+      actor: { kind: "agent", id: "claude-code" },
+      item: epic.id,
+      payload: release,
+      session: fixture.agent.session,
+    });
+    await writeDoc(fixture, "docs/prds/detached-state.md");
+    return { node, epic, announced };
+  }
+
+  test("a release with only a version does NOT raise prd-unarchived — the verb would refuse", async () => {
+    const fixture = await setup();
+    await feature(fixture, { version: "0.3.0" });
+
+    expect(findingsFor(await validateStore(fixture.layout), "roadmap.prd-unarchived")).toEqual([]);
+  });
+
+  test("it raises release-incomplete instead, naming the event and every missing key", async () => {
+    const fixture = await setup();
+    const { node, announced } = await feature(fixture, { version: "0.3.0", channel: "  " });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.release-incomplete",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(`${node.id}.md`);
+    expect(findings[0]!.message).toContain(announced.id);
+    expect(findings[0]!.message).toContain("channel");
+    expect(findings[0]!.message).toContain("announcement");
+    expect(findings[0]!.message).not.toContain("`version`");
+    // Never the archival instruction: that command refuses this node.
+    expect(findings[0]!.fix).not.toContain("nahel roadmap archive");
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a complete release raises prd-unarchived and NOT release-incomplete", async () => {
+    const fixture = await setup();
+    await feature(fixture, {
+      version: "0.3.0",
+      channel: "github",
+      announcement: "https://example.invalid/v0.3.0",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.prd-unarchived")).toHaveLength(1);
+    expect(findingsFor(findings, "roadmap.release-incomplete")).toEqual([]);
+  });
+
+  test("a RETRACTED release raises neither — the node is not released at all", async () => {
+    const fixture = await setup();
+    const { announced } = await feature(fixture, { version: "0.3.0" });
+    await appendEvent(fixture.layout, fixture.env, {
+      type: "roadmap.column-retracted",
+      actor: { kind: "agent", id: "claude-code" },
+      payload: { event: announced.id, reason: "announced against the wrong epic" },
+      session: fixture.agent.session,
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.prd-unarchived")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.release-incomplete")).toEqual([]);
   });
 });

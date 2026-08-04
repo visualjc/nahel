@@ -5,11 +5,13 @@ import {
   CORE_EVENT_TYPES,
   MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
   MIGRATION_SELECTED_EVENT_TYPE,
+  MIGRATION_SELECTION_PAYLOAD_KEY,
   ROADMAP_ACKED_EVENT_TYPE,
 } from "../schema/events";
 import { generateId, ID_PATTERN } from "../schema/id";
 import {
   roadmapNodeFrontmatterSchema,
+  type JournalEvent,
   type RoadmapNodeFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
@@ -224,10 +226,18 @@ async function requireFreeName(
 
 /**
  * Resolve `--migration`: the id must name a `roadmap.migration-selected` event
- * in this store's journal. Checked at the write seam rather than left to
- * `validate`, because an attribution nobody can follow back is worse than none
- * — the audit would read the node as belonging to an attempt that does not
- * exist, and the migration it really belongs to would look uncovered.
+ * in this store's journal, and that attempt must still be LIVE. Checked at the
+ * write seam rather than left to `validate`, because an attribution nobody can
+ * follow back is worse than none — the audit would read the node as belonging
+ * to an attempt that does not exist, and the migration it really belongs to
+ * would look uncovered.
+ *
+ * The whole journal is read even after the selection is found, which is the
+ * point: a supersession comes AFTER the event it retires, so a scan that
+ * stopped at the first match would attribute a live node to a retired attempt —
+ * and the audit only ever looks at the ACTIVE one, so that node would be
+ * checked by nothing at all. The most expensive thing this verb can produce is
+ * a node that looks migrated and is audited by no one.
  */
 async function requireSelectionEvent(layout: StoreLayout, id: string): Promise<string> {
   if (!ID_PATTERN.test(id)) {
@@ -236,21 +246,40 @@ async function requireSelectionEvent(layout: StoreLayout, id: string): Promise<s
         `\`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}\` printed`,
     );
   }
+  let selection: JournalEvent | undefined;
+  let retiredBy: JournalEvent | undefined;
   for await (const event of readJournal(layout)) {
-    if (event.id === id) {
-      if (event.type === MIGRATION_SELECTED_EVENT_TYPE) return id;
-      throw new UsageError(
-        `--migration ${id} names a ${event.type} event, not a ${MIGRATION_SELECTED_EVENT_TYPE} — ` +
-          "attribution points at the selected set a migration journaled first " +
-          "(`nahel/workflows/migrate-roadmap.md`, step 3)",
-      );
+    if (event.id === id) selection = event;
+    if (
+      event.type === CORE_EVENT_TYPES.migrationSuperseded &&
+      event.payload[MIGRATION_SELECTION_PAYLOAD_KEY] === id
+    ) {
+      retiredBy = event;
     }
   }
-  throw new UsageError(
-    `--migration ${id} names no event in this store's journal — pass the id ` +
-      `\`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}\` printed (an attribution nobody can follow ` +
-      "back is worse than none)",
-  );
+  if (selection === undefined) {
+    throw new UsageError(
+      `--migration ${id} names no event in this store's journal — pass the id ` +
+        `\`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}\` printed (an attribution nobody can follow ` +
+        "back is worse than none)",
+    );
+  }
+  if (selection.type !== MIGRATION_SELECTED_EVENT_TYPE) {
+    throw new UsageError(
+      `--migration ${id} names a ${selection.type} event, not a ${MIGRATION_SELECTED_EVENT_TYPE} — ` +
+        "attribution points at the selected set a migration journaled first " +
+        "(`nahel/workflows/migrate-roadmap.md`, step 3)",
+    );
+  }
+  if (retiredBy !== undefined) {
+    throw new UsageError(
+      `--migration ${id} names a migration attempt that was superseded by event ${retiredBy.id} — ` +
+        "that attempt is retired, and a node attributed to it would belong to no live migration " +
+        "(nothing audits a retired attempt's coverage). Journal a fresh " +
+        `\`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}\` set and attribute to that one`,
+    );
+  }
+  return id;
 }
 
 async function nodeNew(

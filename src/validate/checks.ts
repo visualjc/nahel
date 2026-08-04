@@ -47,6 +47,7 @@ import {
   ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
   supersededNodeIds,
 } from "../schema/events";
+import { ID_PATTERN } from "../schema/id";
 import { epochSeconds } from "../schema/time";
 import type { HotState } from "../store/hotstate";
 import type { PrototypeRefScan } from "../store/prototype";
@@ -913,12 +914,44 @@ interface SelectedSet {
   usable: boolean;
 }
 
+/** How the two lists are spelled in the command a fix points at. */
+const SELECTION_LOG_FIX =
+  `re-log the complete set: \`nahel log ${MIGRATION_SELECTED_EVENT_TYPE} ` +
+  `--data ${MIGRATION_INCLUDED_PAYLOAD_KEY}='["<item-id>"]' ` +
+  `--data ${MIGRATION_EXCLUDED_PAYLOAD_KEY}='[{"id":"<item-id>","${MIGRATION_EXCLUSION_REASON_KEY}":"<why>"}]'\` ` +
+  "(the journal is append-only, so a set already acted on is retired with `nahel roadmap migration supersede`)";
+
+/** One clause-(a) finding, in the words every one of them shares. */
+function selectionFinding(event: JournalEvent, message: string, fix = SUPERSEDE_FIX): Finding {
+  return {
+    severity: "error",
+    check: MIGRATION_AUDIT_CHECK,
+    message: `migration selection ${event.id} ${message}`,
+    fix,
+  };
+}
+
+/** How a payload value reads in a finding — quoted, and never a sprawling object. */
+function payloadValue(value: unknown): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+}
+
 /**
  * Clause (a): read the selected set out of one selection payload, reporting
- * what makes it unreadable as a call. The rules are the ones a reviewer would
- * apply — a set is a set (no id twice), a call does not contradict itself (no
- * id both included and excluded), and a near-miss without a reason is exactly
- * the silent omission the workflow's near-miss rule exists to prevent.
+ * everything that makes it unreadable as a call. The rules are the ones a
+ * reviewer would apply — every entry names a work item, a set is a set (no id
+ * twice, on either list), a call does not contradict itself (no id both
+ * included and excluded), and a near-miss without a reason is exactly the
+ * silent omission the workflow's near-miss rule exists to prevent.
+ *
+ * It is read STRICTLY, and nothing malformed is salvaged. The set arrives
+ * through `nahel log --data`, which JSON-parses whatever it is handed: this is
+ * the one input the audit joins on that no schema validates on the way in, so
+ * a reader that skipped what it could not parse would turn a broken call into
+ * a silently smaller one — and then audit the store against a coverage story
+ * nobody made. An absent `excluded` is a finding for the same reason an empty
+ * one is not: "no near-misses" is a statement, and silence is not.
  *
  * An id on BOTH lists is reported once and then treated as included: the
  * contradiction is the defect, and reporting the same id again as "a node
@@ -929,62 +962,120 @@ function selectedSet(event: JournalEvent): SelectedSet {
   const included = new Set<string>();
   const excluded = new Set<string>();
   const raw = event.payload[MIGRATION_INCLUDED_PAYLOAD_KEY];
-  if (!Array.isArray(raw) || raw.some((id) => typeof id !== "string")) {
-    findings.push({
-      severity: "error",
-      check: MIGRATION_AUDIT_CHECK,
-      message:
-        `migration selection ${event.id} carries no \`${MIGRATION_INCLUDED_PAYLOAD_KEY}\` list of ` +
-        "work-item ids — the set it declared cannot be read, so nothing can be audited against it",
-      fix: SUPERSEDE_FIX,
-    });
+  if (!Array.isArray(raw)) {
+    findings.push(
+      selectionFinding(
+        event,
+        `carries no \`${MIGRATION_INCLUDED_PAYLOAD_KEY}\` list of work-item ids — the set it ` +
+          "declared cannot be read, so nothing can be audited against it",
+        SELECTION_LOG_FIX,
+      ),
+    );
     return { included, excluded, findings, usable: false };
   }
-  for (const id of raw as string[]) {
-    if (included.has(id)) {
-      findings.push({
-        severity: "error",
-        check: MIGRATION_AUDIT_CHECK,
-        message:
-          `migration selection ${event.id} lists ${id} more than once — the selected set is a set, ` +
-          "and a duplicate reads as two nodes owed for one item",
-        fix: SUPERSEDE_FIX,
-      });
+  for (const entry of raw) {
+    if (typeof entry !== "string" || !ID_PATTERN.test(entry)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `lists ${payloadValue(entry)} under \`${MIGRATION_INCLUDED_PAYLOAD_KEY}\`, which is not a ` +
+            "work-item id — the set names the items that get nodes, so an entry nothing can be " +
+            "looked up by is a call no reviewer can check",
+          SELECTION_LOG_FIX,
+        ),
+      );
       continue;
     }
-    included.add(id);
+    if (included.has(entry)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `lists ${entry} more than once — the selected set is a set, and a duplicate reads as ` +
+            "two nodes owed for one item",
+        ),
+      );
+      continue;
+    }
+    included.add(entry);
   }
+
   const rawExcluded = event.payload[MIGRATION_EXCLUDED_PAYLOAD_KEY];
-  for (const entry of Array.isArray(rawExcluded) ? rawExcluded : []) {
-    if (entry === null || typeof entry !== "object") continue;
+  if (!Array.isArray(rawExcluded)) {
+    findings.push(
+      selectionFinding(
+        event,
+        `carries no \`${MIGRATION_EXCLUDED_PAYLOAD_KEY}\` list of near-misses — a migration that ` +
+          "ruled nothing out says so with an empty list, and silence is not the same statement " +
+          "(an unreadable list is worse: it reads as no near-misses at all)",
+        SELECTION_LOG_FIX,
+      ),
+    );
+    return { included, excluded, findings, usable: false };
+  }
+  for (const entry of rawExcluded) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${payloadValue(entry)}, which is not an ` +
+            `\`{id, ${MIGRATION_EXCLUSION_REASON_KEY}}\` entry — a near-miss is an id AND the ` +
+            "one-line reason a reviewer argues with",
+          SELECTION_LOG_FIX,
+        ),
+      );
+      continue;
+    }
     const near = entry as Record<string, unknown>;
     const id = near["id"];
-    if (typeof id !== "string") continue;
+    if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${payloadValue(id)}, which is not a work-item id — a near-miss nothing can be ` +
+            "looked up by cannot be checked against the store",
+          SELECTION_LOG_FIX,
+        ),
+      );
+      continue;
+    }
     const reason = near[MIGRATION_EXCLUSION_REASON_KEY];
     if (typeof reason !== "string" || reason.trim() === "") {
-      findings.push({
-        severity: "error",
-        check: MIGRATION_AUDIT_CHECK,
-        message:
-          `migration selection ${event.id} excludes ${id} with no \`${MIGRATION_EXCLUSION_REASON_KEY}\` — ` +
-          "a near-miss a reviewer cannot argue with is the silent omission the reason exists to prevent",
-        fix: SUPERSEDE_FIX,
-      });
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${id} with no \`${MIGRATION_EXCLUSION_REASON_KEY}\` — a near-miss a reviewer ` +
+            "cannot argue with is the silent omission the reason exists to prevent",
+        ),
+      );
+      continue;
     }
     if (included.has(id)) {
-      findings.push({
-        severity: "error",
-        check: MIGRATION_AUDIT_CHECK,
-        message:
-          `migration selection ${event.id} lists ${id} as both included and excluded — the call ` +
-          "contradicts itself, and nothing downstream can say whether that item was meant to get a node",
-        fix: SUPERSEDE_FIX,
-      });
+      findings.push(
+        selectionFinding(
+          event,
+          `lists ${id} as both included and excluded — the call contradicts itself, and nothing ` +
+            "downstream can say whether that item was meant to get a node",
+        ),
+      );
+      continue;
+    }
+    if (excluded.has(id)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${id} more than once — the near-miss list is a set too, and two reasons for ` +
+            "one exclusion are two accounts of a call made once",
+        ),
+      );
       continue;
     }
     excluded.add(id);
   }
-  return { included, excluded, findings, usable: true };
+  // A set with ANY defect is not a call the coverage half can be run against:
+  // auditing the store against a partially-read set would report gaps and
+  // inventions that are artefacts of the reading, not of the migration. The
+  // payload finding is the whole answer until the set is re-made.
+  return { included, excluded, findings, usable: findings.length === 0 };
 }
 
 /**
@@ -1029,35 +1120,74 @@ function selectedSet(event: JournalEvent): SelectedSet {
 function checkMigrationAudit(state: ParsedState): Finding[] {
   const selections = state.events.filter((event) => event.type === MIGRATION_SELECTED_EVENT_TYPE);
   if (selections.length === 0) return [];
-  const retired = new Set(
-    state.events
-      .filter((event) => event.type === CORE_EVENT_TYPES.migrationSuperseded)
-      .map((event) => event.payload[MIGRATION_SELECTION_PAYLOAD_KEY])
-      .filter((id): id is string => typeof id === "string"),
-  );
+  /** Each retired attempt, and the supersession that retired it. */
+  const retired = new Map<string, JournalEvent>();
+  /** The node ids those supersessions moved — their absence is already journaled. */
+  const moved = new Set<string>();
+  for (const event of state.events) {
+    if (event.type !== CORE_EVENT_TYPES.migrationSuperseded) continue;
+    const target = event.payload[MIGRATION_SELECTION_PAYLOAD_KEY];
+    if (typeof target === "string") retired.set(target, event);
+    for (const id of supersededNodeIds(event)) moved.add(id);
+  }
+  // A live node attributed to a RETIRED attempt, reported before anything else
+  // and independent of how many selections are active — it is a different fact
+  // from coverage, and the one the rest of this check would never catch: the
+  // audit only ever looks at the active attempt, so such a node belongs to no
+  // attempt anyone audits. `nahel roadmap node new` refuses to write one, but a
+  // refusal at the write seam says nothing about a store another worktree
+  // merged into: it can chart against a selection this branch superseded.
+  //
+  // Nodes the supersession itself NAMED are excluded: their move is journaled,
+  // so a live one is the write-ahead crash window, which repair rolls forward
+  // and `journal.divergence` already reports.
+  const findings: Finding[] = [];
+  for (const event of state.events) {
+    if (event.type !== CORE_EVENT_TYPES.roadmapNodeCreated) continue;
+    const attribution = event.payload[MIGRATION_ATTRIBUTION_PAYLOAD_KEY];
+    if (typeof attribution !== "string") continue;
+    const supersession = retired.get(attribution);
+    if (supersession === undefined) continue;
+    const mutation = mutationRecords(event)[0];
+    if (mutation === undefined || "invalid" in mutation) continue;
+    const nodeId = mutation.record.id;
+    if (moved.has(nodeId) || !state.roadmapNodes.has(nodeId)) continue;
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      path: state.roadmapNodes.get(nodeId)!.path,
+      message:
+        `node ${nodeId} is attributed to migration ${attribution}, which event ${supersession.id} ` +
+        "retired — the node is live and its attempt is not, so no coverage audit will ever look at " +
+        "it (a retired attempt owes nothing, and the audit reads the active one)",
+      fix:
+        `re-create it against the live attempt (\`nahel roadmap node new feature <name> ... --migration <selection-event-id>\`) ` +
+        "or, if it is ordinary charting rather than migration work, without --migration at all",
+    });
+  }
+
   const active = selections.filter((event) => !retired.has(event.id));
   if (active.length > 1) {
-    return [
-      {
-        severity: "error",
-        check: MIGRATION_AUDIT_CHECK,
-        message:
-          `this store carries ${active.length} active migration selections ` +
-          `(${active.map((event) => event.id).join(", ")}) — a store migrates ONCE, and with two ` +
-          "attempts live nothing can say which one owes a node for which item, so the coverage " +
-          "audit is suspended until exactly one is active",
-        fix: "retire the attempt that failed: `nahel roadmap migration supersede <selection-event-id> --reason <why>`",
-      },
-    ];
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `this store carries ${active.length} active migration selections ` +
+        `(${active.map((event) => event.id).join(", ")}) — a store migrates ONCE, and with two ` +
+        "attempts live nothing can say which one owes a node for which item, so the coverage " +
+        "audit is suspended until exactly one is active",
+      fix: "retire the attempt that failed: `nahel roadmap migration supersede <selection-event-id> --reason <why>`",
+    });
+    return findings;
   }
   // Every attempt superseded: the migration was retired, and the journal holds
   // both the attempt and its retirement. There is no active call to audit, and
   // reporting one would invent an authority the store does not carry.
-  if (active.length === 0) return [];
+  if (active.length === 0) return findings;
 
   const selection = active[0]!;
   const set = selectedSet(selection);
-  const findings = set.findings;
+  findings.push(...set.findings);
   if (!set.usable) return findings;
 
   const attributed = state.events.filter(

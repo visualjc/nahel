@@ -370,8 +370,10 @@ describe("the selected set is read strictly, never salvaged (C2)", () => {
     await raw(fixture, { included: [covered.id], excluded: [nearMiss.id] });
     const found = await findings(fixture);
     expect(found).toHaveLength(1);
-    expect(found[0]!.message).toContain("excluded");
-    expect(found[0]!.message).toContain("reason");
+    // A bare id in the near-miss list is the exact shape the reason rule
+    // exists to forbid, so the finding names the entry and the shape it owes.
+    expect(found[0]!.message).toContain(nearMiss.id);
+    expect(found[0]!.message).toContain("{id, reason}");
   });
 
   test("an excluded entry whose id is not an id is an error naming it", async () => {

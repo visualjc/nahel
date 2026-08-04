@@ -361,6 +361,17 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("no `--migration`");
     // And what the attribution buys: the check that reads the join back.
     expect(body).toContain("roadmap.migration-audit");
+    // Attribution to an attempt that was RETIRED is refused — such a node would
+    // belong to no live migration, and nothing would ever audit it.
+    expect(body).toContain("retired attempt");
+  });
+
+  test("both lists are always logged — an absent `excluded` is not an empty one", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    // The set is read strictly, so "nothing was arguable" is a statement the
+    // event has to make, not an omission a reader has to interpret.
+    expect(body).toContain("excluded='[]'");
+    expect(body).toContain("silence");
   });
 
   test("a failed attempt is RETIRED in-store, not reverted in git (C3)", async () => {

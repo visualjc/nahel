@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import { openStoreTolerant } from "../store/layout";
-import { replayPending, type RepairedRecord } from "../store/mutate";
+import { replayDocuments, replayPending, type RepairedRecord } from "../store/mutate";
 import { validateStore, type Finding } from "../validate";
 import { UsageError } from "./item";
 
@@ -49,7 +49,10 @@ async function runValidate(argv: string[], ctx: CommandContext): Promise<number>
 
     let repaired: RepairedRecord[] = [];
     if (flags.repair) {
-      repaired = await replayPending(layout);
+      // Records first, then the documents journaled acts also record (F10) —
+      // neither depends on the other, and both only materialize what the
+      // journal already holds.
+      repaired = [...(await replayPending(layout)), ...(await replayDocuments(layout))];
     }
     // The clock crosses into the pure checks as data: the compaction age
     // threshold (PRD F6.2) compares event timestamps against this reading.

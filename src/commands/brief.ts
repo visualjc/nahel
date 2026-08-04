@@ -51,7 +51,12 @@ async function runBrief(argv: string[], ctx: CommandContext): Promise<number> {
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of briefing an agent on a repo that has no state.
     const config = await readConfig(layout);
-    ctx.stdout(await composeBrief(layout, config, warningsSource(ctx.env.now())));
+    // The brief is rendered FOR the actor this checkout runs as (Phase 4 F5:
+    // "roadmap changes since YOUR last touch"), so the NAHEL_ACTOR override
+    // reaches the view exactly as it reaches every mutation.
+    ctx.stdout(
+      await composeBrief(layout, config, warningsSource(ctx.env.now()), ctx.actorOverride),
+    );
     return 0;
   } catch (error) {
     ctx.stderr(`❌ ${error instanceof Error ? error.message : String(error)}`);

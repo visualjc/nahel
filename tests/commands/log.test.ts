@@ -489,6 +489,9 @@ describe("nahel log — mutation forgery is refused at the write seam", () => {
       "import.note",
       "import.prd-relocated",
       "journal.distilled",
+      // Phase 4 F8: `item update` writes this one, and its whole value is that
+      // the ACT wrote it — a forgeable deliberate-start is no record at all.
+      "item.started-with-open-blocker",
     ]) {
       expect(SELF_RECORDED_EVENT_TYPES.has(required)).toBe(true);
     }

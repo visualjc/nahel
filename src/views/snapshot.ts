@@ -160,3 +160,33 @@ export function descendantIds(
   }
   return covered;
 }
+
+/** An epic that is absent, or names no record, covers nothing at all. */
+const NO_COVERAGE: ReadonlySet<string> = new Set();
+
+/**
+ * The item ids a roadmap node's epic covers (Phase 4 F2's association rule):
+ * the epic item plus its descendants, and NOTHING when the node names no epic
+ * or names an id no record carries.
+ *
+ * That second case is why this is one function rather than a `descendantIds`
+ * call at each site. F2 states the rule as RESOLUTION — an event covers a node
+ * iff its `item` resolves to that node's epic item or to a descendant of it —
+ * and an id no record carries resolves to nothing. Seeding the walk with it
+ * instead collects the ORPHANS still naming the dead id as their parent, so a
+ * node whose epic was dropped keeps reporting work: a false `released` stage in
+ * F9/F10, a shipped act grouped under a ghost feature in `standup`, and takeable
+ * items scoped to a node in the `frontier`. Three consumers, one bug, so one
+ * guard — a copy per site is a copy that can be forgotten again.
+ *
+ * (Per the Phase 4 EPIC review, which supersedes the narrower F2-round ruling
+ * that ratified coverage by ref.)
+ */
+export function epicCoverage(
+  items: readonly WorkItemFrontmatter[],
+  epic: string | undefined,
+): ReadonlySet<string> {
+  if (epic === undefined) return NO_COVERAGE;
+  if (!items.some((item) => item.id === epic)) return NO_COVERAGE;
+  return descendantIds(items, epic);
+}

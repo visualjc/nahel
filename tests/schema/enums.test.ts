@@ -7,12 +7,21 @@ import {
   INCEPTION_TIERS,
   LANES,
   MERGE_AUTHORITIES,
+  PRODUCT_GOVERNANCE_MODES,
+  ROADMAP_HORIZONS,
+  ROADMAP_NODE_KINDS,
   ROUTING_RESPONSIBILITIES,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_TYPES,
 } from "../../src/schema/enums";
-import { dispatchSchema, mergeSchema, routingSchema } from "../../src/schema/records";
+import {
+  dispatchSchema,
+  governanceSchema,
+  mergeSchema,
+  roadmapNodeFrontmatterSchema,
+  routingSchema,
+} from "../../src/schema/records";
 
 describe("schema/enums (CONTEXT.md glossary is normative)", () => {
   test("work item types are exactly feature|bug|chore|plan|prototype|qa", () => {
@@ -53,8 +62,34 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
     expect([...INCEPTION_TIERS]).toEqual(["seed", "standard", "full"]);
   });
 
-  test("governance modes are exactly human|delegated", () => {
+  test("governance modes stay exactly human|delegated — the ARCHITECTURE side's set", () => {
+    // Phase 4 F5 widened the product side only; widening this enum in place
+    // would have made `governance.architecture: agent` valid, which
+    // docs/roadmap.md §7 does not permit until Phase 5 decides otherwise.
     expect([...GOVERNANCE_MODES]).toEqual(["human", "delegated"]);
+  });
+
+  test("product governance modes are exactly human|delegated|agent (ADR-0008 amendment 2026-08-01)", () => {
+    expect([...PRODUCT_GOVERNANCE_MODES]).toEqual(["human", "delegated", "agent"]);
+  });
+
+  test("the two governance fields carry SEPARATE enums: product takes agent, architecture refuses it", () => {
+    // The refusal falls out of the field's own z.enum — no cross-field
+    // predicate — so the issue names the offending field and its legal values.
+    expect(governanceSchema.parse({ product: "agent", architecture: "human" })).toEqual({
+      product: "agent",
+      architecture: "human",
+    });
+
+    const refused = governanceSchema.safeParse({ product: "agent", architecture: "agent" });
+    expect(refused.success).toBe(false);
+    // The product side accepting `agent` in the SAME config rescues nothing.
+    expect(refused.error!.issues).toHaveLength(1);
+    const issue = refused.error!.issues[0]!;
+    expect(issue.path).toEqual(["architecture"]);
+    expect(issue.message).toContain("human");
+    expect(issue.message).toContain("delegated");
+    expect(issue.message).not.toContain("agent");
   });
 
   test("founding modes are exactly guided|hands-off — interaction modes of ONE workflow (F9.4)", () => {
@@ -91,6 +126,25 @@ describe("schema/enums (CONTEXT.md glossary is normative)", () => {
       "review2",
       "default",
     ]);
+  });
+
+  test("roadmap node kinds are exactly product|feature|initiative (Phase 4 F1)", () => {
+    // Three generations, ONE record type: product intent → feature intent →
+    // the work items themselves (generation three, unchanged work items).
+    expect([...ROADMAP_NODE_KINDS]).toEqual(["product", "feature", "initiative"]);
+  });
+
+  test("roadmap horizons are exactly now|next|later — no ranks, no scores (Phase 4 F1)", () => {
+    // The PRD's non-goal is load-bearing: horizons are the ONLY sequencing
+    // vocabulary, and no ordering number is ever stored.
+    expect([...ROADMAP_HORIZONS]).toEqual(["now", "next", "later"]);
+  });
+
+  test("the roadmap enums ARE the node record's kind and horizon value sets", () => {
+    // Same discipline as merge/dispatch: drift between the enum and the schema
+    // would let a node carry a kind no command can name (or vice versa).
+    expect([...roadmapNodeFrontmatterSchema.shape.kind.options]).toEqual([...ROADMAP_NODE_KINDS]);
+    expect([...roadmapNodeFrontmatterSchema.shape.horizon.options]).toEqual([...ROADMAP_HORIZONS]);
   });
 
   test("dispatch agent kinds are exactly claude|codex|cursor-agent (F1.3)", () => {

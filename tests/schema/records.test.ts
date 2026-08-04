@@ -8,6 +8,7 @@ import {
   distilledSchema,
   journalEventSchema,
   observationFrontmatterSchema,
+  roadmapNodeFrontmatterSchema,
   runSchema,
   workItemFrontmatterSchema,
   type WorkItemFrontmatter,
@@ -82,6 +83,17 @@ const validObservation = {
 const validConfig = {
   knowledge: { product: "PRODUCT.md", context: "CONTEXT.md", adr: "docs/adr" },
   actor: { kind: "human", id: "jim" },
+};
+
+const validNode = {
+  id: "9k3m2n4p",
+  name: "detached-state-repo",
+  kind: "feature",
+  horizon: "now",
+  adrs: [],
+  features: [],
+  created: NOW,
+  updated: NOW,
 };
 
 describe("schema/records — work item frontmatter", () => {
@@ -530,6 +542,199 @@ describe("schema/records — observation frontmatter", () => {
       "observation bad item ref",
     );
     expect(issues.some((i) => i.startsWith("item:") && i.includes("base32"))).toBe(true);
+  });
+});
+
+describe("schema/records — roadmap node frontmatter (Phase 4 F1)", () => {
+  test("accepts a minimal valid node: one record type, kind + horizon + empty link lists", () => {
+    expectAccepted(roadmapNodeFrontmatterSchema, validNode, "node minimal");
+  });
+
+  test("accepts a product node with its design doc and ADR cross-references", () => {
+    expectAccepted(
+      roadmapNodeFrontmatterSchema,
+      {
+        ...validNode,
+        kind: "product",
+        name: "nahel",
+        design_doc: "docs/roadmap.md",
+        adrs: ["docs/adr/0012-merge-safe-state.md", "docs/adr/0004-determinism.md"],
+      },
+      "node product",
+    );
+  });
+
+  test("accepts a feature node with prd, epic item id, parent, and predecessor", () => {
+    expectAccepted(
+      roadmapNodeFrontmatterSchema,
+      {
+        ...validNode,
+        parent: "abcdefgh",
+        prd: "docs/prds/detached-state-repo.md",
+        epic: "0gz8r4cm",
+        predecessor: "kqm3vx7t",
+      },
+      "node feature full",
+    );
+  });
+
+  test("accepts an initiative node with sideways feature links", () => {
+    expectAccepted(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, kind: "initiative", features: ["abcdefgh", "0gz8r4cm"] },
+      "node initiative",
+    );
+  });
+
+  test("rejects an unknown kind, listing the valid kinds", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, kind: "epic" },
+      "node bad kind",
+    );
+    const kindIssue = issues.find((i) => i.startsWith("kind:"));
+    expect(kindIssue).toBeDefined();
+    for (const valid of ["product", "feature", "initiative"]) {
+      expect(kindIssue).toContain(valid);
+    }
+  });
+
+  test("rejects an unknown horizon, listing now|next|later", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, horizon: "someday" },
+      "node bad horizon",
+    );
+    const horizonIssue = issues.find((i) => i.startsWith("horizon:"));
+    expect(horizonIssue).toBeDefined();
+    for (const valid of ["now", "next", "later"]) {
+      expect(horizonIssue).toContain(valid);
+    }
+  });
+
+  test("requires a horizon — every node carries one (F1)", () => {
+    const { horizon: _omitted, ...withoutHorizon } = validNode;
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      withoutHorizon,
+      "node missing horizon",
+    );
+    expect(issues.some((i) => i.startsWith("horizon:"))).toBe(true);
+  });
+
+  test("rejects a non-slug name — every node is addressable by name (F1)", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, name: "Detached State Repo" },
+      "node bad name",
+    );
+    expect(issues.some((i) => i.startsWith("name:") && i.includes("slug"))).toBe(true);
+  });
+
+  test("rejects a malformed id — nodes use the same id discipline as work items", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, id: "NOT-VALID-ID" },
+      "node bad id",
+    );
+    expect(issues.some((i) => i.startsWith("id:") && i.includes("base32"))).toBe(true);
+  });
+
+  test("rejects malformed parent, epic, and predecessor refs, each pointing at its field", () => {
+    for (const field of ["parent", "epic", "predecessor"] as const) {
+      const issues = rejectionIssues(
+        roadmapNodeFrontmatterSchema,
+        { ...validNode, [field]: "nope" },
+        `node bad ${field}`,
+      );
+      expect(issues.some((i) => i.startsWith(`${field}:`) && i.includes("base32"))).toBe(true);
+    }
+  });
+
+  test("rejects a malformed initiative link, pointing at the exact index", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, kind: "initiative", features: ["abcdefgh", "BAD"] },
+      "node bad features",
+    );
+    expect(issues.some((i) => i.startsWith("features.1:"))).toBe(true);
+  });
+
+  test("hardens design_doc and prd paths like every other path field (no absolute, no traversal)", () => {
+    for (const [field, bad] of [
+      ["design_doc", "/etc/passwd"],
+      ["design_doc", "../outside/roadmap.md"],
+      ["prd", "/tmp/prd.md"],
+      ["prd", "../../prds/x.md"],
+    ] as const) {
+      const issues = rejectionIssues(
+        roadmapNodeFrontmatterSchema,
+        { ...validNode, [field]: bad },
+        `node bad ${field} ${bad}`,
+      );
+      expect(issues.some((i) => i.startsWith(`${field}:`))).toBe(true);
+    }
+  });
+
+  test("hardens ADR reference paths too, pointing at the exact index", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, kind: "product", adrs: ["docs/adr/0001-x.md", "../../../etc/passwd"] },
+      "node bad adr path",
+    );
+    expect(issues.some((i) => i.startsWith("adrs.1:"))).toBe(true);
+  });
+
+  test("reads ADR references back in RECORDED order — the list is a sequence, not a set", () => {
+    const adrs = [
+      "docs/adr/0013-prd-lifecycle.md",
+      "docs/adr/0004-determinism.md",
+      "docs/adr/0012-merge-safe-state.md",
+    ];
+    const parsed = roadmapNodeFrontmatterSchema.parse({ ...validNode, kind: "product", adrs });
+    expect(parsed.adrs).toEqual(adrs);
+  });
+
+  test("rejects a hand-written status field — node status is DERIVED, never stored (F2)", () => {
+    // Strict objects make F2's "no status field is ever written on a node"
+    // mechanical: there is no key to write it into.
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, status: "in-flight" },
+      "node with status",
+    );
+    expect(issues.some((i) => i.includes("status"))).toBe(true);
+  });
+
+  test("rejects an unknown key — a field typo is a validation error, never silent state", () => {
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, horzon: "now" },
+      "node unknown key",
+    );
+    expect(issues.some((i) => i.includes("horzon"))).toBe(true);
+  });
+
+  test("accepts a node omitting the link lists — an absent list is soft, judged by validate", () => {
+    // Every per-kind field is optional on the one record: a feature node has
+    // no ADR list and a product node no sideways links, so an omitted key must
+    // reach `nahel validate` — which owns the kind and cardinality judgment —
+    // instead of dying as a schema error before soft validation can speak.
+    const { adrs: _a, features: _f, ...bare } = validNode;
+    expectAccepted(roadmapNodeFrontmatterSchema, bare, "node without link lists");
+    const parsed = roadmapNodeFrontmatterSchema.parse(bare);
+    expect(parsed.adrs).toBeUndefined();
+    expect(parsed.features).toBeUndefined();
+  });
+
+  test("still validates every entry of a link list that IS present", () => {
+    // Optional is not unchecked.
+    const issues = rejectionIssues(
+      roadmapNodeFrontmatterSchema,
+      { ...validNode, adrs: ["../../etc/passwd"] },
+      "node bad adr in present list",
+    );
+    expect(issues.some((i) => i.startsWith("adrs.0:"))).toBe(true);
   });
 });
 

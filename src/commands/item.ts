@@ -2,10 +2,7 @@ import { parseArgs } from "node:util";
 import type { z } from "zod";
 import { LANES, WORK_ITEM_STATUSES, WORK_ITEM_TYPES, type WorkItemStatus } from "../schema/enums";
 import type { Env } from "../schema/env";
-import {
-  CORE_EVENT_TYPES,
-  PROTOTYPE_MERGE_REFUSED_EVENT_TYPE,
-} from "../schema/events";
+import { CORE_EVENT_TYPES, PROTOTYPE_MERGE_REFUSED_EVENT_TYPE } from "../schema/events";
 import { generateId } from "../schema/id";
 import {
   workItemFrontmatterSchema,
@@ -142,6 +139,40 @@ const CLOSED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
  * `nahel validate`'s prototype.* checks are the git-side half.
  */
 const MERGE_BOUND_STATUSES: readonly WorkItemStatus[] = ["in-review", "done"];
+
+/**
+ * The statuses that stop a dependency blocking its dependents (Phase 4 F8) —
+ * the same two the frontier's work-item predicate settles on.
+ */
+const SETTLED_STATUSES: readonly WorkItemStatus[] = ["done", "dropped"];
+
+/**
+ * The dependencies of `item` that have NOT settled — every `depends_on` target
+ * still short of `done`/`dropped`, plus every target no record carries (F8's
+ * conservative reading: the record may arrive by a later merge, ADR-0012, and
+ * `validate` reports the dangling edge). In the recorded `depends_on` order, so
+ * two readings of the same item name the blockers the same way.
+ *
+ * Read from DISK rather than from argv, because a `--depends-on` set in the
+ * same call is part of the state being started against.
+ */
+async function openBlockers(
+  layout: StoreLayout,
+  item: WorkItemFrontmatter,
+): Promise<{ id: string; status: string }[]> {
+  const open: { id: string; status: string }[] = [];
+  for (const id of item.depends_on) {
+    if (!(await itemExists(layout, id))) {
+      open.push({ id, status: "no record here" });
+      continue;
+    }
+    const { frontmatter } = await readItem(layout, id);
+    if (!SETTLED_STATUSES.includes(frontmatter.status)) {
+      open.push({ id, status: frontmatter.status });
+    }
+  }
+  return open;
+}
 
 const USAGE = `usage:
   nahel item new <type> <name> <lane> [--parent <id>] [--depends-on <id>]...
@@ -403,12 +434,47 @@ async function itemUpdate(
   }
   next.updated = env.now();
 
+  // The anti-waterfall rule (Phase 4 F8): starting an item whose dependencies
+  // are still live is PERMITTED — blocking is advisory everywhere, and nothing
+  // below refuses. Reaching `in-progress` from anything else IS the start; a
+  // call that re-states the status the item already holds started nothing.
+  const starting = next.status === "in-progress" && current.status !== "in-progress";
+  const blockers = starting ? await openBlockers(ctx.layout, next) : [];
+
+  // A deliberate start is journaled under its OWN type — the WRITE-AHEAD event
+  // for this transition, not a note appended after one. The blockers ride that
+  // same event through extraPayload, exactly as `item.claimed` carries its git
+  // baseline: an annotation needing a second append is an annotation a kill can
+  // drop, and what it would leave behind — a blocked start recorded as an
+  // ordinary one — is undetectable, because the `item.updated` already matches
+  // disk. As the mutation event itself it inherits the one crash shape the
+  // store heals. Everything that learns mutation types by NAME therefore has to
+  // know this one: MUTATION_EVENT_TYPES (replay and divergence) and
+  // views/standup.ts's item-record set (movement).
   await mutate(ctx, {
     target: "item",
-    eventType: CORE_EVENT_TYPES.itemUpdated,
+    eventType:
+      blockers.length > 0 ? CORE_EVENT_TYPES.itemStartedBlocked : CORE_EVENT_TYPES.itemUpdated,
     frontmatter: next,
     body,
+    ...(blockers.length === 0
+      ? {}
+      : {
+          extraPayload: {
+            from: current.status,
+            blockers: blockers.map((blocker) => blocker.id),
+          },
+        }),
   });
+  if (blockers.length > 0) {
+    // Said out loud as well as recorded: the point of the rule is that the
+    // choice is VISIBLE, and a journal nobody reads until later is not that.
+    console.log(
+      `⚠️ item ${id} started with ${blockers.length} open blocker${blockers.length === 1 ? "" : "s"}: ` +
+        `${blockers.map((blocker) => `${blocker.id} (${blocker.status})`).join(", ")} — ` +
+        "recorded, not refused (blocking is advisory)",
+    );
+  }
   await closeStoreContext(ctx);
   return 0;
 }

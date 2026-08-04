@@ -1,0 +1,1565 @@
+import { DECISION_TICKET_STATES, ROADMAP_HORIZONS } from "../schema/enums";
+import {
+  CORE_EVENT_TYPES,
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  DEPLOY_ENVIRONMENT_PAYLOAD_KEY,
+  DEPLOY_REQUIRED_PAYLOAD_KEYS,
+  QA_SWEEP_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+  RELEASE_REQUIRED_PAYLOAD_KEYS,
+  RELEASE_VERSION_PAYLOAD_KEY,
+  RETRACTION_EVENT_PAYLOAD_KEY,
+  RETRACTION_REASON_PAYLOAD_KEY,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
+} from "../schema/events";
+import type {
+  JournalEvent,
+  RoadmapNodeFrontmatter,
+  WorkItemFrontmatter,
+} from "../schema/records";
+import { compareEvents } from "../store/journal";
+import type { MapRecord, RoadmapNodeRecord, TicketRecord } from "../store/layout";
+import { buildItemTree, descendantIds, epicCoverage } from "./snapshot";
+import { renderItemTree } from "./status";
+
+/**
+ * The roadmap node renderer and its derived statuses (Phase 4 F1 + F2): PURE
+ * functions over records already read from the store — no I/O, no clock, no
+ * randomness, so the same nodes always render byte-identical output, and a
+ * render on a fresh clone of the same commit matches one on the machine that
+ * wrote it.
+ */
+
+/**
+ * The facts about a node that live on OTHER nodes, so a single record read
+ * cannot answer them: which nodes name this one as their predecessor (lineage
+ * read forwards), and which initiatives link it sideways (membership read from
+ * the feature's side). Both in id order — the order readRoadmapNodes returns.
+ */
+export interface RoadmapNodeLinks {
+  successors: string[];
+  initiatives: string[];
+}
+
+/** Collect the reverse links pointing AT `id` (see RoadmapNodeLinks). */
+export function roadmapNodeLinks(
+  nodes: readonly RoadmapNodeRecord[],
+  id: string,
+): RoadmapNodeLinks {
+  const successors: string[] = [];
+  const initiatives: string[] = [];
+  for (const { frontmatter } of nodes) {
+    if (frontmatter.predecessor === id) successors.push(frontmatter.id);
+    // An absent link list means no links: the schema leaves it optional so an
+    // omitted key reaches validate as a soft judgment, not a parse failure.
+    if ((frontmatter.features ?? []).includes(id)) initiatives.push(frontmatter.id);
+  }
+  return { successors, initiatives };
+}
+
+/**
+ * Render one node: a header line in the house style of `status` (name, kind,
+ * then `key=value` fields), one indented line per field it actually carries,
+ * and the intent prose as the body below. Absent fields print nothing at all —
+ * a blank `prd=` would read as a recorded empty path.
+ */
+export function renderRoadmapNode(record: RoadmapNodeRecord, links: RoadmapNodeLinks): string {
+  const node = record.frontmatter;
+  const lines = [
+    [node.name, node.kind, `horizon=${node.horizon}`, `id=${node.id}`].join("  "),
+  ];
+  const field = (key: string, value: string | undefined): void => fieldLine(lines, key, value);
+  field("parent", node.parent);
+  field("design_doc", node.design_doc);
+  field("adrs", (node.adrs ?? []).join(", "));
+  field("prd", node.prd);
+  field("epic", node.epic);
+  field("predecessor", node.predecessor);
+  field("successors", links.successors.join(", "));
+  field("features", (node.features ?? []).join(", "));
+  field("initiatives", links.initiatives.join(", "));
+  lines.push(`  created=${node.created}  updated=${node.updated}`);
+  const intent = record.body.trimEnd();
+  if (intent !== "") lines.push("", intent);
+  return lines.join("\n");
+}
+
+/**
+ * One indented `key=value` field line, skipped entirely when the value is
+ * absent or empty — a blank `prd=` would read as a recorded empty path.
+ */
+function fieldLine(lines: string[], key: string, value: string | undefined): void {
+  if (value !== undefined && value !== "") lines.push(`  ${key}=${value}`);
+}
+
+/** A section heading with its count, then one indented line per entry. */
+function section(lines: string[], heading: string, entries: readonly string[]): void {
+  lines.push("", `${heading} (${entries.length}):`);
+  // An EMPTY section still prints its heading: a section that vanished when it
+  // emptied would read as one that was never charted, which is a different
+  // fact about a map (F7's five sections are all always present).
+  if (entries.length === 0) lines.push("  (none)");
+  for (const entry of entries) lines.push(`  ${entry}`);
+}
+
+/**
+ * The question a ticket asks, in one line — its body's first. A DISTILLED
+ * ticket has none left (`distill` emptied the body once the decision read back
+ * without it), so every caller must be able to render the empty string.
+ */
+function ticketQuestion(record: TicketRecord): string {
+  return record.body.split("\n", 1)[0] ?? "";
+}
+
+/** One ticket as a map's reader sees it: identity, then the question's first line. */
+function ticketLines(record: TicketRecord): string[] {
+  const ticket = record.frontmatter;
+  const head = [ticket.id, ticket.type, ticket.state];
+  if (ticket.claimant !== undefined) head.push(`claimed by ${ticket.claimant}`);
+  if (ticket.blockers.length > 0) head.push(`blocked by ${ticket.blockers.join(", ")}`);
+  const question = ticketQuestion(record);
+  // A distilled ticket has no body left; the decision line below carries it.
+  return question === "" ? [head.join("  ")] : [head.join("  "), `    ${question}`];
+}
+
+/**
+ * Order the tickets of a map by the JOURNAL EVENT that put each in its terminal
+ * state — `resolution` for a resolve, `closure` for a close — in the store's
+ * canonical total order (`ts` → `seq` → `id`, compareEvents), so the derived
+ * sections read the same on every machine and whatever order `tickets` arrives
+ * in.
+ *
+ * Deliberately NOT `updated`: `distill` moves a ticket's `updated` long after
+ * the decision was made, so an index ordered by the record's own clock would
+ * re-shuffle itself every time a body was emptied.
+ *
+ * A ticket whose event the journal does not carry — a compacted history, or a
+ * record written another way — sorts AFTER every dated one rather than being
+ * given a date it never earned, and those tie by ticket id (the precedent
+ * horizonEntryOrder set for the same problem).
+ */
+function terminalActOrder(
+  tickets: readonly TicketRecord[],
+  events: ReadonlyMap<string, JournalEvent>,
+  ref: (record: TicketRecord) => string | undefined,
+): TicketRecord[] {
+  const actOf = (record: TicketRecord): JournalEvent | undefined => {
+    const id = ref(record);
+    return id === undefined ? undefined : events.get(id);
+  };
+  return [...tickets].sort((a, b) => {
+    const first = actOf(a);
+    const second = actOf(b);
+    if (first !== undefined && second !== undefined) {
+      const order = compareEvents(first, second);
+      if (order !== 0) return order;
+    } else if (first !== undefined || second !== undefined) {
+      return first !== undefined ? -1 : 1;
+    }
+    const ids = [a.frontmatter.id, b.frontmatter.id];
+    return ids[0]! < ids[1]! ? -1 : ids[0]! > ids[1]! ? 1 : 0;
+  });
+}
+
+/**
+ * Render one map (F7): the node it charts, its destination, its Notes prose,
+ * and its listed sections — decisions so far, the questions a decision
+ * invalidated, not yet specified, out of scope, and the tickets hanging off it.
+ * Pure over records already read, so two reads of an unchanged store are
+ * byte-identical (HC1).
+ *
+ * THREE of those sections are derived from the tickets rather than stored on
+ * the map: every decision, the questions another decision killed, and the
+ * out-of-scope lines a close earned. The facts already live on the tickets, and
+ * the layer's rule is that anything derivable is derived and never hand-set
+ * (F2) — which is also what keeps a resolve and a close off the one record
+ * every ticket on the map shares. What the map still stores is what it CHARTED:
+ * its fog, and the out-of-scope lines ruled before any ticket existed.
+ *
+ * `node` is the record the map charts, or null when no node carries that id yet
+ * (it may arrive by a later merge — `validate` reports the dangling ref).
+ * `events` are the terminal ticket acts the derived order reads; an event the
+ * caller did not collect simply leaves its ticket undated (see terminalActOrder).
+ */
+export function renderMap(
+  record: MapRecord,
+  node: RoadmapNodeRecord | null,
+  tickets: readonly TicketRecord[],
+  events: readonly JournalEvent[],
+): string {
+  const map = record.frontmatter;
+  const lines = [`map of ${node?.frontmatter.name ?? map.node}  id=${map.id}`];
+  fieldLine(lines, "node", map.node);
+  fieldLine(lines, "destination", map.destination);
+  lines.push(`  created=${map.created}  updated=${map.updated}`);
+  const notes = record.body.trimEnd();
+  if (notes !== "") lines.push("", notes);
+  const acts = new Map(events.map((event) => [event.id, event]));
+
+  const decisions: string[] = [];
+  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.resolution)) {
+    if (frontmatter.state !== "resolved" || frontmatter.decision === undefined) continue;
+    decisions.push(`${frontmatter.id}  ${frontmatter.decision}`);
+  }
+  section(lines, "decisions so far", decisions);
+  // The questions another decision answered out of existence (F7's invalidated
+  // close). It prints HERE, next to the decisions, because the decision that
+  // killed each of these is one of them — and deliberately NOT under Out of
+  // scope, which means "ruled beyond the destination" and would be false of
+  // every line below.
+  section(
+    lines,
+    "invalidated by a decision",
+    tickets
+      .filter(({ frontmatter }) => frontmatter.invalidated_by !== undefined)
+      .map(({ frontmatter }) =>
+        [`${frontmatter.id}  invalidated by ${frontmatter.invalidated_by}`, frontmatter.reason]
+          .filter((part) => part !== undefined && part !== "")
+          .join("  —  "),
+      ),
+  );
+  section(lines, "not yet specified", map.fog);
+  // The charted lines first, in the order they were charted, then one per
+  // out-of-scope close in the order the closes happened: a ruling made before
+  // any ticket existed genuinely precedes every ruling a ticket earned.
+  const outOfScope = [...map.out_of_scope];
+  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.closure)) {
+    if (frontmatter.state !== "closed" || frontmatter.invalidated_by !== undefined) continue;
+    outOfScope.push(
+      [frontmatter.reason, `(${frontmatter.id})`].filter((part) => part !== undefined).join("  "),
+    );
+  }
+  section(lines, "out of scope", outOfScope);
+  lines.push("", `tickets (${tickets.length}):`);
+  if (tickets.length === 0) lines.push("  (none)");
+  for (const ticket of tickets) for (const line of ticketLines(ticket)) lines.push(`  ${line}`);
+  return lines.join("\n");
+}
+
+/**
+ * Render one decision ticket (F7): its identity and lifecycle facts — the same
+ * `state`, `claimant` and `blockers` F8's frontier predicate joins on — then
+ * the question itself as the body. A distilled ticket prints no question,
+ * because there is none left; its decision line is what remains.
+ */
+export function renderTicket(record: TicketRecord, map: MapRecord | null): string {
+  const ticket = record.frontmatter;
+  const lines = [`ticket ${ticket.id}  ${ticket.type}  ${ticket.state}`];
+  fieldLine(lines, "map", ticket.map);
+  fieldLine(lines, "destination", map?.frontmatter.destination);
+  fieldLine(lines, "claimant", ticket.claimant);
+  fieldLine(lines, "blockers", ticket.blockers.join(", "));
+  fieldLine(lines, "decision", ticket.decision);
+  fieldLine(lines, "reason", ticket.reason);
+  fieldLine(lines, "invalidated_by", ticket.invalidated_by);
+  fieldLine(lines, "resolution", ticket.resolution);
+  lines.push(`  created=${ticket.created}  updated=${ticket.updated}`);
+  const question = record.body.trimEnd();
+  if (question !== "") lines.push("", question);
+  return lines.join("\n");
+}
+
+/**
+ * A feature node's dev status (F2): the rollup of the work under its epic.
+ * There is no `unknown` work-item status — the word means "nahel cannot see
+ * the epic", which is a different fact from any status a child could hold.
+ */
+export type RoadmapDevStatus = "planned" | "in-flight" | "built" | "unknown";
+
+/**
+ * The truth-table rows that are ALSO `validate` warnings: a node naming an epic
+ * no item record carries, an epic whose every descendant was dropped, and — one
+ * level up, the same fact about an epic that IS the work — a childless epic
+ * that was itself dropped (B). Each derives a status all the same: the warning
+ * is advisory, and the rollup stays total (F2: every case has a stated
+ * outcome).
+ */
+export type RoadmapEpicAnomaly = "epic-missing" | "all-dropped" | "epic-dropped";
+
+/** A dev-status derivation: the status, plus the anomaly `validate` reports. */
+export interface RoadmapDevRollup {
+  status: RoadmapDevStatus;
+  anomaly?: RoadmapEpicAnomaly;
+}
+
+/**
+ * Derive a feature node's dev status from the work items under its epic (F2),
+ * total over the recorded vocabulary:
+ *
+ * | epic state | dev status |
+ * | no epic id on the node | `planned` |
+ * | epic id with no item record | `unknown` + `epic-missing` |
+ * | epic with NO descendants at all | the epic's OWN status (see below) |
+ * | descendants, all `dropped` | `planned` + `all-dropped` |
+ * | every non-dropped descendant `done` | `built` |
+ * | every non-dropped descendant `backlog` | `planned` |
+ * | anything else | `in-flight` |
+ *
+ * The rollup covers the epic's whole SUBTREE, not just its direct children:
+ * work nests (an epic's task can own its own children), and the same coverage
+ * rule the event association uses below — snapshot.ts's epicCoverage, over the
+ * descendantIds walk claims and `progress --item` also use — is the only one
+ * under which "flipping a leaf work item to done changes the feature's status"
+ * (F2's first acceptance criterion) holds.
+ *
+ * The epic item's own status is read in EXACTLY ONE case (PR #26 review,
+ * follow-up B): when the epic has no descendants at all. Then it is not a
+ * container, it is the work — a `direct`-lane epic never grows children — and
+ * the earlier reading rendered such a feature `planned` while it was being
+ * built, and `planned` still once it was done. `backlog` → `planned`,
+ * `in-progress`/`blocked`/`in-review` → `in-flight`, `done` → `built`,
+ * `dropped` → `planned` + `epic-dropped`. The moment ONE descendant exists the
+ * root is excluded again, because then it IS the container: a `done` epic must
+ * never override the backlog work still open underneath it, and must never
+ * override the all-dropped row.
+ *
+ * `dropped` descendants are excluded entirely (dropped work is not work), and
+ * `blocked` / `in-review` fall into the catch-all row as started work —
+ * blocking is advisory (F8), never a roadmap state of its own.
+ */
+export function featureDevStatus(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+): RoadmapDevRollup {
+  return devRollup(node.epic, items, epicCoverage(items, node.epic));
+}
+
+
+/**
+ * The rollup over an ALREADY-computed coverage set — the single place every row
+ * of the truth table lives, so `validate`'s reading and the views' reading
+ * cannot drift apart.
+ */
+function devRollup(
+  epic: string | undefined,
+  items: readonly WorkItemFrontmatter[],
+  covered: ReadonlySet<string>,
+): RoadmapDevRollup {
+  if (epic === undefined) return { status: "planned" };
+  const root = items.find((item) => item.id === epic);
+  if (root === undefined) return { status: "unknown", anomaly: "epic-missing" };
+  const children = items.filter((item) => item.id !== epic && covered.has(item.id));
+  // No descendants: the epic is the work, not a container over it (B).
+  if (children.length === 0) return childlessRollup(root.status);
+  const live = children.filter((item) => item.status !== "dropped");
+  if (live.length === 0) return { status: "planned", anomaly: "all-dropped" };
+  if (live.every((item) => item.status === "done")) return { status: "built" };
+  if (live.every((item) => item.status === "backlog")) return { status: "planned" };
+  return { status: "in-flight" };
+}
+
+/**
+ * A childless epic's own status, as the feature's rollup (B) — total over the
+ * six work-item statuses, in the same vocabulary the subtree rows use:
+ * `dropped` is not work, so it reads `planned` like an all-dropped subtree and
+ * earns the anomaly for the same reason; `blocked` and `in-review` are started
+ * work, never states of their own.
+ */
+function childlessRollup(status: WorkItemFrontmatter["status"]): RoadmapDevRollup {
+  if (status === "done") return { status: "built" };
+  if (status === "dropped") return { status: "planned", anomaly: "epic-dropped" };
+  if (status === "backlog") return { status: "planned" };
+  return { status: "in-flight" };
+}
+
+/**
+ * The feature nodes a product node rolls up (F2): its `feature` CHILDREN, in
+ * the id order readRoadmapNodes returns. An `initiative` child is deliberately
+ * not one of them — an initiative links features sideways and its own rollup
+ * semantics are undefined (F1's non-goal), so counting it here would invent a
+ * number the PRD refuses to define.
+ */
+export function productFeatureNodes(
+  nodes: readonly RoadmapNodeRecord[],
+  productId: string,
+): RoadmapNodeRecord[] {
+  return nodes.filter(
+    ({ frontmatter }) => frontmatter.kind === "feature" && frontmatter.parent === productId,
+  );
+}
+
+/** The order the product distribution prints its buckets in. */
+const DEV_STATUS_ORDER: readonly RoadmapDevStatus[] = ["built", "in-flight", "planned", "unknown"];
+
+/**
+ * A product node's status (F2): the count distribution of its feature
+ * children's dev statuses — never one word that hides the shape, and never a
+ * bucket left out. Every bucket prints even at zero, `unknown` included: the
+ * distribution is a fixed-width shape a reader can scan down a column, and an
+ * omitted bucket would read as a bucket that was not derived.
+ *
+ * A product with no feature children renders `no features` — the explicit
+ * statement, not a row of zeros that would claim an empty rollup was measured.
+ */
+export function renderProductStatus(statuses: readonly RoadmapDevStatus[]): string {
+  if (statuses.length === 0) return "no features";
+  return DEV_STATUS_ORDER.map(
+    (status) => `${statuses.filter((each) => each === status).length} ${status}`,
+  ).join(" · ");
+}
+
+/** The column value for a fact the store does not carry (F2's no-event rows). */
+const NO_VALUE = "—";
+
+/**
+ * The three lifecycle facts the columns read — and, exactly, the events a
+ * retraction may name. Anything else is not a column fact: a retraction
+ * pointing at an item mutation, at another retraction, or at an id no event
+ * carries names nothing this derivation reads, so it changes nothing (and
+ * `validate` says so).
+ */
+export const ROADMAP_COLUMN_FACT_TYPES: ReadonlySet<string> = new Set([
+  QA_SWEEP_EVENT_TYPE,
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+]);
+
+/**
+ * The event id one retraction NAMES, or undefined when its payload names none
+ * readably (absent, non-string, or blank). Events are data — the rule every
+ * journal reader here follows — and a retraction that names nothing is never
+ * read as naming EVERYTHING.
+ *
+ * Naming a target is HALF of a retraction; withdrawnEventId below is the whole.
+ * Both are exported so `validate` can tell the halves apart in its message
+ * while judging completeness by exactly the rule the derivation applies.
+ */
+export function retractedEventId(event: JournalEvent): string | undefined {
+  const value = event.payload[RETRACTION_EVENT_PAYLOAD_KEY];
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  return id === "" ? undefined : id;
+}
+
+/**
+ * The reason one retraction STATES, or undefined when it states none (absent,
+ * non-string, or blank). The other half, and not decoration: a withdrawal
+ * nobody can account for is worse than the fact it withdraws.
+ */
+export function retractionReason(event: JournalEvent): string | undefined {
+  const value = event.payload[RETRACTION_REASON_PAYLOAD_KEY];
+  if (typeof value !== "string") return undefined;
+  const reason = value.trim();
+  return reason === "" ? undefined : reason;
+}
+
+/**
+ * The event id a retraction actually WITHDRAWS: a target it names, stated with
+ * a reason. Undefined when either half is missing — an incomplete retraction
+ * withdraws nothing.
+ *
+ * ONE predicate, because more than one surface has to agree on it. `validate`
+ * calls a reason-less retraction malformed and says it changes nothing; a
+ * derivation that withdrew the fact anyway would leave the store rendering one
+ * thing while the report claimed another. Every reader of a retraction — the
+ * columns below, `standup`'s movement, the check — goes through here.
+ */
+export function withdrawnEventId(event: JournalEvent): string | undefined {
+  if (retractionReason(event) === undefined) return undefined;
+  return retractedEventId(event);
+}
+
+/**
+ * Every event id withdrawn by a retraction in `events` (A1). A SET, which is
+ * what makes retraction idempotent — two retractions of the same fact are one
+ * — and what makes the retraction's own timestamp irrelevant: membership is
+ * decided by id alone, so a retraction that arrives before the fact it names,
+ * or after it by a year, does the same thing.
+ *
+ * Ids no event carries and ids naming something other than a lifecycle fact
+ * are collected here too and simply never match anything the winners loop
+ * considers — the "derivation ignores it" half of the invalid-retraction rule,
+ * which needs no branch because the loop only ever looks at column facts.
+ */
+function retractedFacts(events: readonly JournalEvent[]): ReadonlySet<string> {
+  const retracted = new Set<string>();
+  for (const event of events) {
+    if (event.type !== ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
+    const target = withdrawnEventId(event);
+    if (target !== undefined) retracted.add(target);
+  }
+  return retracted;
+}
+
+/**
+ * Whether a payload actually SAYS something under `key`: present, non-null, and
+ * not blank once trimmed. One rule, because the render's `?` and the archival
+ * gate's "missing key" (A3) are the same judgment — a recorded empty
+ * `announcement` tells a reader exactly as much as an omitted one, and two
+ * readings of "carries a value" could drift into a column printing `?` for a
+ * key the gate accepted.
+ */
+function carriesPayload(payload: Record<string, unknown>, key: string): boolean {
+  const value = payload[key];
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+/**
+ * Which of `keys` a payload carries no nonblank value for, in the order given —
+ * EMPTY means well-formed. The one place "what is this fact missing" is
+ * decided, so the stage word, the archival gate and `validate`'s findings
+ * cannot answer it three different ways.
+ */
+function missingPayloadKeys(payload: Record<string, unknown>, keys: readonly string[]): string[] {
+  return keys.filter((key) => !carriesPayload(payload, key));
+}
+
+/** A lifecycle fact whose payload cannot carry its job: the act, and what it lacks. */
+export interface IncompleteFact {
+  /** The event id — what a refusal or a finding names, since re-logging it is the fix. */
+  event: string;
+  /** The required keys it carries no nonblank value for, in the documented order. */
+  missing: string[];
+}
+
+/** The winning fact's gaps, or undefined when there is no winner and when there are none. */
+function incompleteFact(
+  event: JournalEvent | undefined,
+  keys: readonly string[],
+): IncompleteFact | undefined {
+  if (event === undefined) return undefined;
+  const missing = missingPayloadKeys(event.payload, keys);
+  return missing.length === 0 ? undefined : { event: event.id, missing };
+}
+
+/**
+ * A payload value for a column: absent, null, or blank renders `?` — brief's
+ * absent-payload-key convention, widened to blank for carriesPayload's reason,
+ * and the render table spells both cases the same way. Shared with `standup`,
+ * which renders the same lifecycle payloads and must spell their gaps the same
+ * way.
+ */
+export function payloadText(payload: Record<string, unknown>, key: string): string {
+  return carriesPayload(payload, key) ? String(payload[key]).trim() : "?";
+}
+
+/**
+ * The sweep's `failed` count, or undefined when the payload does not carry a
+ * usable number — the `(? failed)` row. A sweep that journaled an incomplete
+ * summary is itself worth seeing, so a NEGATIVE count is rendered verbatim
+ * rather than hidden behind `?`: it is a recorded number, just an impossible
+ * one, and the render table's `?` row is about absent and non-numeric values.
+ */
+function failedCount(payload: Record<string, unknown>): number | undefined {
+  const value = payload["failed"];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * A feature's single-word stage (F9's precedence table, derived by F2's
+ * machinery). Every dev status is also a stage: the last four rows of the
+ * table ARE the rollup, reached when no event covers the node.
+ */
+export type RoadmapStage = "released" | "deployed" | "tested" | RoadmapDevStatus;
+
+/** Every derived column of one feature node (F2). No node record carries any of it. */
+export interface RoadmapFeatureStatus {
+  /** The rollup of the work under the epic. */
+  dev: RoadmapDevStatus;
+  /** The `validate` warning the rollup earned, when it earned one. */
+  anomaly?: RoadmapEpicAnomaly;
+  /** QA / deploy / release, rendered per F2's table — `—` when no event covers. */
+  qa: string;
+  deploy: string;
+  release: string;
+  /** The three columns and the rollup, collapsed to one word by precedence. */
+  stage: RoadmapStage;
+  /**
+   * The id of the winning covering sweep whose `failed` count is not a usable
+   * number — absent, non-numeric, or negative (A2). Present exactly when the QA
+   * row of the precedence table could not be judged, so `validate` names the
+   * sweep the stage silently declined to advance on. Undefined otherwise,
+   * including for a sweep that honestly found failures.
+   */
+  unreadableSweep?: string;
+  /**
+   * The winning covering release / deploy whose payload cannot carry its row —
+   * present exactly when that row silently declined to advance, so `validate`
+   * can name the act and the keys it lacks. The two siblings of
+   * `unreadableSweep`, one per row above it.
+   */
+  incompleteRelease?: IncompleteFact;
+  incompleteDeploy?: IncompleteFact;
+}
+
+/**
+ * Derive every column of one feature node (F2) — the call F3's view and F4's
+ * brief block each make once per feature.
+ *
+ * The event ASSOCIATION rule is stored, not inferred: an event covers this node
+ * iff its `item` ref RESOLVES to the node's epic item or to a descendant of it
+ * in the item `parent` tree. An event with no `item`, one pointing outside the
+ * subtree, or one naming an epic id no record carries, covers nothing here — it
+ * stays store-wide and renders only in `brief`'s QA line (see epicCoverage for
+ * why a dangling epic covers nothing). (Two feature nodes whose epics nest
+ * therefore both see the inner subtree's events — the honest reading of a tree
+ * that names one epic inside another, which `validate`'s shape checks are what
+ * flag.)
+ *
+ * When more than one event of a type covers the node, the winner is the LAST in
+ * the store's canonical total order (`ts` → `seq` → `id`, compareEvents), so
+ * the result does not depend on the order `events` arrives in — the same winner
+ * on every machine and on a fresh clone.
+ *
+ * The `stage` collapses all of it to one word by PRECEDENCE, first match wins:
+ * release, then deploy, then sweep, then the dev rollup. Precedence rather than
+ * recency is what keeps the stage stable — a deploy recorded after a release
+ * must not regress the feature to `deployed`.
+ *
+ * EVERY row advances on a WELL-FORMED winner only, and on nothing else. A stage
+ * is what a reader scans a column of, so the word has to mean the same thing in
+ * every row: a fact that could carry it said so.
+ *
+ * - `released` — the winning release carries all of RELEASE_REQUIRED_PAYLOAD_KEYS,
+ *   nonblank. Deliberately the SAME predicate `nahel roadmap archive` gates on:
+ *   a view promising `released` where the verb refuses is a view that lies
+ *   about what the store has earned.
+ * - `deployed` — the winning deploy carries a nonblank `environment`.
+ * - `tested` — `failed === 0` exactly (A2, superseding the earlier "a sweep
+ *   ran" reading): `tested` beside a sweep that found four failures reads as a
+ *   feature that passed.
+ *
+ * A count or a key that is missing or blank is not a pass, a ship or a release
+ * — it is a summary nobody can read, and treating one as a fact would let a
+ * workflow reach the strongest word on the board by logging nothing at all.
+ * Every such row falls through to the one below it, down to the dev rollup, and
+ * `unreadableSweep` / `incompleteRelease` / `incompleteDeploy` above are how
+ * `validate` names what quietly did not happen.
+ *
+ * The COLUMNS are untouched by any of that — F2's render table is the contract,
+ * so a feature legitimately reads `built  qa=tested <ts> (4 failed)` or
+ * `built  release=released ? <ts>`: the column shows the fact the store holds,
+ * the stage says what that fact earned.
+ */
+/**
+ * The winning event of each column type over an already-computed coverage set:
+ * the LAST surviving event of its type in the store's canonical total order
+ * (`ts` → `seq` → `id`, compareEvents), so the result does not depend on the
+ * order `events` arrives in.
+ *
+ * Retracted facts leave the computation entirely (A1), which is why the winner
+ * is the last SURVIVOR — retracting the latest sweep promotes the one before
+ * it, it does not empty the column.
+ *
+ * One function, because two callers ask the same question of the same journal:
+ * the columns above, and the archival gate below. A second walk written by hand
+ * is a second place the retraction rule could be forgotten.
+ */
+function columnWinners(
+  covered: ReadonlySet<string>,
+  events: readonly JournalEvent[],
+): Map<string, JournalEvent> {
+  const retracted = retractedFacts(events);
+  const winners = new Map<string, JournalEvent>();
+  for (const event of events) {
+    if (event.item === undefined || !covered.has(event.item)) continue;
+    if (!ROADMAP_COLUMN_FACT_TYPES.has(event.type)) continue;
+    if (retracted.has(event.id)) continue;
+    const current = winners.get(event.type);
+    if (current === undefined || compareEvents(current, event) < 0) {
+      winners.set(event.type, event);
+    }
+  }
+  return winners;
+}
+
+export function featureStatus(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): RoadmapFeatureStatus {
+  // One walk, shared by the rollup and the association below. A node with no
+  // epic yields the empty coverage, so the loop simply matches nothing.
+  const covered = epicCoverage(items, node.epic);
+  const rollup = devRollup(node.epic, items, covered);
+  const winners = columnWinners(covered, events);
+  const sweep = winners.get(QA_SWEEP_EVENT_TYPE);
+  const deployed = winners.get(DEPLOY_COMPLETED_EVENT_TYPE);
+  const released = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
+  const failed = sweep === undefined ? undefined : failedCount(sweep.payload);
+  let qa = NO_VALUE;
+  if (sweep !== undefined) {
+    qa = failed === 0 ? `tested ${sweep.ts}` : `tested ${sweep.ts} (${failed ?? "?"} failed)`;
+  }
+  // Every row advances on a WELL-FORMED winner only: the release's three keys,
+  // the deploy's environment, the sweep's clean count. A malformed winner is
+  // not a fact the word can rest on, so it falls through to the next row — and
+  // is named below, so `validate` can say what quietly did not happen.
+  const incompleteRelease = incompleteFact(released, RELEASE_REQUIRED_PAYLOAD_KEYS);
+  const incompleteDeploy = incompleteFact(deployed, DEPLOY_REQUIRED_PAYLOAD_KEYS);
+  // First match wins, top-down — the precedence table read literally.
+  let stage: RoadmapStage;
+  if (released !== undefined && incompleteRelease === undefined) stage = "released";
+  else if (deployed !== undefined && incompleteDeploy === undefined) stage = "deployed";
+  else if (failed === 0) stage = "tested";
+  else stage = rollup.status;
+  return {
+    dev: rollup.status,
+    anomaly: rollup.anomaly,
+    qa,
+    stage,
+    // Absent, non-numeric, or negative: a count that judges nothing. A sweep
+    // that honestly found failures is not one of them.
+    ...(sweep !== undefined && !(failed !== undefined && failed >= 0)
+      ? { unreadableSweep: sweep.id }
+      : {}),
+    ...(incompleteRelease === undefined ? {} : { incompleteRelease }),
+    ...(incompleteDeploy === undefined ? {} : { incompleteDeploy }),
+    deploy:
+      deployed === undefined
+        ? NO_VALUE
+        : `deployed ${payloadText(deployed.payload, DEPLOY_ENVIRONMENT_PAYLOAD_KEY)} ${deployed.ts}`,
+    release:
+      released === undefined
+        ? NO_VALUE
+        : `released ${payloadText(released.payload, RELEASE_VERSION_PAYLOAD_KEY)} ${released.ts}`,
+  };
+}
+
+/**
+ * The release a node's archival would rest on, and what it fails to carry (A3).
+ */
+export interface ArchivalRelease {
+  /** The winning unretracted `release.announced` covering the node. */
+  event: JournalEvent;
+  /**
+   * The RELEASE_REQUIRED_PAYLOAD_KEYS it carries no nonblank value for, in that
+   * order. EMPTY means archival-qualified — the one predicate `nahel roadmap
+   * archive` gates on and `validate` reports against.
+   */
+  missing: string[];
+}
+
+/**
+ * Whether a feature node's release can carry an archival (F10, tightened by
+ * A3), and undefined when no unretracted release covers it at all.
+ *
+ * ONE predicate, exported, because three surfaces have to agree on it: the verb
+ * that refuses, `roadmap.prd-unarchived` (which tells a human to run that verb,
+ * so a check firing where the verb refuses is a warning nobody can act on), and
+ * — since the final gate — the `released` STAGE WORD itself, which reads the
+ * same required keys through missingPayloadKeys above. `missing` empty is
+ * therefore exactly `stage === "released"`: the view can no longer promise a
+ * word the verb will not honour.
+ *
+ * What the archival gate does NOT govern is the render: the release COLUMN
+ * stays permissive and prints `released ? <ts>` for a release recording
+ * nothing, because a column shows the fact the store holds and the stage says
+ * what that fact earned.
+ *
+ * This returns the EVENT rather than just its gaps because the archive verb's
+ * refusal has to name the act to re-log; featureStatus keeps the lighter
+ * IncompleteFact shape for the same fact, both off the one key list.
+ */
+export function archivalRelease(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): ArchivalRelease | undefined {
+  const winners = columnWinners(epicCoverage(items, node.epic), events);
+  const event = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
+  if (event === undefined) return undefined;
+  return { event, missing: missingPayloadKeys(event.payload, RELEASE_REQUIRED_PAYLOAD_KEYS) };
+}
+
+/**
+ * True for every event the derived columns READ (F2): the three lifecycle facts
+ * and the retractions that withdraw them (A1). Exported so the command can KEEP
+ * only these while streaming the journal: the views take their events as an
+ * array, and a store whose journal outgrows memory must still render the
+ * roadmap. Anything else is not a column fact and is dropped.
+ *
+ * A retraction that this filter dropped would be a retraction the derivation
+ * never saw — the column would keep printing the fact its own store already
+ * withdrew — so the two sets have to move together.
+ */
+export function isRoadmapColumnEvent(event: JournalEvent): boolean {
+  return (
+    ROADMAP_COLUMN_FACT_TYPES.has(event.type) ||
+    event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE
+  );
+}
+
+/** One feature node beside its derivation — featureStatus called once, per feature. */
+interface FeatureWithStatus {
+  record: RoadmapNodeRecord;
+  status: RoadmapFeatureStatus;
+}
+
+/**
+ * Derive every listed feature ONCE. Both callers need the same derivation twice
+ * over — the product's distribution counts the dev statuses, the lines print the
+ * columns — and deriving per use would walk the item tree and the journal twice
+ * per feature for identical answers.
+ */
+function featureStatuses(
+  features: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): FeatureWithStatus[] {
+  return features.map((record) => ({
+    record,
+    status: featureStatus(record.frontmatter, items, events),
+  }));
+}
+
+/**
+ * The line a feature renders as, in the product level and in the zoom alike: the
+ * slug, the single-word stage, then F2's four derived columns VERBATIM — the
+ * render table's strings are the contract, so they are printed and never
+ * reformatted here. Fields are separated by two spaces because the values carry
+ * single spaces of their own (`tested <ts> (2 failed)`), the same house rule
+ * `status`'s `parent=<id> (missing)` already follows.
+ */
+function featureLine(record: RoadmapNodeRecord, status: RoadmapFeatureStatus): string {
+  return [record.frontmatter.name, ...statusFields(status), `id=${record.frontmatter.id}`].join(
+    "  ",
+  );
+}
+
+/** The derived columns as fields — the same words in the list and in the zoom. */
+function statusFields(status: RoadmapFeatureStatus): string[] {
+  return [
+    status.stage,
+    `dev=${status.dev}`,
+    `qa=${status.qa}`,
+    `deploy=${status.deploy}`,
+    `release=${status.release}`,
+  ];
+}
+
+/** One node as a plain listing line — no derivation, for the kinds that have none. */
+function nodeLine(node: RoadmapNodeFrontmatter): string {
+  return `${node.name}  ${node.kind}  horizon=${node.horizon}  id=${node.id}`;
+}
+
+/**
+ * The feature children under one node, grouped `now → next → later` (F3). Every
+ * bucket prints even when empty, for renderProductStatus's reason: the three
+ * horizons are a fixed shape a reader scans down, and a bucket that vanished
+ * when it emptied would read as one nobody has decided about. Multiple parallel
+ * `now`s are the intended shape (F8) and are rendered as the ordinary case —
+ * nothing counts them, nothing warns.
+ *
+ * Within a bucket, features keep the id order readRoadmapNodes returns: ids are
+ * unique, so the order is total, and it does not move when a node is renamed.
+ */
+function horizonGroups(
+  features: readonly FeatureWithStatus[],
+  indent: string,
+  lines: string[],
+): void {
+  for (const horizon of ROADMAP_HORIZONS) {
+    const bucket = features.filter(({ record }) => record.frontmatter.horizon === horizon);
+    lines.push(`${indent}${horizon} (${bucket.length}):`);
+    if (bucket.length === 0) lines.push(`${indent}  (none)`);
+    for (const { record, status } of bucket) {
+      lines.push(`${indent}  ${featureLine(record, status)}`);
+    }
+  }
+}
+
+/** What a store with no nodes says: how to start, not an empty frame. */
+const NO_ROADMAP =
+  "no roadmap yet — chart the product first:\n" +
+  '  nahel roadmap node new product <slug> --horizon now --intent "<what this product is>"';
+
+/**
+ * The words `nahel roadmap` spends on its own verbs. A ref spelled as one is
+ * dispatched as a subcommand and never reaches the zoom, so it is not a
+ * spelling a hint may use. The set lives HERE, beside the hints that break on
+ * it, and the dispatcher reads the same one — the two cannot drift.
+ */
+export const ROADMAP_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "node",
+  "map",
+  "ticket",
+  "ack",
+  "archive",
+  "frontier",
+  "migration",
+]);
+
+/**
+ * The zoom hint a rendering ends with (F3), so the drill path is discoverable
+ * from the output itself rather than from the help.
+ *
+ * Every hint is `↳ <command>  — <what it shows>`, and the command is REAL and
+ * RUNNABLE: a concrete node, never a `<node>` placeholder a reader would have to
+ * fill in. The one it names is the alphabetically first node the rendering
+ * listed — stable against id churn and re-parenting, so a doc-tested rendering
+ * does not wobble when unrelated state moves.
+ *
+ * A node whose slug is one of the verbs above is spelled by ID instead: the
+ * slug spelling would dispatch that subcommand and exit non-zero, which is a
+ * hint that breaks when followed. The id spelling is always safe because no
+ * reserved word satisfies ID_PATTERN — the short ones are the wrong LENGTH, and
+ * `frontier` (8 characters, F8) is disqualified by its `i` and `o`, neither of
+ * which ID_ALPHABET carries. `tests/commands/roadmap-view.test.ts` pins the
+ * invariant directly, so a future verb that could spell an id fails there
+ * rather than producing hints that break when followed.
+ */
+function zoomHint(nodes: readonly RoadmapNodeFrontmatter[]): string | undefined {
+  const first = [...nodes].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))[0];
+  if (first === undefined) return undefined;
+  const ref = ROADMAP_SUBCOMMANDS.has(first.name) ? first.id : first.name;
+  return `↳ nahel roadmap ${ref}  — zoom into a node listed above`;
+}
+
+/** Close a rendering with its hints; absent ones are dropped, not left blank. */
+function hintBlock(lines: string[], hints: readonly (string | undefined)[]): void {
+  const present = hints.filter((hint): hint is string => hint !== undefined);
+  if (present.length > 0) lines.push("", ...present);
+}
+
+/**
+ * The hint a leaf earns: a node with no children, no chart and no epic has
+ * nothing below it, and an output that simply stopped would read as a dead end.
+ * Up is a real drill path too — it is where the reader came from.
+ */
+const UP_HINT = "↳ nahel roadmap  — back to the product level";
+
+/**
+ * `nahel roadmap` with no ref (F3): the product level. One line per product node
+ * — its horizon, its id, and F2's distribution over its feature children — then
+ * those children grouped by horizon with their derived columns.
+ *
+ * Products render in the id order readRoadmapNodes returns. One product per
+ * store is the assumed shape (a second is a non-goal, not a refusal), so a
+ * second product node simply renders as a second block.
+ *
+ * A node that is neither a product nor a product's feature child — an
+ * initiative, a node whose parent is missing, a feature parented to a feature —
+ * is listed under `outside the product tree` rather than dropped: the shapes are
+ * `validate` warnings, and a view that hid them would make the store look
+ * smaller than it is. That section is ABSENT when empty, not an empty header.
+ */
+export function renderRoadmapOverview(
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string {
+  if (nodes.length === 0) return NO_ROADMAP;
+  const lines: string[] = [];
+  const placed = new Set<string>();
+  for (const record of nodes) {
+    if (record.frontmatter.kind !== "product") continue;
+    placed.add(record.frontmatter.id);
+    const features = featureStatuses(
+      productFeatureNodes(nodes, record.frontmatter.id),
+      items,
+      events,
+    );
+    for (const { record: feature } of features) placed.add(feature.frontmatter.id);
+    if (lines.length > 0) lines.push("");
+    lines.push(
+      [
+        record.frontmatter.name,
+        record.frontmatter.kind,
+        `horizon=${record.frontmatter.horizon}`,
+        `id=${record.frontmatter.id}`,
+        renderProductStatus(features.map(({ status }) => status.dev)),
+      ].join("  "),
+    );
+    horizonGroups(features, "  ", lines);
+  }
+  const outside = nodes.filter(({ frontmatter }) => !placed.has(frontmatter.id));
+  if (outside.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`outside the product tree (${outside.length}):`);
+    for (const { frontmatter } of outside) lines.push(`  ${nodeLine(frontmatter)}`);
+  }
+  hintBlock(lines, [zoomHint(nodes.map(({ frontmatter }) => frontmatter))]);
+  return lines.join("\n");
+}
+
+/**
+ * The brief's roadmap block: how many `now` nodes it names before it starts
+ * counting (F4). Ten is the PRD's number, and it is a cap on NAMES, never on
+ * truth — the remainder is always stated.
+ */
+export const BRIEF_ROADMAP_NOW_CAP = 10;
+
+/**
+ * The block's hard line budget (F4): ten `now` lines, the remainder line, and
+ * one summary line each for `next` and `later`. A block that could grow past
+ * this would make the brief's 4 KB target a function of roadmap size, and many
+ * parallel `now`s are doctrine (F8) — so the block is capped rather than
+ * truncated, and no rung of brief's ladder ever touches it.
+ */
+export const BRIEF_ROADMAP_MAX_LINES = BRIEF_ROADMAP_NOW_CAP + 3;
+
+/** The node kinds' derived summaries, one call each — F2's two renderers. */
+function nodeSummaryFields(
+  record: RoadmapNodeRecord,
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string[] {
+  const node = record.frontmatter;
+  if (node.kind === "feature") return [featureStatus(node, items, events).stage];
+  if (node.kind === "product") {
+    const features = productFeatureNodes(nodes, node.id);
+    return [
+      renderProductStatus(features.map(({ frontmatter }) => featureStatus(frontmatter, items, events).dev)),
+    ];
+  }
+  // An initiative's rollup semantics are deliberately undefined (F1's
+  // non-goal), so it claims no derived word — the same silence the zoom keeps.
+  return [];
+}
+
+/**
+ * One node as an orientation surface names it: the slug, its kind, whatever its
+ * kind makes derivable, and its id. Shared by the brief's block and `standup`'s
+ * group headers, so the two cannot describe the same node differently.
+ */
+export function roadmapNodeSummary(
+  record: RoadmapNodeRecord,
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string {
+  const node = record.frontmatter;
+  return [
+    node.name,
+    node.kind,
+    ...nodeSummaryFields(record, nodes, items, events),
+    `id=${node.id}`,
+  ].join("  ");
+}
+
+/** The two event types that can put a node on a horizon. */
+const HORIZON_EVENT_TYPES: ReadonlySet<string> = new Set([
+  CORE_EVENT_TYPES.roadmapNodeCreated,
+  CORE_EVENT_TYPES.roadmapNodeUpdated,
+]);
+
+/** The node id and horizon one roadmap act recorded, read defensively. */
+function recordedHorizon(event: JournalEvent): { id: string; horizon: string } | undefined {
+  const record = event.payload["record"];
+  if (typeof record !== "object" || record === null) return undefined;
+  const fields = record as Record<string, unknown>;
+  const id = fields["id"];
+  const horizon = fields["horizon"];
+  if (typeof id !== "string" || typeof horizon !== "string") return undefined;
+  return { id, horizon };
+}
+
+/** The act that put a node where it now stands, and the horizon it left it on. */
+interface HorizonEntry {
+  event: JournalEvent;
+  horizon: string;
+}
+
+/**
+ * The act that set each node's CURRENT horizon: walking the node's acts in the
+ * store's canonical order (`ts` → `seq` → `id`), the entry is the act that most
+ * recently CHANGED the horizon — a rename or an intent edit that left the
+ * horizon alone does not restart the clock, and a node moved to `next` and back
+ * to `now` entered `now` on the way back, not when it was charted.
+ *
+ * An act whose payload does not carry a readable id and horizon is skipped: it
+ * is data nahel cannot read as a horizon move, and guessing would date a node
+ * by an act that may have said nothing about where it sits.
+ */
+function horizonEntries(events: readonly JournalEvent[]): Map<string, HorizonEntry> {
+  const acts = events.filter((event) => HORIZON_EVENT_TYPES.has(event.type));
+  const entries = new Map<string, HorizonEntry>();
+  for (const event of [...acts].sort(compareEvents)) {
+    const recorded = recordedHorizon(event);
+    if (recorded === undefined) continue;
+    const current = entries.get(recorded.id);
+    if (current !== undefined && current.horizon === recorded.horizon) continue;
+    entries.set(recorded.id, { event, horizon: recorded.horizon });
+  }
+  return entries;
+}
+
+/**
+ * Horizon-entry order (F4): oldest first by the act that set the node's current
+ * horizon, then by slug.
+ *
+ * A node whose entry the journal does not explain — no roadmap act, or a last
+ * recorded horizon that disagrees with the record (a hand-edit, or a history
+ * compacted past it) — sorts AFTER every dated node rather than being given a
+ * date it never earned. Those tie by slug, and by id beneath it: duplicate
+ * slugs are a merge shape `validate` reports, and an order that was not total
+ * would let two of them swap between renders.
+ */
+function horizonEntryOrder(
+  nodes: readonly RoadmapNodeRecord[],
+  events: readonly JournalEvent[],
+): RoadmapNodeRecord[] {
+  const entries = horizonEntries(events);
+  const entryOf = (record: RoadmapNodeRecord): JournalEvent | undefined => {
+    const entry = entries.get(record.frontmatter.id);
+    return entry === undefined || entry.horizon !== record.frontmatter.horizon
+      ? undefined
+      : entry.event;
+  };
+  return [...nodes].sort((a, b) => {
+    const entryA = entryOf(a);
+    const entryB = entryOf(b);
+    if (entryA !== undefined && entryB !== undefined) {
+      const order = compareEvents(entryA, entryB);
+      if (order !== 0) return order;
+    } else if (entryA !== undefined || entryB !== undefined) {
+      return entryA !== undefined ? -1 : 1;
+    }
+    const names = [a.frontmatter.name, b.frontmatter.name];
+    if (names[0] !== names[1]) return names[0]! < names[1]! ? -1 : 1;
+    return a.frontmatter.id < b.frontmatter.id ? -1 : a.frontmatter.id > b.frontmatter.id ? 1 : 0;
+  });
+}
+
+/** `n nodes`, singular at one, and an explicit `none` at zero. */
+function nodeCount(count: number): string {
+  if (count === 0) return "none";
+  return `${count} node${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The brief's roadmap block (F4): DETERMINISTIC ELISION, never a completeness
+ * promise the cap cannot keep. At most ten `now` nodes in horizon-entry order,
+ * one line each; the remainder counted on one line naming the verb that shows
+ * it; then one summary line each for `next` and `later`.
+ *
+ * Every horizon speaks even at zero — a horizon that vanished when it emptied
+ * would read as one nobody has decided about, the rule the roadmap view's
+ * buckets and F2's distribution already follow. `now` speaks as `now: none`
+ * only when it has nothing to list, because with nodes to name a header would
+ * cost the block a fourteenth line.
+ *
+ * Null when the store carries no nodes at all: an archived or never-charted
+ * store gets no section, not empty scaffolding (F4's acceptance criterion, and
+ * brief's routing/waivers precedent).
+ */
+export function renderBriefRoadmap(
+  nodes: readonly RoadmapNodeRecord[],
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): string | null {
+  if (nodes.length === 0) return null;
+  const on = (horizon: string): RoadmapNodeRecord[] =>
+    nodes.filter(({ frontmatter }) => frontmatter.horizon === horizon);
+
+  const now = horizonEntryOrder(on("now"), events);
+  const lines =
+    now.length === 0
+      ? ["now: none"]
+      : now
+          .slice(0, BRIEF_ROADMAP_NOW_CAP)
+          .map((record) => roadmapNodeSummary(record, nodes, items, events));
+  if (now.length > BRIEF_ROADMAP_NOW_CAP) {
+    lines.push(`+${now.length - BRIEF_ROADMAP_NOW_CAP} more — nahel roadmap`);
+  }
+  lines.push(`next: ${nodeCount(on("next").length)}`, `later: ${nodeCount(on("later").length)}`);
+  return lines.join("\n");
+}
+
+/** Everything one zoom renders from — five store reads, no derivation done yet. */
+export interface RoadmapZoomFacts {
+  nodes: readonly RoadmapNodeRecord[];
+  items: readonly WorkItemFrontmatter[];
+  events: readonly JournalEvent[];
+  maps: readonly MapRecord[];
+  tickets: readonly TicketRecord[];
+}
+
+/**
+ * The path down to this node, `product › feature`, or undefined at the top —
+ * a one-crumb trail would only repeat the header line below it. A parent no
+ * record carries ends the trail as `<id> (missing)` rather than silently
+ * shortening it (the record may arrive by a later merge, ADR-0012), and a
+ * parent cycle ends it as `<name> (cycle)`: both are `validate` findings, and
+ * neither may hang the render.
+ */
+function breadcrumb(
+  nodes: readonly RoadmapNodeRecord[],
+  node: RoadmapNodeFrontmatter,
+): string | undefined {
+  const byId = new Map(nodes.map(({ frontmatter }) => [frontmatter.id, frontmatter]));
+  const trail: string[] = [];
+  const seen = new Set<string>([node.id]);
+  let parent = node.parent;
+  while (parent !== undefined) {
+    const found = byId.get(parent);
+    if (found === undefined) {
+      trail.unshift(`${parent} (missing)`);
+      break;
+    }
+    if (seen.has(found.id)) {
+      trail.unshift(`${found.name} (cycle)`);
+      break;
+    }
+    seen.add(found.id);
+    trail.unshift(found.name);
+    parent = found.parent;
+  }
+  return trail.length === 0 ? undefined : [...trail, node.name].join(" › ");
+}
+
+/**
+ * The chart hanging off this node (F7), summarised to one line: where the effort
+ * is going, its tickets by state — every state, at zero too, so the shape is
+ * fixed — and how much fog is left. An unfinished map is stated as the ordinary
+ * case and never flagged: mapping and building run concurrently by design (F8),
+ * so a feature may carry an in-flight epic and open questions at once.
+ */
+function mapLine(map: MapRecord | undefined, tickets: readonly TicketRecord[]): string {
+  if (map === undefined) return "map: none charted";
+  const own = tickets.filter(({ frontmatter }) => frontmatter.map === map.frontmatter.id);
+  const states = DECISION_TICKET_STATES.map(
+    (state) => `${own.filter(({ frontmatter }) => frontmatter.state === state).length} ${state}`,
+  ).join(" · ");
+  return [
+    `map: ${JSON.stringify(map.frontmatter.destination)}`,
+    `tickets: ${states}`,
+    `not yet specified (${map.frontmatter.fog.length})`,
+    `id=${map.frontmatter.id}`,
+  ].join("  ");
+}
+
+/**
+ * The third generation, reachable without a second command (F3): the epic's
+ * whole subtree, rendered by the ONE item-line renderer `nahel status` uses.
+ *
+ * The two "none" cases are stated, never errors: a feature with no epic yet is
+ * the ordinary shape of intent recorded before work exists, and an epic id no
+ * record carries is a `validate` finding whose record may still arrive by merge.
+ */
+function workItemsSection(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  lines: string[],
+): void {
+  lines.push("");
+  if (node.epic === undefined) {
+    lines.push(
+      "work items: none — no epic recorded yet " +
+        `(link one with \`nahel roadmap node update ${node.name} --epic <item-id>\`)`,
+    );
+    return;
+  }
+  // The two "none" cases are DIFFERENT facts and say so, which is why this
+  // branch exists rather than reading an empty coverage twice; the set itself
+  // still comes from epicCoverage, so nothing here re-states the rule.
+  if (!items.some((item) => item.id === node.epic)) {
+    lines.push(
+      `work items: none — epic ${node.epic} has no item record here ` +
+        "(`nahel validate` names it; the record may arrive by a later merge)",
+    );
+    return;
+  }
+  const covered = epicCoverage(items, node.epic);
+  const subtree = items.filter((item) => covered.has(item.id));
+  lines.push(`work items (${subtree.length}):`);
+  // knownIds is every item in the store, so the epic's own parent — which sits
+  // outside this slice — is not reported as missing.
+  lines.push(...renderItemTree(subtree, new Set(items.map((item) => item.id))));
+}
+
+/**
+ * `nahel roadmap <ref>` (F3): the zoom. A breadcrumb of the node's ancestors,
+ * the node itself exactly as `roadmap node show` prints it (one renderer, so the
+ * two verbs cannot drift), then what the node's kind makes derivable — a
+ * feature's columns and the work under its epic, a product's distribution — its
+ * chart, its children, and the hints that carry the reader further down.
+ *
+ * An initiative gets no derived line of its own: its rollup semantics are
+ * deliberately undefined until a real initiative lands (F1's non-goal), and a
+ * number invented here would be exactly the judgment the layer refuses to make.
+ */
+export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomFacts): string {
+  const node = record.frontmatter;
+  const lines: string[] = [];
+  const trail = breadcrumb(facts.nodes, node);
+  if (trail !== undefined) lines.push(trail);
+  lines.push(renderRoadmapNode(record, roadmapNodeLinks(facts.nodes, node.id)));
+
+  if (node.kind === "feature") {
+    lines.push("", `status: ${statusFields(featureStatus(node, facts.items, facts.events)).join("  ")}`);
+  }
+
+  const features = featureStatuses(productFeatureNodes(facts.nodes, node.id), facts.items, facts.events);
+  if (node.kind === "product") {
+    lines.push("", `features: ${renderProductStatus(features.map(({ status }) => status.dev))}`);
+  }
+  if (features.length > 0) {
+    if (node.kind !== "product") lines.push("");
+    horizonGroups(features, "  ", lines);
+  }
+  const others = facts.nodes.filter(
+    ({ frontmatter }) => frontmatter.parent === node.id && frontmatter.kind !== "feature",
+  );
+  if (others.length > 0) {
+    lines.push("", `other children (${others.length}):`);
+    for (const { frontmatter } of others) lines.push(`  ${nodeLine(frontmatter)}`);
+  }
+
+  const map = facts.maps.find(({ frontmatter }) => frontmatter.node === node.id);
+  lines.push("", mapLine(map, facts.tickets));
+
+  if (node.kind === "feature") workItemsSection(node, facts.items, lines);
+
+  const children = [...features.map(({ record: child }) => child), ...others];
+  const hints = [
+    zoomHint(children.map(({ frontmatter }) => frontmatter)),
+    node.epic !== undefined && facts.items.some((item) => item.id === node.epic)
+      ? `↳ nahel progress --item ${node.epic}  — the work under this feature`
+      : undefined,
+    map === undefined ? undefined : `↳ nahel roadmap map show ${node.name}  — the chart`,
+  ];
+  hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
+  return lines.join("\n");
+}
+
+/**
+ * The frontier (F8): the takeable edge — everything that can start NOW, rather
+ * than what comes next in a plan. It spans BOTH record kinds, because a
+ * ticket-only frontier would answer "what can I decide" while going silent on
+ * "what can I build", and mapping and building run concurrently by design.
+ *
+ * Everything below is a READ-ONLY rendering. Nothing here refuses anything: an
+ * entry missing from this list can still be started deliberately, and doing so
+ * journals the choice rather than being prevented (the anti-waterfall rule).
+ */
+
+/** The ticket states that stop a ticket blocking its dependents (F7's terminals). */
+const SETTLED_TICKET_STATES: ReadonlySet<string> = new Set(["resolved", "closed"]);
+
+/**
+ * Where one ticket stands relative to the frontier — total over F7's four
+ * states, so every ticket in the store lands in exactly one bucket:
+ *
+ * - `takeable` — F8's predicate: `open`, no claimant, every blocker settled.
+ * - `claimed` — someone is already working the question.
+ * - `blocked` — open and unclaimed, but a blocking ticket is still live.
+ * - `decided` — `resolved` or `closed`; not held back at all, and deliberately
+ *   never counted as a near miss, which would make the frontier read as a
+ *   backlog of everything ever asked.
+ *
+ * A blocker no record carries is NOT settled: the ticket it names may arrive by
+ * a later merge (ADR-0012) and `validate` reports the dangling edge, so "still
+ * waiting" is the honest reading rather than "gone". Nothing is lost by the
+ * conservative call — blocking is advisory, so the ticket can be claimed and
+ * worked regardless; only this LISTING holds it back.
+ */
+type TicketStanding = "takeable" | "claimed" | "blocked" | "decided";
+
+function ticketStanding(
+  record: TicketRecord,
+  byId: ReadonlyMap<string, TicketRecord>,
+): TicketStanding {
+  const ticket = record.frontmatter;
+  if (SETTLED_TICKET_STATES.has(ticket.state)) return "decided";
+  // The claimant is checked as well as the state: an `open` ticket carrying one
+  // is a merge shape `validate` reports, and it is plainly in someone's hands.
+  if (ticket.state === "claimed" || ticket.claimant !== undefined) return "claimed";
+  const waiting = ticket.blockers.some((id) => {
+    const blocker = byId.get(id);
+    return blocker === undefined || !SETTLED_TICKET_STATES.has(blocker.frontmatter.state);
+  });
+  return waiting ? "blocked" : "takeable";
+}
+
+/**
+ * The order takeable tickets are listed in: by the map they hang off, then by
+ * id. Map order groups one destination's questions together, and both keys are
+ * IDS rather than slugs — a rename must not reorder a rendering, and duplicate
+ * slugs are a merge shape `validate` reports rather than one an order may
+ * depend on. Total, so the listing cannot wobble between two renders.
+ */
+function byMapThenId(a: TicketRecord, b: TicketRecord): number {
+  const maps = [a.frontmatter.map, b.frontmatter.map];
+  if (maps[0] !== maps[1]) return maps[0]! < maps[1]! ? -1 : 1;
+  return a.frontmatter.id < b.frontmatter.id ? -1 : a.frontmatter.id > b.frontmatter.id ? 1 : 0;
+}
+
+/** The work-item statuses that stop an item blocking its dependents (F8). */
+const SETTLED_ITEM_STATUSES: ReadonlySet<string> = new Set(["done", "dropped"]);
+
+/**
+ * Every item id an intervention claim covers: each claimed item's whole
+ * subtree, because a claim covers the subtree (the glossary; `nahel claim`
+ * pauses runs across exactly this set). Built from descendantIds — the one
+ * coverage walk the rollup, `progress --item` and the claim itself all use — so
+ * a claimed ANCESTOR is what takes a descendant off the frontier, and no second
+ * reading of "covered" can drift from the store's.
+ */
+function claimCoverage(items: readonly WorkItemFrontmatter[]): Set<string> {
+  const covered = new Set<string>();
+  for (const item of items) {
+    if (item.claimed_by === undefined) continue;
+    for (const id of descendantIds(items, item.id)) covered.add(id);
+  }
+  return covered;
+}
+
+/**
+ * Where one work item stands relative to the frontier — the ticket standing's
+ * counterpart, total over the six statuses:
+ *
+ * - `takeable` — F8's predicate: `backlog`, unclaimed, every dependency settled.
+ * - `claimed` — covered by an intervention claim, its own or an ancestor's.
+ * - `blocked` — backlog, but a `depends_on` target is still live.
+ * - `moved` — anything that has left the backlog, closed or not. Like a decided
+ *   ticket it is not a near miss: counting started and finished work as held
+ *   back would report the whole store every time.
+ *
+ * A dependency no record carries is NOT settled, for ticketStanding's reason:
+ * the item may arrive by a later merge (ADR-0012), `validate` reports the
+ * dangling edge, and nothing is refused either way.
+ */
+type ItemStanding = "takeable" | "claimed" | "blocked" | "moved";
+
+function itemStanding(
+  item: WorkItemFrontmatter,
+  byId: ReadonlyMap<string, WorkItemFrontmatter>,
+  claimed: ReadonlySet<string>,
+): ItemStanding {
+  if (item.status !== "backlog") return "moved";
+  if (claimed.has(item.id)) return "claimed";
+  const waiting = item.depends_on.some((id) => {
+    const dependency = byId.get(id);
+    return dependency === undefined || !SETTLED_ITEM_STATUSES.has(dependency.status);
+  });
+  return waiting ? "blocked" : "takeable";
+}
+
+/**
+ * What one rendering is narrowed to (F8's `[ref]` form) — one roadmap node: the
+ * map whose tickets belong to it (null when it carries no chart), and the item
+ * ids under its epic (empty when it has none).
+ *
+ * Only the RESULT is narrowed, never the predicates: both are evaluated over the
+ * whole store above, so a blocker, a dependency, or a claiming ancestor outside
+ * the node still holds an entry inside it back.
+ */
+export interface FrontierScope {
+  /** The node's slug — what the rendering names itself after. */
+  name: string;
+  map: string | null;
+  items: ReadonlySet<string>;
+}
+
+/** Everything one frontier rendering reads from — four store reads, underived. */
+export interface FrontierFacts {
+  tickets: readonly TicketRecord[];
+  maps: readonly MapRecord[];
+  nodes: readonly RoadmapNodeRecord[];
+  items: readonly WorkItemFrontmatter[];
+  /** Absent for the whole store's frontier; one node's when a ref was given. */
+  scope?: FrontierScope;
+}
+
+/**
+ * How a ticket names the chart it hangs off: the slug of the node that map
+ * charts, which is the spelling every map and ticket verb accepts. A map id
+ * whose record or whose node is absent prints the id itself — both are
+ * `validate` findings, and a listing that dropped the column would hide which
+ * destination the question belongs to.
+ */
+function mapLabels(facts: FrontierFacts): Map<string, string> {
+  const nodeNames = new Map(facts.nodes.map(({ frontmatter }) => [frontmatter.id, frontmatter.name]));
+  return new Map(
+    facts.maps.map(({ frontmatter }) => [
+      frontmatter.id,
+      nodeNames.get(frontmatter.node) ?? frontmatter.id,
+    ]),
+  );
+}
+
+/**
+ * The `(none) — …` tail an empty section earns: how many entries were held
+ * back, and by what. An empty section with nothing behind it earns no tail at
+ * all — a store that has simply not charted anything yet has no WHY to state,
+ * and inventing one would report zeros as if they were obstacles.
+ */
+function heldTail(counts: readonly (readonly [string, number])[]): string {
+  const named = counts.filter(([, count]) => count > 0).map(([what, count]) => `${count} ${what}`);
+  return named.length === 0 ? "" : ` — ${named.join(", ")}`;
+}
+
+/**
+ * `nahel roadmap frontier [ref]` (F8): what can be started now, per kind. Pure
+ * over records already read, so two reads of an unchanged store are
+ * byte-identical (HC1) and the verb writes nothing at all.
+ *
+ * An EMPTY section still prints its heading and says why it is empty, the rule
+ * every roadmap section follows: a section that vanished when it emptied would
+ * read as one nobody has charted, which is a different fact from one whose
+ * every entry is claimed or waiting.
+ */
+export function renderFrontier(facts: FrontierFacts): string {
+  const scope = facts.scope;
+  const lines: string[] = [];
+  if (scope !== undefined) lines.push(`frontier of ${scope.name}`, "");
+
+  // Both standings are read against the WHOLE store's records — `ticketsById`
+  // and `claimed` below — and only the scoped slice is classified, so a blocker
+  // or a claiming ancestor outside the node still holds an entry inside it back.
+  const labels = mapLabels(facts);
+  const ticketsById = new Map(facts.tickets.map((record) => [record.frontmatter.id, record]));
+  const scopedTickets =
+    scope === undefined
+      ? facts.tickets
+      : facts.tickets.filter(({ frontmatter }) => frontmatter.map === scope.map);
+  const standings = scopedTickets.map((record) => ticketStanding(record, ticketsById));
+  const tickets = scopedTickets
+    .filter((_, at) => standings[at] === "takeable")
+    .sort(byMapThenId);
+  lines.push(`tickets (${tickets.length}):`);
+  if (tickets.length === 0) {
+    lines.push(
+      `  (none)${heldTail([
+        ["blocked", standings.filter((each) => each === "blocked").length],
+        ["claimed", standings.filter((each) => each === "claimed").length],
+      ])}`,
+    );
+  }
+  for (const record of tickets) {
+    const ticket = record.frontmatter;
+    lines.push(`  ${ticket.id}  ${ticket.type}  map=${labels.get(ticket.map) ?? ticket.map}`);
+    const question = ticketQuestion(record);
+    if (question !== "") lines.push(`      ${question}`);
+  }
+
+  // The second kind, rendered by the ONE item-line renderer `nahel status` uses
+  // — takeable items may nest (a backlog parent with a backlog child are both
+  // takeable), and knownIds is every item in the store so a parent left off the
+  // frontier is never reported missing.
+  const itemsById = new Map(facts.items.map((item) => [item.id, item]));
+  const claimed = claimCoverage(facts.items);
+  const scopedItems =
+    scope === undefined ? facts.items : facts.items.filter((item) => scope.items.has(item.id));
+  const itemStandings = scopedItems.map((item) => itemStanding(item, itemsById, claimed));
+  const items = scopedItems.filter((_, at) => itemStandings[at] === "takeable");
+  lines.push("", `work items (${items.length}):`);
+  if (items.length === 0) {
+    lines.push(
+      `  (none)${heldTail([
+        ["blocked by a dependency", itemStandings.filter((each) => each === "blocked").length],
+        ["claimed", itemStandings.filter((each) => each === "claimed").length],
+      ])}`,
+    );
+  }
+  lines.push(...renderItemTree(items, new Set(facts.items.map((item) => item.id))));
+  const firstListed = buildItemTree(items)[0];
+
+  const hints = [
+    tickets[0] === undefined
+      ? undefined
+      : `↳ nahel roadmap ticket show ${tickets[0].frontmatter.id}  — the question in full`,
+    // The item on the FIRST rendered LINE, which is the tree's first root —
+    // not the first in the flat `created` → `id` order, which a child created
+    // before its parent (or in the same second) takes the lead in. A hint that
+    // named a line further down would read as a hint about something else.
+    firstListed === undefined
+      ? undefined
+      : `↳ nahel progress --item ${firstListed.item.id}  — what has happened on it so far`,
+  ];
+  hintBlock(lines, hints.every((hint) => hint === undefined) ? [UP_HINT] : hints);
+  return lines.join("\n");
+}

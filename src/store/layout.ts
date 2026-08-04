@@ -4,20 +4,26 @@ import YAML from "yaml";
 import {
   configSchema,
   distilledSchema,
+  mapFrontmatterSchema,
   observationFrontmatterSchema,
+  roadmapNodeFrontmatterSchema,
   runSchema,
   skillsLockSchema,
   skillsManifestSchema,
+  ticketFrontmatterSchema,
   workItemFrontmatterSchema,
   type Config,
   type Distilled,
+  type MapFrontmatter,
   type ObservationFrontmatter,
+  type RoadmapNodeFrontmatter,
   type Run,
   type SkillsLock,
   type SkillsManifest,
+  type TicketFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { requireValidId } from "../schema/id";
+import { ID_PATTERN, requireValidId } from "../schema/id";
 import { readFrontmatterFile, writeFileAtomic, writeFrontmatterFile } from "./frontmatter";
 
 /**
@@ -42,6 +48,22 @@ export interface StoreLayout {
    */
   distilledDir: string;
   observationsDir: string;
+  /**
+   * `nahel/roadmap/` — one markdown record per roadmap node (Phase 4 F1). A
+   * directory of per-node files, exactly like items/ and observations/: node
+   * creation touches one new file, so two worktrees charting different parts
+   * of the roadmap merge as a directory union (ADR-0012 merge-safe state).
+   */
+  roadmapDir: string;
+  /**
+   * `nahel/maps/` — one markdown record per wayfinder map (Phase 4 F7), and
+   * `nahel/tickets/` — one per decision ticket. Two directories rather than a
+   * nest under `nahel/roadmap/`, for the same reason items and observations
+   * have their own: a directory of per-record files is what makes concurrent
+   * charting merge as a union, and every list/read helper stays a flat scan.
+   */
+  mapsDir: string;
+  ticketsDir: string;
   /** `skills.yaml` — the pinned-skill manifest, at the repo root (PRD F7). */
   skillsManifestPath: string;
   /** `skills.lock` — the resolved manifest, at the repo root (PRD F7). */
@@ -62,6 +84,9 @@ export function storeLayout(root: string): StoreLayout {
     journalArchiveDir: join(journalDir, "archive"),
     distilledDir: join(journalDir, "distilled"),
     observationsDir: join(nahelDir, "observations"),
+    roadmapDir: join(nahelDir, "roadmap"),
+    mapsDir: join(nahelDir, "maps"),
+    ticketsDir: join(nahelDir, "tickets"),
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
   };
@@ -459,6 +484,244 @@ export async function writeObservation(
 ): Promise<void> {
   const valid = observationFrontmatterSchema.parse(frontmatter);
   await writeFrontmatterFile(observationPath(layout, valid.id), valid, body);
+}
+
+/** Path of a roadmap node record. The id is validated before any join. */
+export function roadmapNodePath(layout: StoreLayout, id: string): string {
+  return join(layout.roadmapDir, `${requireValidId(id, "roadmap node")}.md`);
+}
+
+/**
+ * `nahel/roadmap/failed/` — where a SUPERSEDED migration's node records go
+ * (PR #26 follow-up C3), one directory per retired selection event.
+ *
+ * A subdirectory of the roadmap rather than a directory of its own, because
+ * that is exactly what makes the records stop rendering with no reader
+ * changing: listRecordIds scans one directory level and keeps only `*.md`
+ * entries, so a directory named `failed` is skipped by every list, every view
+ * and every check — while the files stay in the store, in git, and readable by
+ * a human asking what the failed attempt had charted.
+ */
+const FAILED_ROADMAP_DIR = "failed";
+
+/** Path a superseded migration's node record is parked at. Both ids validated. */
+export function failedRoadmapNodePath(
+  layout: StoreLayout,
+  selection: string,
+  id: string,
+): string {
+  return join(
+    layout.roadmapDir,
+    FAILED_ROADMAP_DIR,
+    requireValidId(selection, "migration selection"),
+    `${requireValidId(id, "roadmap node")}.md`,
+  );
+}
+
+/** A roadmap node record: validated frontmatter plus its intent prose. */
+export interface RoadmapNodeRecord {
+  frontmatter: RoadmapNodeFrontmatter;
+  body: string;
+}
+
+/** Read and validate one roadmap node record. */
+export async function readRoadmapNode(
+  layout: StoreLayout,
+  id: string,
+): Promise<RoadmapNodeRecord> {
+  const { frontmatter, body } = await readFrontmatterFile(roadmapNodePath(layout, id));
+  return { frontmatter: roadmapNodeFrontmatterSchema.parse(frontmatter), body };
+}
+
+/** Validate and atomically write one roadmap node record. */
+export async function writeRoadmapNode(
+  layout: StoreLayout,
+  frontmatter: RoadmapNodeFrontmatter,
+  body: string,
+): Promise<void> {
+  const valid = roadmapNodeFrontmatterSchema.parse(frontmatter);
+  await writeFrontmatterFile(roadmapNodePath(layout, valid.id), valid, body);
+}
+
+/**
+ * Ids of every roadmap node record on disk, sorted; [] when the directory is
+ * ABSENT (nothing charted yet — the dir appears with the first node, the same
+ * on-demand shape `nahel/journal/distilled/` has).
+ *
+ * Absence means ENOENT and nothing else. A permission error, an I/O error, or
+ * a non-directory sitting at `nahel/roadmap` all propagate: "no nodes" and
+ * "could not look" are different facts and only the first is safe to render —
+ * a swallowed failure would let the roadmap views state that a store has no
+ * roadmap when it has one nahel could not read. (listDistilledMarkers also
+ * treats ENOTDIR as absence, because there the missing directory may be an
+ * ANCESTOR of the path; here the path itself is the store's own directory.)
+ */
+export async function listRoadmapNodes(layout: StoreLayout): Promise<string[]> {
+  return listRecordIds(layout.roadmapDir);
+}
+
+/**
+ * The scan listRoadmapNodes, listMaps and listTickets all are: the record ids
+ * in one on-demand directory. Shared so the absence rule above is stated once
+ * and cannot drift between the three directories that follow it.
+ *
+ * ONE LEVEL, `*.md` only — which is load-bearing, not incidental: a
+ * subdirectory is never a record, so parking a superseded migration's nodes
+ * under `nahel/roadmap/failed/<selection>/` (C3) takes them out of every list,
+ * view and check at once, without a single reader learning a new rule.
+ */
+async function listRecordIds(dir: string): Promise<string[]> {
+  const entries = await readdir(dir).catch((error) => {
+    if ((error as { code?: unknown }).code === "ENOENT") return [] as string[];
+    throw error;
+  });
+  return entries
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => name.slice(0, -3))
+    .sort();
+}
+
+/**
+ * Every roadmap node record, in id order — the one deterministic read the
+ * derived-status and view layers work over (they need the whole tree: parents,
+ * sideways links, and lineage are all cross-node facts).
+ */
+export async function readRoadmapNodes(layout: StoreLayout): Promise<RoadmapNodeRecord[]> {
+  const records: RoadmapNodeRecord[] = [];
+  for (const id of await listRoadmapNodes(layout)) {
+    records.push(await readRoadmapNode(layout, id));
+  }
+  return records;
+}
+
+/**
+ * Resolve a node reference — a slug or an id — to its record, or null when
+ * nothing matches. Both spellings address the same node (F1): an id is tried
+ * as a record path first, and anything else (or a well-formed id with no
+ * record) falls through to a name match. Duplicate slugs are refused at
+ * creation and reported by `nahel validate`, so the id-ordered first match
+ * here is deterministic even on a store where a merge produced two.
+ */
+export async function resolveRoadmapNode(
+  layout: StoreLayout,
+  ref: string,
+): Promise<RoadmapNodeRecord | null> {
+  if (ID_PATTERN.test(ref)) {
+    const text = await readTextFile(roadmapNodePath(layout, ref));
+    if (text !== null) return readRoadmapNode(layout, ref);
+  }
+  for (const record of await readRoadmapNodes(layout)) {
+    if (record.frontmatter.name === ref) return record;
+  }
+  return null;
+}
+
+/** Path of a map record. The id is validated before any join. */
+export function mapPath(layout: StoreLayout, id: string): string {
+  return join(layout.mapsDir, `${requireValidId(id, "map")}.md`);
+}
+
+/** Path of a decision-ticket record. The id is validated before any join. */
+export function ticketPath(layout: StoreLayout, id: string): string {
+  return join(layout.ticketsDir, `${requireValidId(id, "ticket")}.md`);
+}
+
+/** A map record (Phase 4 F7): validated frontmatter plus its Notes prose. */
+export interface MapRecord {
+  frontmatter: MapFrontmatter;
+  body: string;
+}
+
+/** A decision-ticket record: validated frontmatter plus the question itself. */
+export interface TicketRecord {
+  frontmatter: TicketFrontmatter;
+  body: string;
+}
+
+/** Read and validate one map record. */
+export async function readMap(layout: StoreLayout, id: string): Promise<MapRecord> {
+  const { frontmatter, body } = await readFrontmatterFile(mapPath(layout, id));
+  return { frontmatter: mapFrontmatterSchema.parse(frontmatter), body };
+}
+
+/** Validate and atomically write one map record. */
+export async function writeMap(
+  layout: StoreLayout,
+  frontmatter: MapFrontmatter,
+  body: string,
+): Promise<void> {
+  const valid = mapFrontmatterSchema.parse(frontmatter);
+  await writeFrontmatterFile(mapPath(layout, valid.id), valid, body);
+}
+
+/** Read and validate one decision-ticket record. */
+export async function readTicket(layout: StoreLayout, id: string): Promise<TicketRecord> {
+  const { frontmatter, body } = await readFrontmatterFile(ticketPath(layout, id));
+  return { frontmatter: ticketFrontmatterSchema.parse(frontmatter), body };
+}
+
+/** Validate and atomically write one decision-ticket record. */
+export async function writeTicket(
+  layout: StoreLayout,
+  frontmatter: TicketFrontmatter,
+  body: string,
+): Promise<void> {
+  const valid = ticketFrontmatterSchema.parse(frontmatter);
+  await writeFrontmatterFile(ticketPath(layout, valid.id), valid, body);
+}
+
+/** Ids of every map record on disk, sorted; [] when nothing is charted yet. */
+export async function listMaps(layout: StoreLayout): Promise<string[]> {
+  return listRecordIds(layout.mapsDir);
+}
+
+/** Ids of every ticket record on disk, sorted; [] when none exist yet. */
+export async function listTickets(layout: StoreLayout): Promise<string[]> {
+  return listRecordIds(layout.ticketsDir);
+}
+
+/** Every map record, in id order. */
+export async function readMaps(layout: StoreLayout): Promise<MapRecord[]> {
+  const records: MapRecord[] = [];
+  for (const id of await listMaps(layout)) records.push(await readMap(layout, id));
+  return records;
+}
+
+/**
+ * Every ticket record, in id order — what F8's frontier predicate and every
+ * map view read, since a ticket's blocking edges name siblings and a map's
+ * ticket list is a fact held by the tickets, not by the map.
+ */
+export async function readTickets(layout: StoreLayout): Promise<TicketRecord[]> {
+  const records: TicketRecord[] = [];
+  for (const id of await listTickets(layout)) records.push(await readTicket(layout, id));
+  return records;
+}
+
+/** The tickets hanging off one map, in id order. */
+export async function ticketsForMap(
+  layout: StoreLayout,
+  mapId: string,
+): Promise<TicketRecord[]> {
+  return (await readTickets(layout)).filter((record) => record.frontmatter.map === mapId);
+}
+
+/**
+ * Resolve a map reference to its record, or null when nothing matches. A map
+ * has no slug of its own — it IS the chart of one node — so three spellings
+ * address it: the map's own id, and the node's id or slug. A node carries at
+ * most one map (creation refuses a second, and `validate` reports any that
+ * arrive by merge), so the node-side lookup is unambiguous; where a merge did
+ * produce two, the id-ordered first match keeps this read deterministic.
+ */
+export async function resolveMap(layout: StoreLayout, ref: string): Promise<MapRecord | null> {
+  if (ID_PATTERN.test(ref)) {
+    const text = await readTextFile(mapPath(layout, ref));
+    if (text !== null) return readMap(layout, ref);
+  }
+  const node = await resolveRoadmapNode(layout, ref);
+  if (node === null) return null;
+  return (await readMaps(layout)).find((map) => map.frontmatter.node === node.frontmatter.id) ?? null;
 }
 
 /**

@@ -62,12 +62,79 @@ export const FOUNDING_MODES = ["guided", "hands-off"] as const;
 export type FoundingMode = (typeof FOUNDING_MODES)[number];
 
 /**
+ * What generation of intent a roadmap node states (glossary: Roadmap node;
+ * Phase 4 F1): `product` — what the product is, pointing at a permanent design
+ * doc; `feature` — one delta, the node the grilling workflow turns into a PRD;
+ * `initiative` — a node linking sideways into several features (a theme, a
+ * campaign), whose rollup semantics stay deliberately undefined until a real
+ * initiative lands. Generation three is the work item itself, unchanged.
+ */
+export const ROADMAP_NODE_KINDS = ["product", "feature", "initiative"] as const;
+export type RoadmapNodeKind = (typeof ROADMAP_NODE_KINDS)[number];
+
+/**
+ * When a roadmap node is meant to be worked (glossary: Horizon; Phase 4 F1).
+ * This is the ONLY sequencing vocabulary the layer has: no rank, no score, no
+ * priority number is ever stored, and multiple parallel `now`s are the
+ * intended shape rather than a defect (F8's anti-waterfall rule).
+ */
+export const ROADMAP_HORIZONS = ["now", "next", "later"] as const;
+export type RoadmapHorizon = (typeof ROADMAP_HORIZONS)[number];
+
+/**
+ * What kind of work answers a decision ticket (glossary: Decision ticket;
+ * Phase 4 F7, wayfinder-adapted): `research` — go find out; `prototype` — build
+ * a throwaway and look; `grilling` — interview the human until the branch is
+ * resolved; `task` — the answer is known, someone just has to do it. The type
+ * picks the surface the working-a-map workflow reaches for, nothing else: it
+ * carries no lifecycle of its own and never gates a transition.
+ */
+export const DECISION_TICKET_TYPES = ["research", "prototype", "grilling", "task"] as const;
+export type DecisionTicketType = (typeof DECISION_TICKET_TYPES)[number];
+
+/**
+ * A decision ticket's lifecycle state (glossary: Decision ticket; Phase 4 F7).
+ * Four states and six transitions, every one of them a named CLI verb — the
+ * PRD's transition table read literally.
+ *
+ * `claimed` is ADVISORY assignment and deliberately NOT the intervention claim
+ * (`nahel intervene claim`, which freezes a work-item subtree against agent
+ * mutation): a claimed ticket refuses only a second claim, release is always
+ * permitted to anyone, and nothing anywhere is frozen. The two words share a
+ * spelling and nothing else — F5 named the distinction, F8's frontier depends
+ * on it (an `open` ticket with no claimant is takeable).
+ */
+export const DECISION_TICKET_STATES = ["open", "claimed", "resolved", "closed"] as const;
+export type DecisionTicketState = (typeof DECISION_TICKET_STATES)[number];
+
+/**
  * Who owns legislation for a governance area (glossary: Delegated
  * governance): `human` — agents propose, the human approves; `delegated` —
  * agent roles decide via consensus. Recorded in Phase 1, enforced later.
+ *
+ * This is the ARCHITECTURE side's set, and `config.governance.architecture` is
+ * its only remaining user: `agent` is a PRODUCT-side value (below), so
+ * widening this enum in place would silently make
+ * `governance.architecture: agent` valid — which docs/roadmap.md §7 does not
+ * permit until Phase 5 decides otherwise.
  */
 export const GOVERNANCE_MODES = ["human", "delegated"] as const;
 export type GovernanceMode = (typeof GOVERNANCE_MODES)[number];
+
+/**
+ * Who owns PRODUCT legislation (glossary: Agent-as-PO; Phase 4 F5, ADR-0008 as
+ * amended 2026-08-01). The architecture set plus `agent` — agent-as-PO owns
+ * roadmap decisions outright, under its own journaled authority, with no
+ * consensus step and no awaiting-your-eyes surface. `delegated` keeps its
+ * Phase 2 meaning (cross-vendor consensus for PRD approval) untouched.
+ *
+ * A SEPARATE enum rather than a cross-field `refine`: `governanceSchema`
+ * declares each field independently, so the architecture side's refusal falls
+ * out of its own `z.enum` — no extra predicate, and the error names the
+ * offending field and its legal values for free.
+ */
+export const PRODUCT_GOVERNANCE_MODES = ["human", "delegated", "agent"] as const;
+export type ProductGovernanceMode = (typeof PRODUCT_GOVERNANCE_MODES)[number];
 
 /**
  * Who may merge a reviewed PR (glossary: Merge authority; PRD F3.4):

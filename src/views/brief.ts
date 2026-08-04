@@ -5,6 +5,11 @@ import {
   type FoundingSignatureStatus,
   type MergeAuthorityStatus,
 } from "../governance/authority";
+import {
+  awaitingRoadmapReview,
+  type AwaitingRoadmapReview,
+} from "../governance/roadmap-review";
+import { QA_SWEEP_EVENT_TYPE } from "../schema/events";
 import type {
   Actor,
   Config,
@@ -12,15 +17,19 @@ import type {
   ObservationFrontmatter,
   WorkItemFrontmatter,
 } from "../schema/records";
+import { resolveActor } from "../store/actor";
 import {
   knowledgePaths,
   listObservations,
   readObservation,
+  readRoadmapNodes,
   readTextFile,
+  type RoadmapNodeRecord,
   type StoreLayout,
 } from "../store/layout";
 import { GOAL_HEADING, HARD_CONSTRAINTS_HEADING } from "../templates/product";
 import { collectProgress, renderProgress } from "./progress";
+import { renderBriefRoadmap } from "./roadmap";
 import { chronological, loadSnapshot, type Snapshot } from "./snapshot";
 import { renderStatus } from "./status";
 
@@ -76,8 +85,21 @@ export interface BriefInputs {
   governance?: Config["governance"];
   /** Merge authority in force, with its journal provenance (F3.4). */
   merge: MergeAuthorityStatus;
+  /**
+   * The actor this brief is rendered FOR (Phase 4 F5). The awaiting-your-eyes
+   * line is measured from THIS actor's own last recorded act, so the brief has
+   * to know whose eyes it is addressing — a resolved actor, exactly as every
+   * mutation resolves the one it acts as.
+   */
+  reader: Actor;
   /** Responsibility routing map from config, or undefined when unconfigured. */
   routing?: Config["routing"];
+  /**
+   * Roadmap node records (Phase 4 F4), in the id order readRoadmapNodes
+   * returns — the block orders them itself, by horizon entry. Absent or empty
+   * renders no roadmap section at all.
+   */
+  nodes?: readonly RoadmapNodeRecord[];
   /**
    * Observation records, oldest → newest (created → id), for the active
    * repro-waivers section (F5). Optional: absent renders no waiver block.
@@ -244,11 +266,42 @@ function governanceBody(inputs: BriefInputs): string {
   const governance = resolveGovernance(inputs.governance);
   const area = (label: string, resolved: { mode: string; defaulted: boolean }): string =>
     `${label}: ${resolved.mode}${resolved.defaulted ? " (default)" : ""}`;
-  return [
+  const lines = [
     area("product", governance.product),
     area("architecture", governance.architecture),
     mergeLine(inputs.merge),
-  ].join("\n");
+  ];
+  // The posture's consequence, right under the posture that decides it (F5).
+  const awaiting = awaitingRoadmapReview(inputs.governance, inputs.reader, inputs.events);
+  if (awaiting !== undefined) lines.push(awaitingRoadmapLine(awaiting));
+  return lines.join("\n");
+}
+
+/**
+ * The awaiting-your-eyes line (PRD F5): what agents moved on the roadmap since
+ * the human last touched it. ONE line — acts counted, nodes named up to the
+ * cap, remainder stated with the verb that shows the rest, exactly as F4's
+ * block degrades. Rendered only when something waits, so a project whose
+ * roadmap the human keeps up with (and every project under agent-as-PO, which
+ * has no surface at all) carries zero noise.
+ *
+ * No truncation rung touches it: it is one line, and it is the layer's entire
+ * control — a roadmap layer that trusts every agent to write needs the human
+ * to be told what was written.
+ */
+function awaitingRoadmapLine(awaiting: AwaitingRoadmapReview): string {
+  const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  const named = awaiting.nodes.map((node) => node.name).join(", ");
+  const rest = awaiting.more === 0 ? "" : `, +${awaiting.more} more — nahel roadmap`;
+  const total = awaiting.nodes.length + awaiting.more;
+  // A change that touched no node — a retracted lifecycle fact (A1) — carries
+  // no node clause: `on 0 nodes — ` would be a list header over nothing. The
+  // act is still counted, and the verb that shows what moved is still named.
+  const where = total === 0 ? " — nahel roadmap" : ` on ${count(total, "node")} — ${named}${rest}`;
+  return (
+    `roadmap changes since your last touch (${awaiting.since}): ` +
+    `${count(awaiting.changes, "agent act")}${where}`
+  );
 }
 
 /** The merge-authority line: what config says, and what is actually in force. */
@@ -327,15 +380,6 @@ function waiversBody(
   }
   return lines.length === 0 ? null : lines.join("\n");
 }
-
-/**
- * The ONE event type the QA section reads (Phase 3 PRD F6, qa-lane.md): the
- * whole-sweep summary, written exactly once per sweep. The per-case types
- * (`qa.result`, `qa.finding`, `qa.probe`) are a different SCOPE and are
- * deliberately never read here — promoting a per-case event to this line
- * would report one case as if it were a whole sweep.
- */
-export const QA_SWEEP_EVENT_TYPE = "qa.sweep-completed";
 
 /** A payload value rendered for a one-line summary; absent reads as `?`. */
 function payloadField(payload: Record<string, unknown>, key: string): string {
@@ -419,9 +463,16 @@ function clipText(text: string, codePoints: number): string {
   return Array.from(text).slice(0, codePoints).join("");
 }
 
-/** One deterministic assembly at a given rung of the truncation ladder. */
+/**
+ * One deterministic assembly at a given rung of the truncation ladder.
+ *
+ * `roadmap` arrives pre-rendered because no rung touches it — it is self-capping
+ * at BRIEF_ROADMAP_MAX_LINES — and re-deriving every feature's status once per
+ * rung would walk the item tree and the journal for an answer that cannot change.
+ */
 function assemble(
   inputs: BriefInputs,
+  roadmap: string | null,
   keptEvents: number,
   dropDone: boolean,
   constitutionClip: number | null,
@@ -455,6 +506,10 @@ function assemble(
   // Optional, right after governance: advisory routing map when configured.
   const routing = routingBody(inputs.routing);
   if (routing !== null) sections.push(`== responsibility routing ==\n${routing}`);
+  // Optional, between the policy and the work: where the product is going
+  // (Phase 4 F4). It sits ABOVE item statuses because that is the reading
+  // order — intent, then the work under it.
+  if (roadmap !== null) sections.push(`== roadmap ==\n${roadmap}`);
   sections.push(
     `== item statuses ==\n${statusSection}`,
     `== recent activity (newest last) ==\n${activityBody(inputs.events, keptEvents)}`,
@@ -496,42 +551,53 @@ function largestFitting(lo: number, hi: number, size: (value: number) => number)
  * every section is present and every truncation is marked — never silent.
  */
 export function renderBrief(inputs: BriefInputs): string {
+  // Derived once, above the ladder: the roadmap block is the same string at
+  // every rung (Phase 4 F4 — it is capped, never truncated).
+  const roadmap = renderBriefRoadmap(inputs.nodes ?? [], inputs.snapshot.items, inputs.events);
   const total = inputs.events.length;
-  const full = assemble(inputs, total, false, null);
+  const full = assemble(inputs, roadmap, total, false, null);
   if (byteLength(full) <= BRIEF_BUDGET_BYTES) return full;
 
   // Rung 1: drop oldest activity first. Size is monotone in kept events, so
   // binary-search the largest kept count in [0, total-1] (marker present).
   if (total > 0) {
     const kept = largestFitting(0, total - 1, (k) =>
-      byteLength(assemble(inputs, k, false, null)),
+      byteLength(assemble(inputs, roadmap, k, false, null)),
     );
-    if (kept >= 0) return assemble(inputs, kept, false, null);
+    if (kept >= 0) return assemble(inputs, roadmap, kept, false, null);
   }
 
   // Rung 2: with activity exhausted, drop done-item detail.
   const dropDone = withoutDoneDetail(inputs.snapshot.items).omitted > 0;
-  if (dropDone && byteLength(assemble(inputs, 0, true, null)) <= BRIEF_BUDGET_BYTES) {
-    return assemble(inputs, 0, true, null);
+  if (dropDone && byteLength(assemble(inputs, roadmap, 0, true, null)) <= BRIEF_BUDGET_BYTES) {
+    return assemble(inputs, roadmap, 0, true, null);
   }
 
   // Rung 3: clip the constitution, keeping the largest prefix that fits.
   const constitutionLength = Array.from(constitutionBody(inputs)).length;
   const clip = largestFitting(0, constitutionLength, (c) =>
-    byteLength(assemble(inputs, 0, dropDone, c)),
+    byteLength(assemble(inputs, roadmap, 0, dropDone, c)),
   );
-  return assemble(inputs, 0, dropDone, Math.max(clip, 0));
+  return assemble(inputs, roadmap, 0, dropDone, Math.max(clip, 0));
 }
 
 /**
  * Compose the brief for a repo: ONE store read pass (the same snapshot the
  * other views load, the merged journal, PRODUCT.md through the store's text
  * read) plus the injected warnings source, then the pure renderer.
+ *
+ * The READER is resolved here, the one way identity is ever resolved (PRD F9,
+ * store/actor.ts): the config actor entry, overridden by the NAHEL_ACTOR value
+ * the entry point read. The brief is rendered FOR somebody — F5's
+ * awaiting-your-eyes line is measured from that somebody's last act — and a
+ * view that guessed at identity where mutations resolve it would be a second
+ * answer to a settled question.
  */
 export async function composeBrief(
   layout: StoreLayout,
   config: Config,
   warningsSource: BriefWarningsSource = NO_WARNINGS,
+  actorOverride?: string,
 ): Promise<string> {
   const snapshot = await loadSnapshot(layout);
   const events = await collectProgress(layout);
@@ -554,7 +620,9 @@ export async function composeBrief(
     founding: config.founding,
     governance: config.governance,
     merge: await readMergeAuthority(layout, config),
+    reader: resolveActor(config.actor, actorOverride),
     routing: config.routing,
+    nodes: await readRoadmapNodes(layout),
     observations,
     warnings,
   });

@@ -1,4 +1,4 @@
-import type { GovernanceMode, MergeAuthority } from "../schema/enums";
+import type { GovernanceMode, MergeAuthority, ProductGovernanceMode } from "../schema/enums";
 import { CONFIG_UPDATED_EVENT_TYPE } from "../schema/events";
 import type { Actor, Config, Governance, JournalEvent } from "../schema/records";
 import { readJournal } from "../store/journal";
@@ -46,17 +46,22 @@ export const GOVERNANCE_DEFAULTS: Governance = {
   architecture: "human",
 };
 
-/** One area's resolved mode, and whether it came from absence. */
-export interface ResolvedGovernanceArea {
-  mode: GovernanceMode;
+/**
+ * One area's resolved mode, and whether it came from absence. Generic in the
+ * mode because the two areas no longer share a value set (Phase 4 F5): only
+ * product takes `agent`, and a caller narrowing on it must not be told the
+ * architecture side might carry it.
+ */
+export interface ResolvedGovernanceArea<Mode extends string = ProductGovernanceMode> {
+  mode: Mode;
   /** True when the mode is the default because config declared nothing. */
   defaulted: boolean;
 }
 
 /** The whole posture in force, area by area. */
 export interface ResolvedGovernance {
-  product: ResolvedGovernanceArea;
-  architecture: ResolvedGovernanceArea;
+  product: ResolvedGovernanceArea<ProductGovernanceMode>;
+  architecture: ResolvedGovernanceArea<GovernanceMode>;
 }
 
 /**
@@ -68,7 +73,9 @@ export interface ResolvedGovernance {
 export function resolveGovernance(
   governance: Partial<Governance> | undefined,
 ): ResolvedGovernance {
-  const area = (key: keyof Governance): ResolvedGovernanceArea => {
+  const area = <Key extends keyof Governance>(
+    key: Key,
+  ): ResolvedGovernanceArea<Governance[Key]> => {
     const mode = governance?.[key];
     return mode === undefined
       ? { mode: GOVERNANCE_DEFAULTS[key], defaulted: true }

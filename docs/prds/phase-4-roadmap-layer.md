@@ -150,10 +150,22 @@ node-level status (blocking is advisory — F8 — not a roadmap state):
 | --- | --- |
 | no epic id recorded on the node | `planned` |
 | epic id recorded but no such item record | `unknown` + `validate` warning |
-| epic exists, zero children after excluding `dropped` | `planned` + `validate` warning when children existed and all were dropped |
-| every non-dropped child `done` | `built` |
-| every non-dropped child `backlog` | `planned` |
+| epic exists with **no descendants at all** | the epic item's OWN status: `backlog` → `planned`; `in-progress`/`blocked`/`in-review` → `in-flight`; `done` → `built`; `dropped` → `planned` + `validate` warning |
+| epic has descendants, every one `dropped` | `planned` + `validate` warning |
+| every non-dropped descendant `done` | `built` |
+| every non-dropped descendant `backlog` | `planned` |
 | anything else (any mix, any `in-progress`/`blocked`/`in-review`) | `in-flight` |
+
+**The childless-epic row is a contract clarification** (PR #26 review,
+superseding the earlier row "epic exists, zero children after excluding
+`dropped` → `planned`"). A `direct`-lane epic never grows children, so that
+row rendered a feature whose only work item was `in-progress` as `planned`,
+and rendered it `planned` still once the item was `done`. With no descendants
+the epic is not a container over the work — it **is** the work, and its own
+status is the rollup. The moment **one** descendant exists the subtree rows
+are authoritative again and the epic item's own status is excluded: a `done`
+epic must not override backlog work still open underneath it, and must not
+override the all-dropped row.
 
 **Product status** — the count distribution of its feature children's dev
 statuses, including `unknown` ("3 built · 2 in-flight · 6 planned · 1
@@ -200,9 +212,12 @@ filled by judgment.
   journal and from file mtimes/git status.
 - Each row of the dev-status table is exercised by its own case, including:
   no epic id → `planned`; dangling epic id → `unknown` plus the named
-  `validate` warning; empty epic → `planned`; all-dropped epic → `planned`
-  plus warning; a `blocked`-only epic and an `in-review`-only epic each →
-  `in-flight`; done+backlog mix → `in-flight`.
+  `validate` warning; a childless epic at each of its six own statuses
+  (`backlog` → `planned`, `in-progress`/`blocked`/`in-review` → `in-flight`,
+  `done` → `built`, `dropped` → `planned` plus warning); all-dropped epic →
+  `planned` plus warning; a `blocked`-only epic and an `in-review`-only epic
+  each → `in-flight`; done+backlog mix → `in-flight`. A `done` epic with a
+  live descendant does NOT read `built` — the root never overrides a subtree.
 - A product node renders the full distribution including any `unknown`
   count; with no feature children it renders `no features`.
 - A `qa.sweep-completed` whose `item` is the feature's epic changes only
@@ -353,10 +368,33 @@ control is **visibility**:
 
 The layer is proven by adopting the state that already exists, in **both
 live stores**. The migration rule is **coverage, not a count**: *every
-roadmap-shaped backlog item in both stores at migration time* gets a node,
+roadmap-shaped item in both stores at migration time* gets a node,
 enumerated at build time from the stores themselves. (The grill note's "8
 headline items" was a scribe miscount, corrected by Jim — journal event
-`wf87dkyx`.) As recorded today that is:
+`wf87dkyx`.)
+
+**The candidate line** (revised by Jim in the PR #26 review, follow-up C1 —
+the original text drew it at status `backlog`): a candidate is a
+**top-level** item — one with **no parent** — at any status but `dropped`,
+which puts `backlog`, `in-progress`, `blocked`, `in-review` **and `done`**
+in scope. Done features are candidates because the roadmap's job is
+built / in-flight / planned rather than planned alone: excluding them
+migrates a delivered product to an empty roadmap and leaves it historyless
+(speed-count, where the shipped work *is* the product, is the case that
+proves it). A done feature's node needs no extra field to say so — its
+columns derive `built` from the epic it names, by the childless-epic rule or
+by its children's rollup. Only `dropped` is out: abandoned intent is not
+intent the roadmap carries. The judgment rules are unchanged — roadmap-shaped
+versus work-shaped, near-misses need reasons.
+
+**Pre-store history is explicitly out of scope.** A capability that shipped
+before the store existed carries no work item, so a node charted for it would
+name no epic and would render `planned` while claiming shipped history —
+false history, written by the one act whose purpose is an auditable record.
+Bringing such capabilities in is a **historical import**, designed
+separately; migration does not attempt it.
+
+As recorded today the sets are:
 
 - **nahel** — the roadmap-headline backlog items recorded today
   (`detached-state-repo` `aqz2bvav`, `architecture-docs-wiki` `x41wnrap`,
@@ -387,14 +425,20 @@ whatever nodes happen to exist afterwards.
 **Acceptance criteria:**
 - The **first** migration event in each store enumerates the complete
   selected set — included ids and excluded near-misses with reasons — and
-  strictly precedes every node-creation event in that store (journal order
-  proves it; a set event written after the nodes fails this criterion).
+  strictly precedes every node-creation event in that store (a set event
+  written after the nodes fails this criterion — and so does one written in
+  the same second; rendered journal order is a quick look, never the proof).
+  **Strict precedence means strict timestamp inequality**: the selection
+  event's `ts` is strictly earlier than every node-creation event's `ts`, and a
+  same-second tie fails migration — segments are per-invocation and a
+  same-second tie breaks on random event id, so rendered order alone proves
+  nothing.
 - Every id in that selected set has a node afterwards, and every node traces
   back to an id in it — the set and the result match exactly, with no
   orphans and nothing invented.
 - After migration, `nahel roadmap` in each store shows every roadmap-shaped
-  backlog item recorded at migration time, enumerated from the store rather
-  than from this document.
+  candidate recorded at migration time — top-level, any status but `dropped`
+  — enumerated from the store rather than from this document.
 - Each migration act is journaled naming the node and the item it covers.
 - `git diff` over `nahel/items/` across the whole migration is **empty** in
   both stores — a single modified item record fails this criterion (F1's
@@ -408,13 +452,32 @@ Matt Pocock's wayfinder method, adapted onto in-store records — no issue
 tracker anywhere:
 
 - A **map** is a lightweight record attached to a node (usually a feature or
-  initiative), holding: **Destination**, **Notes**, **Decisions so far** (a
+  initiative), showing: **Destination**, **Notes**, **Decisions so far** (a
   one-line index, not a store), **Not yet specified** (the fog — in-scope
   questions not yet sharp enough to ticket), and **Out of scope** (ruled
   beyond the destination; never graduates).
 - A **decision ticket** is a lightweight child record of the map with
   `type: research | prototype | grilling | task`, a question body, and
   advisory blocking edges to sibling tickets.
+
+**The index sections are DERIVED, and the map record stores neither**
+(contract clarification, PR #26 review, superseding the earlier reading in
+which `resolve` appended to a `decisions` array on the map and an
+out-of-scope `close` appended to its `out_of_scope` array). **Decisions so
+far** and the ticket-earned part of **Out of scope** are composed at read
+time from the map's own tickets, which already carry the decision and the
+ruling — storing a second copy made every resolution and every out-of-scope
+close rewrite the one record that every ticket on the map shares: a hot spot
+two concurrent sessions contend for, holding facts that were already written
+down. The map still **stores** what it charted with no ticket behind it: its
+fog, and the out-of-scope lines ruled before any ticket existed
+(`--out-of-scope` at `map new` / `map update`). Ruling something beyond the
+destination needs no ticket; a decision always does. Both derived sections
+order by the **journal event** that resolved or closed each ticket, in the
+store's canonical `ts → seq → id` total order — never by the ticket's
+`updated`, which `distill` moves long after the decision was made. A closed
+ticket therefore records its close event id (`closure`) exactly as a resolved
+one records its `resolution`.
 
 **Ticket lifecycle** — four states, and every transition is a CLI mutation
 (HC3), journaled:
@@ -425,8 +488,16 @@ tracker anywhere:
 | `open` → `claimed` | `nahel roadmap ticket claim <ref>` |
 | `claimed` → `open` | `nahel roadmap ticket release <ref>` |
 | `open`/`claimed` → `resolved` | `nahel roadmap ticket resolve <ref> --decision <one-liner>` |
-| `open`/`claimed` → `closed` | `nahel roadmap ticket close <ref> --reason <why>` (out of scope, or invalidated by another decision) |
+| `open`/`claimed` → `closed` | `nahel roadmap ticket close <ref> --reason <why> --out-of-scope`, or `… --invalidated-by <ticket-or-event>` |
 | `resolved`/`closed` → body distilled | `nahel roadmap ticket distill <ref>` |
+
+A close **states which disposition it is**, because the two the row covers are
+different facts: `--out-of-scope` means ruled beyond the destination and earns
+the reason a line in that section, while `--invalidated-by` means another
+decision answered the question out of existence — it was never beyond the
+destination, so it records the invalidating ref on the ticket and earns no
+Out-of-scope line, rendering beside Decisions so far instead. Both readings
+are derived from the closed ticket; neither writes the map.
 
 **Claim semantics** are advisory assignment, deliberately NOT the
 intervention claim (`nahel intervene claim` keeps its freeze semantics for
@@ -442,12 +513,28 @@ wayfinder's decisions-are-permanent principle on nahel's existing recall
 design. `distill` then **empties the ticket body through the CLI** — body
 deletion is a state mutation, never a raw file delete.
 
-Both are **multi-record sequences**, so each step rides the existing
-write-ahead choke point (`store/mutate.ts`: journal the event, then apply
-the record write) — no step invents its own write path. A sequence
-interrupted between any two steps is therefore a **recoverable partial
-state**, not corruption: `validate` names it and `validate --repair`
-(`replayPending`) rolls it forward.
+**Every terminal act distils, and the reasoning goes with it** (contract
+clarification, PR #26 review, superseding the earlier reading in which only
+`resolve` distilled and only the one-line decision was recorded):
+
+- `resolve` takes an optional **`--rationale`**, multi-line, stored verbatim
+  in the observation body with its paragraphs intact and its outer whitespace
+  trimmed. The one-liner says *what* was decided; nothing else in the store
+  says *why*, and the map's index is one row, so the rationale belongs in the
+  record that outlives the ticket body. A `--rationale` passed blank is
+  refused; omitting the flag is how a resolution says there is nothing to add.
+  The observation also carries the FULL question and the map's destination.
+- `close` **also distills an observation**, under both dispositions —
+  `closed-<ticket-id>`, tagged `closed` plus the disposition, sourcing the
+  close event, its body carrying the question, the ruling and the invalidating
+  ref where there is one. `distill` empties a closed ticket's body too, and
+  without this the question itself would be the one thing the store forgot.
+
+Resolve, close and distill all ride the existing write-ahead choke point
+(`store/mutate.ts`: journal the event, then apply the record write) — no step
+invents its own write path. A sequence interrupted between any two steps is
+therefore a **recoverable partial state**, not corruption: `validate` names it
+and `validate --repair` (`replayPending`) rolls it forward.
 
 - **Two workflow docs** ship: charting a map (name the destination, grill
   breadth-first, create tickets then wire blocking in a second pass, sketch
@@ -464,22 +551,32 @@ state**, not corruption: `validate` names it and `validate --repair`
   resolve, close, distill.
 - Claiming a claimed ticket exits non-zero naming the holder; release by any
   actor succeeds and returns the ticket to the frontier (F8).
-- `resolve` writes the decision event, the map's index line, **and** an
-  observation whose `sources` include the resolution event id; `nahel recall
-  <decision terms>` returns it.
+- `resolve` writes the decision event **and** an observation whose `sources`
+  include the resolution event id; `nahel recall <decision terms>` returns it,
+  and `map show` renders the index line derived from the resolved ticket. A
+  `--rationale` reaches that observation's body with its paragraphs intact and
+  never becomes a map row; a blank one is refused.
+- `close` writes an observation the same way under both dispositions, and a
+  closed ticket whose body has been distilled still answers `nahel recall
+  <question terms>` with its question, its ruling and its reason.
 - `distill` empties the body **through the CLI** and journals it; afterwards
   the decision is still fully readable from `nahel recall` and `nahel
   progress` alone — exercised by actually distilling one. A ticket body
   removed by a raw file edit is reported by `validate` as a finding (no
   distill event for an emptied body).
 - **Crash-shape**: with the process killed between **any two** steps of
-  `resolve` (decision event → ticket state → observation → map index line)
-  and of `distill`, `validate` names the partial state, `validate --repair`
-  completes it, and re-running the original verb afterwards is idempotent —
-  no duplicate observation, no second index line. Exercised at every
-  interruption point, not just the first.
-- An out-of-scope ruling `close`s the ticket, adds one line to Out of scope
-  with its reason, and never appears in Decisions so far.
+  `resolve` (decision event → ticket state → observation), of `close`
+  (close event → ticket state → observation), and of `distill`, `validate`
+  names the partial state, `validate --repair` completes it, and re-running
+  the original verb afterwards is idempotent — no duplicate observation, no
+  second index line. Exercised at every interruption point, not just the
+  first. The map is at no interruption point in any of them, because no
+  terminal verb writes it.
+- An out-of-scope ruling `close --out-of-scope`s the ticket, earns one line
+  under Out of scope with its reason, and never appears in Decisions so far;
+  a `close --invalidated-by <ref>` records the invalidating ref on the ticket
+  instead, earns NO Out-of-scope line, and never appears in Decisions so far
+  either — and a close naming neither disposition (or both) is refused.
 - Both workflow docs pass the workflow-format doc tests and are installed by
   the existing shim generator like every other workflow (HC5: drivable by
   conversation alone).
@@ -544,9 +641,9 @@ release does not regress the feature to `deployed`.
 
 | condition (F2's association rule throughout) | stage |
 | --- | --- |
-| a covering `release.announced` exists | `released` |
-| else a covering `deploy.completed` exists | `deployed` |
-| else a covering `qa.sweep-completed` exists | `tested` |
+| a covering `release.announced` with a nonblank `version`, `channel` and `announcement` | `released` |
+| else a covering `deploy.completed` with a nonblank `environment` | `deployed` |
+| else a covering `qa.sweep-completed` whose payload `failed` is `0` exactly | `tested` |
 | else dev status is `built` | `built` |
 | else dev status is `in-flight` | `in-flight` |
 | else dev status is `planned` | `planned` |
@@ -554,6 +651,30 @@ release does not regress the feature to `deployed`.
 
 Nothing about the stage is hand-set; it is a pure function of recorded
 events and F2's dev rollup.
+
+**Every row advances on a well-formed fact only** (contract clarification, PR
+#26 review, superseding the earlier reading in which any covering event of a
+type read that type's word). A stage is what a reader scans a column of, so
+each word has to mean the same thing: a fact that could carry it said so.
+
+- `released` — the winning release carries a **nonblank `version`, `channel`
+  and `announcement`**. Deliberately the **same predicate** the archival gate
+  below demands, so a view can never promise a word `nahel roadmap archive`
+  refuses.
+- `deployed` — the winning deploy carries a **nonblank `environment`**.
+- `tested` — `failed` is `0` **exactly**; greater than zero, missing,
+  non-numeric and negative are none of them a pass.
+
+A fact missing any of that falls through to the row below, down to the
+dev-status rows — otherwise a workflow reaches the strongest word on the
+board by logging nothing at all. Each silent decline is a `validate` warning
+naming the **event and the keys it lacks** (`roadmap.sweep-failed-count`,
+`roadmap.release-incomplete`, `roadmap.deploy-incomplete`), reported over
+**every** node whether or not it carries a `prd`, because holding a feature
+back silently is the failure mode. F2's **render table is unchanged**: the
+columns still print `tested <ts> (N failed)`, `deployed ? <ts>` and
+`released ? <ts>` verbatim, so one line carries both the fact the store holds
+and what that fact earned.
 
 **Acceptance criteria:**
 - Both types are documented vocabulary with defined payload shapes, and are
@@ -572,11 +693,26 @@ events and F2's dev rollup.
 ### F10 — PRD lifecycle: live until released, then archived
 
 - A feature's PRD lives at `docs/prds/<name>.md` and is **live** — edited as
-  the feature evolves — until the feature reaches `released`.
-- On release, the PRD is **archived**: moved to `docs/prds/archived/` with a
-  stamped header — released date, epic/item link, the **journal-pointer
-  line** (the id of the archival event), and the line that the **code and
-  tests are the truth now**. **No PRD is ever deleted.**
+  the feature evolves — until the feature is **archival-qualified**.
+- **Archival-qualified** means the winning unretracted `release.announced`
+  covering the feature carries a **nonblank `version`, `channel` and
+  `announcement`** — a release a reader can follow back, because archival
+  stamps a document closed **forever** on a header that **cites the release**.
+  Without all three the verb refuses, naming the release event and every
+  missing key, and the PRD stays live.
+- **This is the same predicate F9's `released` row uses** (contract
+  clarification, PR #26 review, superseding an interim reading in which the
+  stage stayed permissive while the verb did not). Stage `released` and
+  archival-qualified are therefore ONE fact, and a view can never promise a
+  word the verb refuses. What stays permissive is the **render**: F2's release
+  COLUMN still prints `released ? <ts>` for a release recording nothing,
+  because a column shows the fact the store holds and the stage says what that
+  fact earned.
+- On archival the PRD is **moved** to `docs/prds/archived/` with a stamped
+  header — released date, epic/item link, the **journal-pointer line** (the id
+  of the archival event), and the line that the **code and tests are the truth
+  now**. The archival event **names the release event it rests on**, so the
+  pointer reads both ways. **No PRD is ever deleted.**
 - **Every stored reference to the moved path is updated in the same act,
   through the CLI** (HC3). The complete set: (1) the **feature node's** PRD
   link; (2) the **owning plan item's** `prd` field — the item that authored
@@ -586,8 +722,8 @@ events and F2's dev rollup.
   after archival is a bug, not a warning.
 - **Product design docs are permanent** — updated in place on release, never
   archived. They state what the product is; a PRD stated one delta.
-- **Released means the delta is closed.** An archived PRD is never reopened
-  and never edited. Further development on a released feature is a **new
+- **An archival-qualified release means the delta is closed.** An archived PRD
+  is never reopened and never edited. Further development on a released feature is a **new
   feature node with a new PRD**, which may link the predecessor node for
   lineage — that is what keeps an archived PRD an honest record of what
   shipped rather than a document that quietly drifts after the fact.
@@ -611,10 +747,21 @@ events and F2's dev rollup.
   After archival, **zero** records in the store hold the old path
   (`rg`-checkable), and every update went through the CLI (journaled, no
   hand-edited frontmatter).
-- The archival journal event names the old and the new path.
-- A feature that has not reached `released` is never archived; `validate`
-  warns on a released feature whose PRD is still live, and on any `prd` path
-  pointing at a missing file.
+- The archival journal event names the old and the new path, **and the id of
+  the `release.announced` the archival rests on**.
+- A feature that has not reached `released` is never archived, and neither is
+  one whose winning release lacks a nonblank `version`, `channel` or
+  `announcement`: the refusal **names the release event and every missing
+  key**, and each of the three keys is exercised by its own case, blank
+  counting as missing. A **retracted** release is no release at all and earns
+  the ordinary stage refusal instead.
+- `validate` and the verb read the **same eligibility predicate**, so the
+  report can never name a command that then refuses: `roadmap.prd-unarchived`
+  fires on exactly the nodes archival accepts. A release too thin to carry an
+  archival is reported by F9's `roadmap.release-incomplete` instead — over
+  **every** node, whether or not it carries a `prd`, naming the event and the
+  missing keys, with a fix that is **re-logging the release**, never
+  archiving. A `prd` path pointing at a missing file warns as before.
 - The product design doc referenced by the product node is updated in the
   same act (diffable), not archived.
 - **Crash-shape**: the process is killed at **every** boundary of the write

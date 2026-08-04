@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { CORE_EVENT_TYPES, MUTATION_EVENT_TYPES } from "../../src/schema/events";
+import {
+  CORE_EVENT_TYPES,
+  MUTATION_EVENT_TYPES,
+  SELF_RECORDED_EVENT_TYPES,
+} from "../../src/schema/events";
 import { journalEventSchema } from "../../src/schema/records";
 
 const baseEvent = {
@@ -16,6 +20,10 @@ describe("schema/events", () => {
     expect(CORE_EVENT_TYPES).toEqual({
       itemCreated: "item.created",
       itemUpdated: "item.updated",
+      // Phase 4 F8: the write-ahead event of a deliberately blocked start. A
+      // CORE mutation type, because it REPLACES `item.updated` for that one
+      // transition rather than annotating one after the fact.
+      itemStartedBlocked: "item.started-with-open-blocker",
       runStarted: "run.started",
       runUpdated: "run.updated",
       runEnded: "run.ended",
@@ -23,8 +31,55 @@ describe("schema/events", () => {
       itemClaimed: "item.claimed",
       itemHandback: "item.handback",
       observationCreated: "observation.created",
+      roadmapNodeCreated: "roadmap.node-created",
+      roadmapNodeUpdated: "roadmap.node-updated",
+      mapCreated: "roadmap.map-created",
+      mapUpdated: "roadmap.map-updated",
+      ticketCreated: "roadmap.ticket-created",
+      ticketUpdated: "roadmap.ticket-updated",
+      ticketClaimed: "roadmap.ticket-claimed",
+      ticketReleased: "roadmap.ticket-released",
+      ticketResolved: "roadmap.ticket-resolved",
+      ticketClosed: "roadmap.ticket-closed",
+      ticketDistilled: "roadmap.ticket-distilled",
+      // Phase 4 F10: the one write-ahead event a PRD archival rides — the
+      // record links AND the two document steps that reach outside the store.
+      prdArchived: "roadmap.prd-archived",
+      // PR #26 follow-up C3: a failed migration attempt retired, its attributed
+      // node records moved out of the roadmap by document steps under one
+      // write-ahead event. A mutation type for the same reason archival is.
+      migrationSuperseded: "roadmap.migration-superseded",
       note: "note",
     });
+  });
+
+  test("supersession is self-recorded by its own verb — `nahel log` cannot claim a retirement", () => {
+    // The strongest case of any type here: a loggable supersession is one an
+    // agent could claim without moving a single record, leaving a journal that
+    // says an attempt was retired over a store still rendering its nodes.
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.migrationSuperseded)).toBe(
+      "`nahel roadmap migration supersede`",
+    );
+    expect(MUTATION_EVENT_TYPES.has(CORE_EVENT_TYPES.migrationSuperseded)).toBe(true);
+  });
+
+  test("archival is self-recorded by its own verb — `nahel log` cannot forge a closed delta", () => {
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.prdArchived)).toBe(
+      "`nahel roadmap archive`",
+    );
+  });
+
+  test("the roadmap node mutations are self-recorded by their own verb — `nahel log` cannot forge them", () => {
+    // Same reservation as every other mutation type: readers trust these by
+    // TYPE alone (F4 reads the event that set a node's horizon, F5 its actor),
+    // so a type an agent could hand-append through `log` is a type it could
+    // forge. The label names the verb, not `nahel item`/`nahel run`.
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.roadmapNodeCreated)).toBe(
+      "`nahel roadmap node`",
+    );
+    expect(SELF_RECORDED_EVENT_TYPES.get(CORE_EVENT_TYPES.roadmapNodeUpdated)).toBe(
+      "`nahel roadmap node`",
+    );
   });
 
   test("the mutation subset is exactly the core types minus the note observation type", () => {

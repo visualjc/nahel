@@ -54,6 +54,9 @@ function input(options: {
     items: [],
     runs: [],
     observations: [],
+    roadmapNodes: [],
+    maps: [],
+    tickets: [],
     segments:
       options.events === undefined
         ? []

@@ -1,16 +1,22 @@
 import { z } from "zod";
 import {
   ACTOR_KINDS,
+  DECISION_TICKET_STATES,
+  DECISION_TICKET_TYPES,
   FOUNDING_MODES,
   GOVERNANCE_MODES,
   INCEPTION_TIERS,
   LANES,
   MERGE_AUTHORITIES,
+  PRODUCT_GOVERNANCE_MODES,
+  ROADMAP_HORIZONS,
+  ROADMAP_NODE_KINDS,
   RUN_STATUSES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_TYPES,
 } from "./enums";
 import { ID_ALPHABET, ID_LENGTH, ID_PATTERN } from "./id";
+import { TIMESTAMP_PATTERN } from "./time";
 
 /**
  * Zod schemas + inferred types for every schema-v1 record (PRD F1).
@@ -26,10 +32,19 @@ const idField = z
     `must be an ${ID_LENGTH}-char lowercase base32 id (alphabet: ${ID_ALPHABET})`,
   );
 
+/**
+ * The stored timestamp field. A SHAPE check only, and deliberately so: it is a
+ * parse gate over state that already exists on disk, and tightening it to the
+ * calendar would turn a store carrying one impossible date into a store that
+ * cannot be read AT ALL — including by the `validate` run that would tell you
+ * about it. `epochSeconds` refuses impossible instants where they are USED, and
+ * `validate`'s `journal.timestamp` check reports them; the seam is stated in
+ * both places rather than hidden in either.
+ */
 const timestampField = z
   .string()
   .regex(
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
+    TIMESTAMP_PATTERN,
     "must be an ISO-8601 UTC timestamp with second precision: YYYY-MM-DDTHH:MM:SSZ",
   );
 
@@ -86,6 +101,71 @@ const repoRelativeDocPathField = (what: string) =>
 const prdPathField = repoRelativeDocPathField("prd");
 
 /**
+ * Where a PRD goes once its feature is released (Phase 4 F10): the delta it
+ * stated is closed, so the document moves under `docs/prds/archived/` and is
+ * never reopened or edited again. A path CONVENTION rather than a schema rule —
+ * both the archival verb and `validate` read it, and a single spelling is what
+ * keeps the verb that moves a PRD and the checks that judge where it sits from
+ * disagreeing about which deltas are closed.
+ */
+export const ARCHIVED_PRD_DIR = "docs/prds/archived/";
+
+/** True when a `prd` path names a closed delta (see ARCHIVED_PRD_DIR). */
+export function isArchivedPrdPath(path: string): boolean {
+  return path.startsWith(ARCHIVED_PRD_DIR);
+}
+
+/** Where the live PRD at `path` is archived to — its basename under that dir. */
+export function archivedPrdPath(path: string): string {
+  return `${ARCHIVED_PRD_DIR}${path.split(/[/\\]/).pop() ?? path}`;
+}
+
+/**
+ * One DOCUMENT step of a write-ahead sequence (Phase 4 F10): the file work an
+ * act does OUTSIDE the store's records. Archival has two — the PRD's
+ * move-and-stamp, and the line the product design doc gains — and both ride the
+ * same journal event the record writes ride, which is what makes a process
+ * killed mid-sequence recoverable: the journal ends up ahead of the filesystem
+ * exactly as it ends up ahead of a record, and repair rolls it forward.
+ *
+ * Both ops are stated so that applying them TWICE is applying them once: `move`
+ * is complete when the destination exists and the source does not, and `append`
+ * writes only when `marker` is absent from the document. That idempotence is
+ * what lets repair converge from any interruption point without having to know
+ * how far the original act got.
+ *
+ * `append` keys on a MARKER rather than on the line itself: a product design doc
+ * is permanent and gets rewritten by people (F10), so "has this act landed" must
+ * survive the sentence being reworded. The marker must therefore be
+ * EVENT-SCOPED — text only this act could have written, such as its own event
+ * id. A marker naming something the document might plausibly already contain (a
+ * path, a slug) is worse than no marker at all: it suppresses the line the act
+ * owes, and then reports the act as converged.
+ *
+ * The same rule is why a `move` is judged by its own `header` (which names the
+ * event) and not by the destination merely existing: a document at the target
+ * path may be another delta's, and unlinking the source into it destroys a live
+ * PRD.
+ */
+export const documentEditSchema = z.discriminatedUnion("op", [
+  z.strictObject({
+    op: z.literal("move"),
+    from: repoRelativeDocPathField("document from"),
+    to: repoRelativeDocPathField("document to"),
+    /** The stamped header prepended to the moved document, below any frontmatter. */
+    header: nonEmptyString("document header"),
+  }),
+  z.strictObject({
+    op: z.literal("append"),
+    path: repoRelativeDocPathField("document path"),
+    /** The text whose presence means this append already landed. */
+    marker: nonEmptyString("document marker"),
+    line: nonEmptyString("document line"),
+  }),
+]);
+export type DocumentEdit = z.infer<typeof documentEditSchema>;
+
+/**
  * The `investigation` field (PRD F5.1): a bug item's durable diagnosis
  * document — symptoms, repro status, hypotheses tested, root cause. By the
  * bug-lane workflow convention it lives at `docs/investigations/<item-id>.md`;
@@ -110,6 +190,158 @@ export const workItemFrontmatterSchema = z.strictObject({
   updated: timestampField,
 });
 export type WorkItemFrontmatter = z.infer<typeof workItemFrontmatterSchema>;
+
+/**
+ * Roadmap node frontmatter (Phase 4 F1) — the layer ABOVE work items: one
+ * record type covering all three kinds, tree-shaped by `parent`, with the
+ * node's intent prose in the markdown body (the observation precedent — the
+ * intent IS the body, so a product's paragraph and a feature's one-liner need
+ * no separate field).
+ *
+ * There is deliberately **no status field**, and strict objects are what make
+ * that mechanical: every status a node renders is DERIVED from work items and
+ * journal events (F2), so there is simply no key to hand-set.
+ *
+ * Reference direction is one-way and canonical: the node points at the work
+ * item (`epic`), and no work-item record ever points back. Every ref field is
+ * a plain id — a dangling one is a `validate` finding, never a refused
+ * mutation, because the target may arrive by a later merge (ADR-0012).
+ *
+ * Per-kind fields are all optional on the one record — INCLUDING the two link
+ * lists: the per-kind structural rules are SOFT (F1), so WHICH kind carries
+ * which field, and how many links an initiative needs, are `validate`
+ * judgments. A required list would make an omitted key a schema ERROR before
+ * the soft rules could speak. Readers normalize an absent list to empty; a
+ * PRESENT list is still validated entry by entry.
+ */
+export const roadmapNodeFrontmatterSchema = z.strictObject({
+  id: idField,
+  name: slugField,
+  kind: z.enum(ROADMAP_NODE_KINDS),
+  horizon: z.enum(ROADMAP_HORIZONS),
+  /** The node's parent in the roadmap tree (a roadmap node id, not an item). */
+  parent: idField.optional(),
+  /** Product: the permanent product design doc (never archived — F10). */
+  design_doc: repoRelativeDocPathField("design_doc").optional(),
+  /** Product: ADR cross-references, kept in RECORDED order (a sequence, not a set). */
+  adrs: z.array(repoRelativeDocPathField("adrs")).optional(),
+  /** Feature: the PRD this node's delta is stated in (ADR-0013). */
+  prd: prdPathField.optional(),
+  /** Feature: the epic WORK ITEM this node covers — the one-way node→item ref. */
+  epic: idField.optional(),
+  /** Feature: the released node this one continues (lineage across a closed delta, F10). */
+  predecessor: idField.optional(),
+  /** Initiative: the feature nodes this node links sideways into. */
+  features: z.array(idField).optional(),
+  created: timestampField,
+  updated: timestampField,
+});
+export type RoadmapNodeFrontmatter = z.infer<typeof roadmapNodeFrontmatterSchema>;
+
+/**
+ * Map frontmatter (Phase 4 F7) — the wayfinder chart attached to ONE roadmap
+ * node: where this effort is going, what has been decided, what is still foggy,
+ * and what was ruled out. The fifth section, **Notes**, is the markdown body
+ * (the node/observation precedent: the prose IS the body).
+ *
+ * A map stores only the sections it OWNS. **Decisions so far** is not one of
+ * them, and neither is the part of **Out of scope** a ticket earned: both are
+ * composed at read time from the map's tickets, which already carry the decision
+ * and the ruling (see views/roadmap.ts renderMap). Storing a second copy made
+ * every resolve and every out-of-scope close rewrite the one record that every
+ * ticket on the map shares — a hot spot two concurrent sessions contend for, to
+ * hold facts that were already written down. The split this leaves is:
+ *
+ * - `out_of_scope` — the lines an agent CHARTED, before any ticket existed.
+ *   Ruling something beyond the destination needs no ticket; a decision does.
+ * - the ticket-earned lines, and every decision — derived, never stored.
+ *
+ * The two stored list sections are REQUIRED keys, unlike a node's per-kind
+ * links: a node's links are optional because WHICH kind carries which is a soft
+ * `validate` judgment, while the CLI writes both of these on every map
+ * mutation. An absent key here therefore means a hand-edited record, which is a
+ * finding rather than a shape to tolerate.
+ *
+ * There is deliberately no status, count, or progress field: a map's state is
+ * read from its tickets, and F8's frontier is the only view that ranks them.
+ */
+export const mapFrontmatterSchema = z.strictObject({
+  id: idField,
+  /** The roadmap node this map charts — one map per node (F7). */
+  node: idField,
+  /** Where this effort is going; a map without one charts nothing. */
+  destination: nonEmptyString("destination"),
+  /** Not yet specified: in-scope questions not sharp enough to ticket yet. */
+  fog: z.array(nonEmptyString("fog entry")),
+  /**
+   * Out of scope, the CHARTED lines only: ruled beyond the destination before
+   * any ticket existed, and never graduating. The lines a `ticket close`
+   * earned are derived from those tickets and render alongside these.
+   */
+  out_of_scope: z.array(nonEmptyString("out-of-scope entry")),
+  created: timestampField,
+  updated: timestampField,
+});
+export type MapFrontmatter = z.infer<typeof mapFrontmatterSchema>;
+
+/**
+ * Decision-ticket frontmatter (Phase 4 F7) — one open question hanging off a
+ * map, with the question itself as the markdown body. The body is what
+ * `distill` empties once the decision is recorded elsewhere; every other field
+ * survives, so a distilled ticket still reads as a resolved question.
+ *
+ * `state`, `claimant` and `blockers` are the three facts F8's frontier
+ * predicate joins on — a takeable ticket is `open`, unclaimed, and blocked by
+ * nothing still live. Blocking is ADVISORY: the list is a rendering input, and
+ * no command anywhere refuses work because an entry is unresolved.
+ *
+ * `claimant` is an actor id, present exactly while the state is `claimed`; the
+ * terminal states carry none, because nothing is assigned once it is decided.
+ */
+export const ticketFrontmatterSchema = z.strictObject({
+  id: idField,
+  /** The map this ticket hangs off — the ticket→map direction, one way. */
+  map: idField,
+  type: z.enum(DECISION_TICKET_TYPES),
+  state: z.enum(DECISION_TICKET_STATES),
+  /** Who holds the advisory claim; present exactly while state is `claimed`. */
+  claimant: nonEmptyString("claimant actor id").optional(),
+  /**
+   * Sibling tickets this one waits on — tickets on the SAME map, since a
+   * blocker gates work on one destination (a cross-map edge is a `validate`
+   * warning). Advisory throughout: nothing anywhere refuses work over one (F8).
+   */
+  blockers: z.array(idField),
+  /** The one-liner `resolve` recorded — the map's Decisions index derives from it. */
+  decision: nonEmptyString("decision").optional(),
+  /** Why `close` ruled the question away — required by both dispositions. */
+  reason: nonEmptyString("reason").optional(),
+  /**
+   * The decision that killed this question, when `close` recorded the
+   * INVALIDATED disposition (F7's close row): the resolved ticket — or the
+   * journal event — whose decision answered it out of existence. Its presence
+   * is what tells the two closes apart: an out-of-scope close carries none and
+   * earns a line under the map's Out of scope instead, while an invalidated
+   * question was never beyond the destination, so filing it there would be
+   * false. Both readings are derived from the tickets (F2: derive, never
+   * hand-set) — the map stores neither.
+   */
+  invalidated_by: idField.optional(),
+  /** The resolution event id — what the decision's observation cites as its source. */
+  resolution: idField.optional(),
+  /**
+   * The close event id, `resolution`'s counterpart for the other terminal act:
+   * what the closed question's observation cites as its source, and the key the
+   * map's derived Out-of-scope lines order by. Recorded on the record because
+   * `updated` cannot answer WHEN the question was ruled away — `distill` moves
+   * it long afterwards, and an order read off it would re-shuffle every time a
+   * body was emptied.
+   */
+  closure: idField.optional(),
+  created: timestampField,
+  updated: timestampField,
+});
+export type TicketFrontmatter = z.infer<typeof ticketFrontmatterSchema>;
 
 /** Run — one execution of a work item through its lane; hot state lives here. */
 export const runSchema = z.strictObject({
@@ -411,9 +643,15 @@ export type Founding = z.infer<typeof foundingSchema>;
  * architecture (ADRs, architecture evolution). Both areas are declared
  * together: a half-declared governance posture is ambiguity, not state.
  * Recorded in Phase 1; delegated-consensus enforcement is a later phase.
+ *
+ * The two fields carry DIFFERENT enums (Phase 4 F5): only `product` takes
+ * `agent` (agent-as-PO), and `architecture` stays `human | delegated`. Each
+ * field validates against its own set, so `architecture: agent` is refused by
+ * the field's own `z.enum` — naming the field and its legal values — and a
+ * `product: agent` beside it rescues nothing.
  */
 export const governanceSchema = z.strictObject({
-  product: z.enum(GOVERNANCE_MODES),
+  product: z.enum(PRODUCT_GOVERNANCE_MODES),
   architecture: z.enum(GOVERNANCE_MODES),
 });
 export type Governance = z.infer<typeof governanceSchema>;

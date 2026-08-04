@@ -4,7 +4,14 @@ import { join } from "node:path";
 
 const SCHEMA_DIR = join(import.meta.dir, "../../src/schema");
 
-const EXPECTED_FILES = ["enums.ts", "env.ts", "events.ts", "id.ts", "records.ts"];
+/**
+ * The schema layer's whole surface. `time.ts` earns its place here rather than
+ * beside a caller because it is the codebase's only timestamp arithmetic, two
+ * layers now read it (validate's compaction age, standup's window), and it is
+ * held to exactly the same purity rules as the rest — the `Date` ban below
+ * covers it, which is the point of putting it in this layer at all.
+ */
+const EXPECTED_FILES = ["enums.ts", "env.ts", "events.ts", "id.ts", "records.ts", "time.ts"];
 
 /** Module specifiers the schema layer must never import (I/O belongs to the store layer). */
 const FORBIDDEN_IMPORT = /from\s+["'](node:)?(fs|fs\/promises|net|http|https|http2|dns|tls|child_process|worker_threads)["']/;
@@ -16,7 +23,7 @@ const FORBIDDEN_GLOBALS = [/\bfetch\s*\(/, /\bBun\.(file|write|spawn|serve|env)\
 const AMBIENT_TIME_RANDOMNESS = [/\bDate\b/, /\bMath\.random\b/, /\bcrypto\b/];
 
 describe("schema layer purity", () => {
-  test("src/schema contains exactly the five schema modules", () => {
+  test("src/schema contains exactly the six schema modules", () => {
     expect(readdirSync(SCHEMA_DIR).sort()).toEqual(EXPECTED_FILES);
   });
 

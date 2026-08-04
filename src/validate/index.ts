@@ -1,23 +1,30 @@
 import { join } from "node:path";
 import { ID_PATTERN } from "../schema/id";
-import { workItemFrontmatterSchema } from "../schema/records";
+import { roadmapNodeFrontmatterSchema, workItemFrontmatterSchema } from "../schema/records";
 import { readFrontmatterFile } from "../store/frontmatter";
 import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
+import { eventDocuments } from "../store/mutate";
 import { scanPrototypeRefs } from "../store/prototype";
 import {
   itemPath,
   listDistilledMarkers,
   listItems,
+  listMaps,
   listObservations,
+  listRoadmapNodes,
   listRuns,
+  listTickets,
+  mapPath,
   observationPath,
   readConfigText,
   readRunRecordText,
   readSkillsLockText,
   readSkillsManifestText,
   readTextFile,
+  roadmapNodePath,
   runRecordPath,
+  ticketPath,
   type StoreLayout,
 } from "../store/layout";
 import {
@@ -91,6 +98,113 @@ async function collectDocPresence(
 }
 
 /**
+ * Existence on disk of every schema-valid `prd` path any ROADMAP NODE carries
+ * (Phase 4 F1/F10), folded into the same presence map the item-side paths use:
+ * one path is one file whoever points at it, and the archival act moves node
+ * and item references together, so a single map is what keeps the two sides
+ * from disagreeing about whether the document is there.
+ */
+async function collectNodePrdPresence(
+  layout: StoreLayout,
+  input: ValidationInput,
+  presence: Record<string, boolean>,
+): Promise<void> {
+  const prdField = roadmapNodeFrontmatterSchema.shape.prd;
+  for (const raw of input.roadmapNodes) {
+    const parsed = prdField.safeParse(raw.frontmatter?.["prd"]);
+    if (!parsed.success || parsed.data === undefined || parsed.data in presence) continue;
+    try {
+      presence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      presence[parsed.data] = false;
+    }
+  }
+}
+
+/**
+ * Existence on disk of every schema-valid ADR path any roadmap node
+ * cross-references (F1), keyed by the path as written — the node-side twin of
+ * collectDocPresence, collected here so the checks stay pure. Only paths the
+ * hardened schema field accepts are probed; anything else is already a
+ * schema.roadmap-node finding, not a path to touch.
+ */
+async function collectAdrPresence(
+  layout: StoreLayout,
+  input: ValidationInput,
+): Promise<Record<string, boolean>> {
+  // The list is optional on the record; the ENTRY validator lives inside it.
+  const adrField = roadmapNodeFrontmatterSchema.shape.adrs.unwrap().element;
+  const presence: Record<string, boolean> = {};
+  for (const raw of input.roadmapNodes) {
+    const adrs = raw.frontmatter?.["adrs"];
+    if (!Array.isArray(adrs)) continue;
+    for (const entry of adrs) {
+      const parsed = adrField.safeParse(entry);
+      if (!parsed.success || parsed.data in presence) continue;
+      try {
+        presence[parsed.data] = (await readTextFile(join(layout.root, parsed.data))) !== null;
+      } catch {
+        // Unreadable (e.g. the path names a directory): not a usable document.
+        presence[parsed.data] = false;
+      }
+    }
+  }
+  return presence;
+}
+
+/**
+ * What every journaled DOCUMENT step names, as data (Phase 4 F10): whether each
+ * path exists, and — for the two paths whose completion is judged by CONTENT —
+ * the text itself. A `move`'s DESTINATION needs its content, because a file
+ * being there is not the same fact as this move having happened (it must carry
+ * this event's own stamp); an `append`'s target needs it because the marker
+ * test is the whole judgment. Only a `move`'s source is judged by existence.
+ *
+ * The steps are read through the store's own payload parser, so the checks
+ * judge exactly what repair would apply, and every path is gathered before
+ * anything is read — one edit's need for content cannot depend on the order
+ * another edit happened to name the same path in.
+ */
+async function collectDocumentState(
+  layout: StoreLayout,
+  input: ValidationInput,
+): Promise<void> {
+  const paths = new Set<string>();
+  const needText = new Set<string>();
+  for (const segment of input.segments) {
+    for (const event of segment.events) {
+      for (const edit of eventDocuments(event).edits) {
+        if (edit.op === "move") {
+          paths.add(edit.from);
+          paths.add(edit.to);
+          needText.add(edit.to);
+        } else {
+          paths.add(edit.path);
+          needText.add(edit.path);
+        }
+      }
+    }
+  }
+  if (paths.size === 0) return;
+  const presence: Record<string, boolean> = {};
+  const text: Record<string, string> = {};
+  for (const path of [...paths].sort()) {
+    let content: string | null;
+    try {
+      content = await readTextFile(join(layout.root, path));
+    } catch {
+      // Unreadable (e.g. the path names a directory): not a usable document.
+      content = null;
+    }
+    presence[path] = content !== null;
+    if (content !== null && needText.has(path)) text[path] = content;
+  }
+  input.documentPresence = presence;
+  input.documentText = text;
+}
+
+/**
  * Collect everything validate checks in one tolerant store read pass:
  * raw config text, raw item/run/observation records, hot state, and the
  * per-line journal segment scan. Deterministically ordered (ids sorted).
@@ -104,6 +218,9 @@ export async function collectValidationInput(
     items: [],
     runs: [],
     observations: [],
+    roadmapNodes: [],
+    maps: [],
+    tickets: [],
     segments: await scanSegments(layout),
     skillsManifestPath: layout.skillsManifestPath,
     skillsLockPath: layout.skillsLockPath,
@@ -165,6 +282,39 @@ export async function collectValidationInput(
     }
     input.observations.push(await collectFrontmatterRecord(id, observationPath(layout, id)));
   }
+  for (const id of (await listRoadmapNodes(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.roadmapNodes.push({
+        id,
+        path: join(layout.roadmapDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
+    input.roadmapNodes.push(await collectFrontmatterRecord(id, roadmapNodePath(layout, id)));
+  }
+  for (const id of (await listMaps(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.maps.push({
+        id,
+        path: join(layout.mapsDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
+    input.maps.push(await collectFrontmatterRecord(id, mapPath(layout, id)));
+  }
+  for (const id of (await listTickets(layout)).sort()) {
+    if (!ID_PATTERN.test(id)) {
+      input.tickets.push({
+        id,
+        path: join(layout.ticketsDir, `${id}.md`),
+        error: `filename ${JSON.stringify(id)} is not a well-formed nahel id — rename the file to <id>.md`,
+      });
+      continue;
+    }
+    input.tickets.push(await collectFrontmatterRecord(id, ticketPath(layout, id)));
+  }
 
   // Knowledge-document presence (prd: F1/ADR-0013; investigation: F5): stat
   // each schema-valid path once so the pure item.*-missing checks judge
@@ -173,7 +323,12 @@ export async function collectValidationInput(
   // read stays inside the repo; anything else is already a schema.item
   // finding, not a path to probe.
   input.prdPresence = await collectDocPresence(layout, input, "prd");
+  await collectNodePrdPresence(layout, input, input.prdPresence);
   input.investigationPresence = await collectDocPresence(layout, input, "investigation");
+  // ADR cross-references on roadmap nodes (F1), same rules and same purity.
+  input.adrPresence = await collectAdrPresence(layout, input);
+  // The document steps journaled acts record (F10), read the same way.
+  await collectDocumentState(layout, input);
 
   // Prototype refs (Phase 2 F5.2): read-only git plumbing, the same store-layer
   // privilege the claim baseline holds. Never throws — a checkout that is not a

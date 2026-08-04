@@ -12,23 +12,43 @@ import {
 import {
   configSchema,
   distilledSchema,
+  isArchivedPrdPath,
+  mapFrontmatterSchema,
   observationFrontmatterSchema,
+  roadmapNodeFrontmatterSchema,
   runSchema,
   skillsLockSchema,
   skillsManifestSchema,
+  ticketFrontmatterSchema,
   workItemFrontmatterSchema,
   type Config,
   type JournalEvent,
+  type MapFrontmatter,
   type ObservationFrontmatter,
+  type RoadmapNodeFrontmatter,
   type Run,
   type SkillsLock,
   type SkillsManifest,
+  type TicketFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
 import {
+  CORE_EVENT_TYPES,
+  DEPLOY_COMPLETED_EVENT_TYPE,
+  MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
+  MIGRATION_EXCLUDED_PAYLOAD_KEY,
+  MIGRATION_EXCLUSION_REASON_KEY,
+  MIGRATION_INCLUDED_PAYLOAD_KEY,
+  MIGRATION_SELECTED_EVENT_TYPE,
+  MIGRATION_SELECTION_PAYLOAD_KEY,
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
+  supersededNodeIds,
 } from "../schema/events";
+import { ID_PATTERN } from "../schema/id";
+import { epochSeconds } from "../schema/time";
 import type { HotState } from "../store/hotstate";
 import type { PrototypeRefScan } from "../store/prototype";
 import {
@@ -37,6 +57,15 @@ import {
   SESSION_CLOSED_EVENT_TYPE,
   type SegmentScan,
 } from "../store/journal";
+import { eventDocuments } from "../store/mutate";
+import {
+  archivalRelease,
+  featureDevStatus,
+  featureStatus,
+  retractedEventId,
+  retractionReason,
+  ROADMAP_COLUMN_FACT_TYPES,
+} from "../views/roadmap";
 
 /**
  * `nahel validate`'s check library (PRD F8): pure functions over the raw
@@ -95,6 +124,11 @@ export interface ValidationInput {
   items: RawFrontmatterRecord[];
   runs: RawRunRecord[];
   observations: RawFrontmatterRecord[];
+  /** Roadmap node records from `nahel/roadmap/` (Phase 4 F1). */
+  roadmapNodes: RawFrontmatterRecord[];
+  /** Map records from `nahel/maps/` and ticket records from `nahel/tickets/` (F7). */
+  maps: RawFrontmatterRecord[];
+  tickets: RawFrontmatterRecord[];
   segments: SegmentScan[];
   /** `skills.yaml` — undefined text means absent (a repo may use no skills). */
   skillsManifestPath: string;
@@ -133,6 +167,21 @@ export interface ValidationInput {
    */
   investigationPresence?: Record<string, boolean>;
   /**
+   * Existence on disk of every schema-valid ADR path any roadmap node
+   * cross-references (F1), collected exactly like prdPresence. Optional:
+   * without it the roadmap.adr-missing warning is skipped.
+   */
+  adrPresence?: Record<string, boolean>;
+  /**
+   * Existence and content of every path a journaled DOCUMENT step names (F10):
+   * `documentPresence` for all of them, `documentText` for the `append` targets
+   * whose completion is judged by content rather than by existence. Optional,
+   * and absent entirely in a store no archival ever touched — without them the
+   * document half of the divergence report is skipped, like `prdPresence`.
+   */
+  documentPresence?: Record<string, boolean>;
+  documentText?: Record<string, string>;
+  /**
    * The repo's prototype refs — local branches with their tips, the resolved
    * default branch, and the remote-tracking prototype refs (Phase 2 F5.2),
    * collected by index.ts so the never-merge checks stay pure. Optional, and an
@@ -160,6 +209,16 @@ interface ParsedState {
   /** Ids with a run directory on disk, valid or not. */
   runDirs: Set<string>;
   observations: Map<string, { record: ObservationFrontmatter; body: string; path: string }>;
+  /** Roadmap nodes that parsed cleanly, by id (Phase 4 F1). */
+  roadmapNodes: Map<string, { record: RoadmapNodeFrontmatter; body: string; path: string }>;
+  /** Ids with a node file on disk, valid or not (dangling = no file at all). */
+  roadmapNodeFiles: Set<string>;
+  /** Maps and tickets that parsed cleanly, by id (Phase 4 F7). */
+  maps: Map<string, { record: MapFrontmatter; body: string; path: string }>;
+  tickets: Map<string, { record: TicketFrontmatter; body: string; path: string }>;
+  /** Ids with a map/ticket file on disk, valid or not (dangling = no file). */
+  mapFiles: Set<string>;
+  ticketFiles: Set<string>;
   /** Every valid event across all segments, in the ts → seq → id total order. */
   events: JournalEvent[];
   eventIds: Set<string>;
@@ -201,6 +260,12 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
     runs: new Map(),
     runDirs: new Set(input.runs.map((raw) => raw.id)),
     observations: new Map(),
+    roadmapNodes: new Map(),
+    roadmapNodeFiles: new Set(input.roadmapNodes.map((raw) => raw.id)),
+    maps: new Map(),
+    tickets: new Map(),
+    mapFiles: new Set(input.maps.map((raw) => raw.id)),
+    ticketFiles: new Set(input.tickets.map((raw) => raw.id)),
     events: [],
     eventIds: new Set(),
     skillsManifest: undefined,
@@ -380,6 +445,30 @@ function parseState(input: ValidationInput): { state: ParsedState; findings: Fin
       schema: observationFrontmatterSchema,
       keep: (raw: RawFrontmatterRecord, record: ObservationFrontmatter) =>
         state.observations.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
+    },
+    {
+      check: "schema.roadmap-node",
+      what: "roadmap node",
+      raws: input.roadmapNodes,
+      schema: roadmapNodeFrontmatterSchema,
+      keep: (raw: RawFrontmatterRecord, record: RoadmapNodeFrontmatter) =>
+        state.roadmapNodes.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
+    },
+    {
+      check: "schema.map",
+      what: "map",
+      raws: input.maps,
+      schema: mapFrontmatterSchema,
+      keep: (raw: RawFrontmatterRecord, record: MapFrontmatter) =>
+        state.maps.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
+    },
+    {
+      check: "schema.ticket",
+      what: "decision ticket",
+      raws: input.tickets,
+      schema: ticketFrontmatterSchema,
+      keep: (raw: RawFrontmatterRecord, record: TicketFrontmatter) =>
+        state.tickets.set(record.id, { record, body: raw.body ?? "", path: raw.path }),
     },
   ] as const;
   for (const kind of frontmatterKinds) {
@@ -581,6 +670,1006 @@ function checkRefs(state: ParsedState): Finding[] {
         path,
         message: `observation ${record.id} is about item ${record.item}, which does not exist`,
         fix: "if the item's record write crashed, `nahel validate --repair` materializes it from the journal; otherwise fix or remove the observation's item field",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Roadmap node references (Phase 4 F1). Severity follows the record's own
+ * semantics, not one blanket rule:
+ *
+ * - `parent` is a record-to-record ref the store owns, and nodes are never
+ *   deleted, so a missing one is a lost write or a hand deletion — an ERROR,
+ *   exactly like an item's parent.
+ * - `predecessor` and the initiative's sideways `features` links are WARNINGS
+ *   naming both ends, as F1 states: the link is recorded first and the target
+ *   may arrive by a later merge, and a link to a non-`feature` node is an odd
+ *   shape rather than corruption. Nothing here was ever refused at write time.
+ * - duplicate slugs are an ERROR: `nahel roadmap node` refuses them at
+ *   creation, but node files are disjoint, so a merge can land two cleanly and
+ *   this is the only place the collision can surface.
+ */
+function checkRoadmapRefs(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const byName = new Map<string, string[]>();
+  for (const { record, path } of state.roadmapNodes.values()) {
+    byName.set(record.name, [...(byName.get(record.name) ?? []), record.id]);
+    if (record.parent !== undefined && !state.roadmapNodeFiles.has(record.parent)) {
+      findings.push({
+        severity: "error",
+        check: "refs.roadmap-parent",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) has parent ${record.parent}, which does not exist`,
+        fix: "create the parent node or `nahel roadmap node update <ref> --clear-parent`",
+      });
+    }
+    if (record.predecessor !== undefined && !state.roadmapNodeFiles.has(record.predecessor)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.predecessor-missing",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) names predecessor ${record.predecessor}, which does not exist`,
+        fix: "the predecessor node may arrive by a later merge — otherwise fix it with `nahel roadmap node update <ref> --predecessor <ref>` or `--clear-predecessor`",
+      });
+    }
+    // An absent link list is an empty one: the schema keeps both lists
+    // optional so kind and cardinality are judged HERE, not at parse time.
+    for (const linked of record.features ?? []) {
+      const target = state.roadmapNodes.get(linked);
+      if (!state.roadmapNodeFiles.has(linked)) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.initiative-link",
+          path,
+          message: `roadmap node ${record.id} (${record.name}) links feature ${linked}, which does not exist`,
+          fix: "the linked node may arrive by a later merge — otherwise re-link with `nahel roadmap node update <ref> --feature <ref>`",
+        });
+      } else if (target !== undefined && target.record.kind !== "feature") {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.initiative-link",
+          path,
+          message:
+            `roadmap node ${record.id} (${record.name}) links ${linked} (${target.record.name}) sideways, ` +
+            `but that node's kind is ${target.record.kind}, not feature`,
+          fix: "initiative links point at feature nodes — re-link with `nahel roadmap node update <ref> --feature <ref>`",
+        });
+      }
+    }
+  }
+  for (const [name, ids] of [...byName.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    if (ids.length > 1) {
+      findings.push({
+        severity: "error",
+        check: "roadmap.duplicate-name",
+        message: `roadmap slug ${JSON.stringify(name)} is held by ${ids.sort().join(" and ")} — slugs are unique per store`,
+        fix: "rename all but one with `nahel roadmap node update <id> --name <slug>` — every view addresses nodes by name",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * The derivation rows that are also findings (Phase 4 F2, extended by the PR
+ * #26 review). The rules are not restated here — featureDevStatus and
+ * featureStatus ARE the rules, and this check reports what they already derive,
+ * so a warning can never fire on a store whose status renders clean (or stay
+ * silent on one that does not).
+ *
+ * All are WARNINGS: the derivation still produces a status either way, and
+ * none of the shapes was refused at write time. `epic-missing` is reported only
+ * when NO item file exists for the id — an epic whose record is on disk but
+ * unparseable is already a `schema.item` error, and calling it missing as well
+ * would report one corruption twice, in a way that reads as two separate
+ * defects.
+ *
+ * THREE of them are not about the epic at all — the malformed-lifecycle family,
+ * one per row of the precedence table. Every row advances on a well-formed
+ * winner only, so a fact that cannot carry its row holds the feature back
+ * SILENTLY, while the workflow that logged it believes it recorded a pass or a
+ * ship:
+ *
+ * - `sweep-failed-count` (A2) — `failed` missing, non-numeric or negative. A
+ *   count greater than zero is a sweep that found failures, recorded correctly,
+ *   and warns about nothing.
+ * - `release-incomplete` / `deploy-incomplete` (final gate) — the winning
+ *   release or deploy carrying no nonblank value for a required key.
+ *
+ * All three report UNCONDITIONALLY, from the derivation, over every node.
+ * `release-incomplete` used to live in the PRD lifecycle check, which skips a
+ * node with no `prd` — so most nodes got silence about a thin release, and a
+ * thin deploy was never checked anywhere. Each names the EVENT and the keys it
+ * lacks, because re-logging that act is the fix; a retracted fact decides no
+ * column, so the derivation hands back nothing and none of them fires.
+ */
+function checkRoadmapDerivation(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const items = [...state.items.values()].map((entry) => entry.record);
+  for (const { record, path } of state.roadmapNodes.values()) {
+    const status = featureStatus(record, items, state.events);
+    if (status.unreadableSweep !== undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.sweep-failed-count",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is covered by sweep ${status.unreadableSweep}, whose ` +
+          "`failed` count is not a usable number (absent, non-numeric, or negative) — the stage did not " +
+          `advance to tested and reads ${status.stage}`,
+        fix: "re-log the sweep with its real count (`nahel log qa.sweep-completed --item <id> --data failed=<n>`) and retract the unreadable one with `nahel log roadmap.column-retracted`",
+      });
+    }
+    // The sweep warning's two siblings, one per row above it. Same shape, same
+    // severity, same reason: the row silently declined to advance, and the
+    // workflow that logged the act believes it recorded a ship.
+    for (const [gaps, type, check] of [
+      [status.incompleteRelease, RELEASE_ANNOUNCED_EVENT_TYPE, "roadmap.release-incomplete"],
+      [status.incompleteDeploy, DEPLOY_COMPLETED_EVENT_TYPE, "roadmap.deploy-incomplete"],
+    ] as const) {
+      if (gaps === undefined) continue;
+      findings.push({
+        severity: "warning",
+        check,
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is covered by ${type} event ${gaps.event}, which ` +
+          `records no ${gaps.missing.join(", ")} — the stage did not advance on it and reads ${status.stage}`,
+        fix: `re-log the act in full (\`nahel log ${type} --item ${record.epic ?? "<epic>"} ${gaps.missing.map((key) => `--data ${key}=<${key}>`).join(" ")}\`), and retract the thin one with \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE}\` if it was wrong`,
+      });
+    }
+    const epic = record.epic;
+    if (epic === undefined) continue;
+    const { anomaly } = featureDevStatus(record, items);
+    if (anomaly === "epic-missing" && !state.itemFiles.has(epic)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.epic-missing",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, which is not an item record — its dev status reads unknown`,
+        fix: "the item may arrive by a later merge — otherwise point the node at the right epic with `nahel roadmap node update <ref> --epic <item-id>` or `--clear-epic`",
+      });
+    }
+    if (anomaly === "all-dropped") {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.epic-all-dropped",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, whose every work item was dropped — its dev status reads planned over no live work`,
+        fix: "drop the node's intent too, or plan new work under the epic with `nahel item new` — this is advisory, nothing was refused",
+      });
+    }
+    // The same fact one level up: an epic with no work UNDER it is the work,
+    // so a dropped one is a feature whose only work item was abandoned.
+    if (anomaly === "epic-dropped") {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.epic-dropped",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, which has no work under it and was itself dropped — its dev status reads planned over no live work`,
+        fix: "drop the node's intent too, or plan new work under the epic with `nahel item new` — this is advisory, nothing was refused",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Lifecycle-fact retractions (PR #26 follow-up A1). A retraction is an ordinary
+ * logged event, so nothing about it can be refused at write time — which is
+ * precisely why it is read back here. Three shapes are reported, all WARNINGS:
+ * the derivation IGNORES an invalid retraction, so the store still renders; it
+ * just renders as though the retraction had not been written, and a correction
+ * that silently did nothing is the worst way for one to fail.
+ *
+ * - `roadmap.retraction-malformed` — the payload names no event id readably, or
+ *   carries no reason. A withdrawal nobody can account for is worse than the
+ *   fact it withdraws, and one naming nothing is never read as naming
+ *   everything.
+ * - `roadmap.retraction-target-missing` — the id names no event in this store.
+ *   Like every dangling ref in the layer it may resolve by a later merge
+ *   (ADR-0012), so it is advisory and the fix says so.
+ * - `roadmap.retraction-target-kind` — the target exists and is not one of the
+ *   three lifecycle facts (an item mutation, another retraction, anything at
+ *   all). There is no un-retraction: the fix is the doctrine, RE-LOG the
+ *   original fact, which is a new event with a new id that nothing retracts.
+ *
+ * The target id is read through the derivation's own reader, so the check
+ * reports exactly the event the columns acted on.
+ */
+function checkRoadmapRetractions(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const byId = new Map(state.events.map((event) => [event.id, event]));
+  for (const event of state.events) {
+    if (event.type !== ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
+    const target = retractedEventId(event);
+    if (target === undefined || retractionReason(event) === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.retraction-malformed",
+        message:
+          `retraction ${event.id} carries no ${target === undefined ? "`event` id" : "`reason`"} — ` +
+          "a retraction withdraws ONE named lifecycle fact and says why, and this one withdraws nothing",
+        fix: `re-log it in full: \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE} --data event=<event-id> --data reason="<why>"\``,
+      });
+      // Nothing further to say. It never reached whatever it named — the
+      // derivation goes through withdrawnEventId, which requires both halves —
+      // so a second finding about that target would read as a second defect and
+      // imply the retraction otherwise worked.
+      continue;
+    }
+    const found = byId.get(target);
+    if (found === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.retraction-target-missing",
+        message: `retraction ${event.id} names event ${target}, which this store's journal does not carry — it withdraws nothing`,
+        fix: "the event may arrive by a later merge — otherwise re-log the retraction naming the right event id",
+      });
+      continue;
+    }
+    if (!ROADMAP_COLUMN_FACT_TYPES.has(found.type)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.retraction-target-kind",
+        message:
+          `retraction ${event.id} names event ${found.id}, whose type is ${found.type} — only a ` +
+          `${[...ROADMAP_COLUMN_FACT_TYPES].join(", ")} can be retracted, so it withdraws nothing`,
+        fix: "a mis-retraction is corrected by re-logging the original fact, never by retracting the retraction — there is no un-retraction",
+      });
+    }
+  }
+  return findings;
+}
+
+/** The check id every migration-audit finding carries. */
+const MIGRATION_AUDIT_CHECK = "roadmap.migration-audit";
+
+/** The fix a defect in an already-journaled selection earns: the journal is append-only. */
+const SUPERSEDE_FIX =
+  "the journal is append-only, so the attempt is retired rather than edited: " +
+  "`nahel roadmap migration supersede <selection-event-id> --reason <why>`, then re-run the migration";
+
+/** The selected set one `roadmap.migration-selected` payload declares. */
+interface SelectedSet {
+  /** Every id that gets a node, de-duplicated (a set is a set). */
+  included: Set<string>;
+  /** Every near-miss id ruled out. */
+  excluded: Set<string>;
+  /** Findings about the payload's own shape — clause (a). */
+  findings: Finding[];
+  /** False when the payload carries no usable `included` list: coverage cannot run. */
+  usable: boolean;
+}
+
+/** How the two lists are spelled in the command a fix points at. */
+const SELECTION_LOG_FIX =
+  `re-log the complete set: \`nahel log ${MIGRATION_SELECTED_EVENT_TYPE} ` +
+  `--data ${MIGRATION_INCLUDED_PAYLOAD_KEY}='["<item-id>"]' ` +
+  `--data ${MIGRATION_EXCLUDED_PAYLOAD_KEY}='[{"id":"<item-id>","${MIGRATION_EXCLUSION_REASON_KEY}":"<why>"}]'\` ` +
+  "(the journal is append-only, so a set already acted on is retired with `nahel roadmap migration supersede`)";
+
+/** One clause-(a) finding, in the words every one of them shares. */
+function selectionFinding(event: JournalEvent, message: string, fix = SUPERSEDE_FIX): Finding {
+  return {
+    severity: "error",
+    check: MIGRATION_AUDIT_CHECK,
+    message: `migration selection ${event.id} ${message}`,
+    fix,
+  };
+}
+
+/** How a payload value reads in a finding — quoted, and never a sprawling object. */
+function payloadValue(value: unknown): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+}
+
+/**
+ * Clause (a): read the selected set out of one selection payload, reporting
+ * everything that makes it unreadable as a call. The rules are the ones a
+ * reviewer would apply — every entry names a work item, a set is a set (no id
+ * twice, on either list), a call does not contradict itself (no id both
+ * included and excluded), and a near-miss without a reason is exactly the
+ * silent omission the workflow's near-miss rule exists to prevent.
+ *
+ * It is read STRICTLY, and nothing malformed is salvaged. The set arrives
+ * through `nahel log --data`, which JSON-parses whatever it is handed: this is
+ * the one input the audit joins on that no schema validates on the way in, so
+ * a reader that skipped what it could not parse would turn a broken call into
+ * a silently smaller one — and then audit the store against a coverage story
+ * nobody made. An absent `excluded` is a finding for the same reason an empty
+ * one is not: "no near-misses" is a statement, and silence is not.
+ *
+ * An id on BOTH lists is reported once and then treated as included: the
+ * contradiction is the defect, and reporting the same id again as "a node
+ * covers an excluded id" would bill one mistake twice.
+ */
+function selectedSet(event: JournalEvent): SelectedSet {
+  const findings: Finding[] = [];
+  const included = new Set<string>();
+  const excluded = new Set<string>();
+  const raw = event.payload[MIGRATION_INCLUDED_PAYLOAD_KEY];
+  if (!Array.isArray(raw)) {
+    findings.push(
+      selectionFinding(
+        event,
+        `carries no \`${MIGRATION_INCLUDED_PAYLOAD_KEY}\` list of work-item ids — the set it ` +
+          "declared cannot be read, so nothing can be audited against it",
+        SELECTION_LOG_FIX,
+      ),
+    );
+    return { included, excluded, findings, usable: false };
+  }
+  for (const entry of raw) {
+    if (typeof entry !== "string" || !ID_PATTERN.test(entry)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `lists ${payloadValue(entry)} under \`${MIGRATION_INCLUDED_PAYLOAD_KEY}\`, which is not a ` +
+            "work-item id — the set names the items that get nodes, so an entry nothing can be " +
+            "looked up by is a call no reviewer can check",
+          SELECTION_LOG_FIX,
+        ),
+      );
+      continue;
+    }
+    if (included.has(entry)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `lists ${entry} more than once — the selected set is a set, and a duplicate reads as ` +
+            "two nodes owed for one item",
+        ),
+      );
+      continue;
+    }
+    included.add(entry);
+  }
+
+  const rawExcluded = event.payload[MIGRATION_EXCLUDED_PAYLOAD_KEY];
+  if (!Array.isArray(rawExcluded)) {
+    findings.push(
+      selectionFinding(
+        event,
+        `carries no \`${MIGRATION_EXCLUDED_PAYLOAD_KEY}\` list of near-misses — a migration that ` +
+          "ruled nothing out says so with an empty list, and silence is not the same statement " +
+          "(an unreadable list is worse: it reads as no near-misses at all)",
+        SELECTION_LOG_FIX,
+      ),
+    );
+    return { included, excluded, findings, usable: false };
+  }
+  for (const entry of rawExcluded) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${payloadValue(entry)}, which is not an ` +
+            `\`{id, ${MIGRATION_EXCLUSION_REASON_KEY}}\` entry — a near-miss is an id AND the ` +
+            "one-line reason a reviewer argues with",
+          SELECTION_LOG_FIX,
+        ),
+      );
+      continue;
+    }
+    const near = entry as Record<string, unknown>;
+    const id = near["id"];
+    if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${payloadValue(id)}, which is not a work-item id — a near-miss nothing can be ` +
+            "looked up by cannot be checked against the store",
+          SELECTION_LOG_FIX,
+        ),
+      );
+      continue;
+    }
+    const reason = near[MIGRATION_EXCLUSION_REASON_KEY];
+    if (typeof reason !== "string" || reason.trim() === "") {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${id} with no \`${MIGRATION_EXCLUSION_REASON_KEY}\` — a near-miss a reviewer ` +
+            "cannot argue with is the silent omission the reason exists to prevent",
+        ),
+      );
+      continue;
+    }
+    if (included.has(id)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `lists ${id} as both included and excluded — the call contradicts itself, and nothing ` +
+            "downstream can say whether that item was meant to get a node",
+        ),
+      );
+      continue;
+    }
+    if (excluded.has(id)) {
+      findings.push(
+        selectionFinding(
+          event,
+          `excludes ${id} more than once — the near-miss list is a set too, and two reasons for ` +
+            "one exclusion are two accounts of a call made once",
+        ),
+      );
+      continue;
+    }
+    excluded.add(id);
+  }
+  // A set with ANY defect is not a call the coverage half can be run against:
+  // auditing the store against a partially-read set would report gaps and
+  // inventions that are artefacts of the reading, not of the migration. The
+  // payload finding is the whole answer until the set is re-made.
+  return { included, excluded, findings, usable: findings.length === 0 };
+}
+
+/**
+ * The migration audit (PR #26 follow-up C2): the join between the selected set
+ * a migration journaled FIRST and the nodes it then created. Nothing else in
+ * the store makes that comparison — a reviewer had to hold two lists side by
+ * side — which is exactly the audit a once-per-store, unrepeatable act needs.
+ *
+ * It runs only where a `roadmap.migration-selected` event exists: a store that
+ * never migrated has nothing to audit and earns no finding. Within such a
+ * store, four rules:
+ *
+ * - (a) the selection payload must be readable as a call — see selectedSet;
+ * - (b) for the ACTIVE attempt, every included id has exactly ONE attributed
+ *   feature node whose `epic` matches, no attributed node covers an excluded
+ *   or unlisted id, and every attributed node's creation event is STRICTLY
+ *   later than the selection (a same-second tie breaks on random event id, so
+ *   it proves nothing — the workflow fails a migration on exactly this);
+ * - (c) UNATTRIBUTED nodes are ignored entirely. Ordinary charting after a
+ *   migration is not the migration's business, and attribution rather than a
+ *   time window is what tells the two apart;
+ * - (d) two active selections are one error and the coverage half SUSPENDS:
+ *   with two attempts live, which one owes a node for a given id is precisely
+ *   what nobody can say, and reporting both attempts' gaps would invent an
+ *   answer.
+ *
+ * Violations are errors, because the audit exists to make a migration
+ * trustworthy and a warning nobody has to clear is not a guarantee.
+ *
+ * **The legacy rule** (the compatibility clause, deliberate): an active
+ * selection with ZERO attributed nodes gets clauses (a) and (d) and one
+ * ADVISORY WARNING — never errors. Two real states produce it and neither is a
+ * broken migration: an attempt that PREDATES attribution (this repo's own live
+ * migration, whose nodes were created before `--migration` existed), and an
+ * attempt whose nodes have not been created yet (the workflow journals the set
+ * FIRST, so the gap between step 3 and step 5 is the normal shape of a
+ * migration in progress). Read literally, "ignore unattributed nodes" would
+ * report every included id of a correct, finished legacy migration as
+ * uncovered and turn it permanently red — and re-migrating to satisfy a
+ * checker would write exactly the false history C1 rules out.
+ */
+function checkMigrationAudit(state: ParsedState): Finding[] {
+  const selections = state.events.filter((event) => event.type === MIGRATION_SELECTED_EVENT_TYPE);
+  if (selections.length === 0) return [];
+  /** Each retired attempt, and the supersession that retired it. */
+  const retired = new Map<string, JournalEvent>();
+  /** The node ids those supersessions moved — their absence is already journaled. */
+  const moved = new Set<string>();
+  for (const event of state.events) {
+    if (event.type !== CORE_EVENT_TYPES.migrationSuperseded) continue;
+    const target = event.payload[MIGRATION_SELECTION_PAYLOAD_KEY];
+    if (typeof target === "string") retired.set(target, event);
+    for (const id of supersededNodeIds(event)) moved.add(id);
+  }
+  // A live node attributed to a RETIRED attempt, reported before anything else
+  // and independent of how many selections are active — it is a different fact
+  // from coverage, and the one the rest of this check would never catch: the
+  // audit only ever looks at the active attempt, so such a node belongs to no
+  // attempt anyone audits. `nahel roadmap node new` refuses to write one, but a
+  // refusal at the write seam says nothing about a store another worktree
+  // merged into: it can chart against a selection this branch superseded.
+  //
+  // Nodes the supersession itself NAMED are excluded: their move is journaled,
+  // so a live one is the write-ahead crash window, which repair rolls forward
+  // and `journal.divergence` already reports.
+  const findings: Finding[] = [];
+  for (const event of state.events) {
+    if (event.type !== CORE_EVENT_TYPES.roadmapNodeCreated) continue;
+    const attribution = event.payload[MIGRATION_ATTRIBUTION_PAYLOAD_KEY];
+    if (typeof attribution !== "string") continue;
+    const supersession = retired.get(attribution);
+    if (supersession === undefined) continue;
+    const mutation = mutationRecords(event)[0];
+    if (mutation === undefined || "invalid" in mutation) continue;
+    const nodeId = mutation.record.id;
+    if (moved.has(nodeId) || !state.roadmapNodes.has(nodeId)) continue;
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      path: state.roadmapNodes.get(nodeId)!.path,
+      message:
+        `node ${nodeId} is attributed to migration ${attribution}, which event ${supersession.id} ` +
+        "retired — the node is live and its attempt is not, so no coverage audit will ever look at " +
+        "it (a retired attempt owes nothing, and the audit reads the active one)",
+      fix:
+        `re-create it against the live attempt (\`nahel roadmap node new feature <name> ... --migration <selection-event-id>\`) ` +
+        "or, if it is ordinary charting rather than migration work, without --migration at all",
+    });
+  }
+
+  const active = selections.filter((event) => !retired.has(event.id));
+  if (active.length > 1) {
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `this store carries ${active.length} active migration selections ` +
+        `(${active.map((event) => event.id).join(", ")}) — a store migrates ONCE, and with two ` +
+        "attempts live nothing can say which one owes a node for which item, so the coverage " +
+        "audit is suspended until exactly one is active",
+      fix: "retire the attempt that failed: `nahel roadmap migration supersede <selection-event-id> --reason <why>`",
+    });
+    return findings;
+  }
+  // Every attempt superseded: the migration was retired, and the journal holds
+  // both the attempt and its retirement. There is no active call to audit, and
+  // reporting one would invent an authority the store does not carry.
+  if (active.length === 0) return findings;
+
+  const selection = active[0]!;
+  const set = selectedSet(selection);
+  findings.push(...set.findings);
+  if (!set.usable) return findings;
+
+  const attributed = state.events.filter(
+    (event) =>
+      event.type === CORE_EVENT_TYPES.roadmapNodeCreated &&
+      event.payload[MIGRATION_ATTRIBUTION_PAYLOAD_KEY] === selection.id,
+  );
+  if (attributed.length === 0) {
+    findings.push({
+      severity: "warning",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `migration selection ${selection.id} has no attributed node — no ` +
+        `\`${CORE_EVENT_TYPES.roadmapNodeCreated}\` event carries ` +
+        `\`${MIGRATION_ATTRIBUTION_PAYLOAD_KEY}=${selection.id}\`, so its coverage cannot be ` +
+        "audited. Either its nodes have not been created yet, or the attempt predates attribution " +
+        "(a legacy migration — history, not a defect)",
+      fix: `nodes created from here on carry it: \`nahel roadmap node new feature <name> ... --migration ${selection.id}\`. A finished legacy migration needs no repair and is never re-run to satisfy a checker.`,
+    });
+    return findings;
+  }
+
+  const selectionAt = epochSeconds(selection.ts);
+  /** Attributed nodes as the store holds them NOW, keyed by the epic each covers. */
+  const covering = new Map<string, string[]>();
+  for (const event of attributed) {
+    const mutation = mutationRecords(event)[0];
+    if (mutation === undefined || "invalid" in mutation) continue;
+    const nodeId = mutation.record.id;
+    // The node as the store holds it NOW, not as it was created: one re-pointed
+    // at another epic afterwards covers what it points at today, and one whose
+    // record is gone covers nothing (journal.divergence owns the absence).
+    const node = state.roadmapNodes.get(nodeId)?.record;
+    if (node === undefined) continue;
+    const at = epochSeconds(event.ts);
+    if (at !== undefined && selectionAt !== undefined && at <= selectionAt) {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `node ${nodeId} was created in the same second as (or before) migration selection ` +
+          `${selection.id} — ${event.ts} against ${selection.ts} — so the selection cannot be shown ` +
+          "to have preceded it: a same-second tie breaks on random event id and renders in the right order about half the time",
+        fix: "the ordering IS the audit trail and a tie cannot be repaired by a note — retire the attempt and re-run it, waiting past the selection's second (`nahel roadmap migration supersede <selection-event-id> --reason <why>`)",
+      });
+    }
+    if (node.kind !== "feature") {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `node ${nodeId} is attributed to migration ${selection.id} and is a ${node.kind} node — ` +
+          "migration attributes the FEATURE nodes it creates for the selected ids, and the product " +
+          "node it also creates covers no item and carries no attribution",
+        fix: SUPERSEDE_FIX,
+      });
+      continue;
+    }
+    if (node.epic === undefined) {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `node ${nodeId} is attributed to migration ${selection.id} and names no \`epic\` — it ` +
+          "covers no item, so it accounts for nothing in the selected set",
+        fix: `point it at the item it covers: \`nahel roadmap node update ${nodeId} --epic <item-id>\``,
+      });
+      continue;
+    }
+    covering.set(node.epic, [...(covering.get(node.epic) ?? []), nodeId]);
+  }
+
+  for (const [epic, nodes] of [...covering].sort()) {
+    if (set.included.has(epic)) continue;
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `node ${nodes.join(", ")} is attributed to migration ${selection.id} and covers ${epic}, ` +
+        (set.excluded.has(epic)
+          ? "which that selection excluded as a near-miss — the migration acted against its own call"
+          : "which that selection never listed — the migration invented coverage its call does not account for"),
+      fix: "retire the attempt and re-run it, or — if the node is ordinary charting rather than migration work — re-create it without --migration",
+    });
+  }
+  for (const id of [...set.included].sort()) {
+    const nodes = covering.get(id) ?? [];
+    if (nodes.length === 1) continue;
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        nodes.length === 0
+          ? `migration selection ${selection.id} included ${id}, and no node attributed to it ` +
+            "covers that item — the set declared coverage the migration did not deliver"
+          : `migration selection ${selection.id} included ${id}, and ${nodes.length} attributed ` +
+            `nodes cover it (${nodes.join(", ")}) — one selected item earns one node`,
+      fix:
+        nodes.length === 0
+          ? `chart the missing node: \`nahel roadmap node new feature <name> --horizon <h> --intent <text> --epic ${id} --migration ${selection.id}\``
+          : SUPERSEDE_FIX,
+    });
+  }
+  return findings;
+}
+
+/**
+ * ADR cross-reference existence (F1): a product node's ADR path should name a
+ * file on disk, but a missing one is a WARNING naming the node and the path —
+ * never an error and never a refused mutation, exactly like an item's PRD
+ * (the document may arrive by a later merge, ADR-0012). Skipped entirely when
+ * the collector supplied no presence data.
+ */
+function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.adrPresence;
+  if (presence === undefined) return findings;
+  for (const { record, path } of state.roadmapNodes.values()) {
+    for (const adr of record.adrs ?? []) {
+      if (presence[adr] === false) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.adr-missing",
+          path,
+          message: `roadmap node ${record.id} (${record.name}) references ADR ${adr}, which does not exist on disk`,
+          fix: "write the ADR or fix the node's reference with `nahel roadmap node update <ref> --adr <path>` — an ADR may arrive by a later merge",
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+/**
+ * The PRD lifecycle (Phase 4 F10): a feature's PRD is LIVE until the feature is
+ * released and ARCHIVED after, and both halves coming apart is worth saying.
+ * All three are warnings — nothing here was refused at write time, and none of
+ * them makes the store unreadable:
+ *
+ * - `prd-missing`: the node's document is not on disk. The node-side twin of
+ *   `item.prd-missing`, and the shape a half-finished archival leaves behind
+ *   (the file moved, the reference did not) — so it names the path that points
+ *   at neither location.
+ * - `prd-unarchived`: the feature reached `released`, so its delta is closed,
+ *   but the document is still sitting in the live directory.
+ * - `closed-delta`: the reverse and the more serious of the two — a node that
+ *   is NOT released pointing INTO the archive, which is someone continuing
+ *   work against a delta that was closed. The fix is the doctrine: a new node
+ *   with a new PRD, naming this one as its predecessor.
+ *
+ * "Released" here is archivalRelease's predicate, never a field: it IS what
+ * `nahel roadmap archive` gates on, so `prd-unarchived` fires on exactly the
+ * nodes that verb ACCEPTS — this check tells a human to run it, and a warning
+ * naming a command that then refuses is a warning nobody can act on. Since the
+ * final gate that predicate is also the `released` stage word, so the two
+ * findings below and the rendered roadmap cannot disagree either.
+ *
+ * A node whose release is too THIN to carry an archival is not reported here.
+ * That is a fact about the release, not about the PRD, and
+ * checkRoadmapDerivation names it whether or not the node carries a `prd` at
+ * all — which is where most nodes live.
+ */
+function checkPrdLifecycle(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.prdPresence;
+  const items = [...state.items.values()].map((entry) => entry.record);
+  for (const { record, path } of state.roadmapNodes.values()) {
+    const prd = record.prd;
+    if (prd === undefined) continue;
+    if (presence?.[prd] === false) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.prd-missing",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) references PRD ${prd}, which does not exist on disk`,
+        fix: "the PRD may arrive by a later merge — otherwise fix the reference with `nahel roadmap node update <ref> --prd <path>`, or, if an archival was interrupted, `nahel validate --repair` completes it",
+      });
+    }
+    // Archival qualification and the `released` stage word are ONE predicate
+    // since the final gate, so this reads either way round; asking
+    // archivalRelease is asking the verb's own gate, which is the honest one.
+    // A thin release is NOT reported here — it is not about the PRD, and
+    // checkRoadmapDerivation names it whether or not the node carries one.
+    const release = archivalRelease(record, items, state.events);
+    const released = release !== undefined && release.missing.length === 0;
+    if (released && !isArchivedPrdPath(prd)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.prd-unarchived",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is released, but its PRD ${prd} is still live — ` +
+          "a released delta is closed, and its PRD belongs in the archive",
+        fix: `close it with \`nahel roadmap archive ${record.name}\` — the PRD moves with every reference to it, and the product design doc is updated in the same act`,
+      });
+    }
+    if (!released && isArchivedPrdPath(prd)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.closed-delta",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is not released, but its PRD ${prd} is archived — ` +
+          "this is work continuing against a delta that was already closed",
+        fix: `an archived PRD is never reopened or edited: open a new feature node with a new PRD instead, naming this one as its predecessor (\`nahel roadmap node new feature <name> ... --predecessor ${record.name}\`)`,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Structural shape (F1): the per-kind rules are SOFT — the authoring agent
+ * infers placement, the CLI refuses nothing but a duplicate slug — so every
+ * odd shape is a WARNING with the node named. Reported here:
+ *
+ * - a node that is its own parent or its own predecessor (a self-loop is a
+ *   well-formed id link, so the write is recorded and reported, not refused);
+ * - a feature parented to a feature (usually a work item, not a roadmap node);
+ * - a non-product node with no product ancestor (intent hanging off nothing);
+ * - an initiative linking fewer than two features — the cardinality judgment,
+ *   which lives here rather than in the schema so an initiative can be created
+ *   and wired up in two acts.
+ *
+ * The ancestor walk carries a seen-set, so a self-loop or a longer parent cycle
+ * terminates and its members simply read as having no product ancestor — which
+ * is exactly what they have.
+ */
+function checkRoadmapShape(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  for (const { record, path } of state.roadmapNodes.values()) {
+    const parent = record.parent === undefined ? undefined : state.roadmapNodes.get(record.parent);
+    const selfParented = record.parent === record.id;
+    if (selfParented) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) is its own parent — the tree closes on itself here`,
+        fix: "re-parent it with `nahel roadmap node update <ref> --parent <ref>` or `--clear-parent` — this is advisory, nothing was refused",
+      });
+    }
+    if (record.predecessor === record.id) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) is its own predecessor — lineage cannot start at itself`,
+        fix: "point it at the released node it continues with `nahel roadmap node update <ref> --predecessor <ref>`, or `--clear-predecessor` — this is advisory, nothing was refused",
+      });
+    }
+    if (record.kind === "initiative" && (record.features ?? []).length < 2) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is an initiative linking ` +
+          `${(record.features ?? []).length} feature(s) sideways — an initiative links several`,
+        fix: "link the features it spans with `nahel roadmap node update <ref> --feature <ref> --feature <ref>` — this is advisory, nothing was refused",
+      });
+    }
+    if (!selfParented && record.kind === "feature" && parent?.record.kind === "feature") {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is a feature parented to feature ` +
+          `${parent.record.id} (${parent.record.name}) — a feature's children are usually work items, not nodes`,
+        fix: "re-parent it under a product node, or make it a work item under the parent feature's epic — this is advisory, nothing was refused",
+      });
+    }
+    if (record.kind === "product") continue;
+    const seen = new Set<string>([record.id]);
+    let current = parent;
+    let productAncestor = false;
+    while (current !== undefined && !seen.has(current.record.id)) {
+      seen.add(current.record.id);
+      if (current.record.kind === "product") {
+        productAncestor = true;
+        break;
+      }
+      current =
+        current.record.parent === undefined
+          ? undefined
+          : state.roadmapNodes.get(current.record.parent);
+    }
+    if (!productAncestor) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.shape",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) has no product ancestor — its intent hangs off nothing`,
+        fix: "parent it (directly or through its tree) under a product node with `nahel roadmap node update <ref> --parent <ref>` — this is advisory, nothing was refused",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Map and decision-ticket integrity (Phase 4 F7). The severity split follows
+ * the rest of the roadmap layer exactly: a ref the STORE owns — the node a map
+ * charts, the map a ticket hangs off — is an error, because nothing addresses
+ * a chart without it; everything the PRD calls advisory (blocking edges, the
+ * claimant/state pairing) is a warning that never fails validate.
+ *
+ * The one error that is not a ref is the HAND-EMPTIED BODY. `distill` exists so
+ * that throwing a question away is a journaled, replayable, attributable act
+ * (HC3); an empty body with no distill event behind it means someone did it
+ * with an editor, which is exactly the thing the verb replaces.
+ */
+function checkWayfinder(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+
+  // Which node each map charts — a second map on one node makes `map show
+  // <node-slug>` ambiguous, the same way a duplicate slug does for nodes.
+  const mapsByNode = new Map<string, string[]>();
+  for (const { record, path } of state.maps.values()) {
+    mapsByNode.set(record.node, [...(mapsByNode.get(record.node) ?? []), record.id]);
+    if (!state.roadmapNodeFiles.has(record.node)) {
+      findings.push({
+        severity: "error",
+        check: "refs.map-node",
+        path,
+        message: `map ${record.id} charts roadmap node ${record.node}, which does not exist`,
+        fix: "create the node, or re-chart the map on the right one — a map with no node is a chart of nothing",
+      });
+    }
+  }
+  for (const [node, ids] of [...mapsByNode.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    if (ids.length > 1) {
+      findings.push({
+        severity: "error",
+        check: "roadmap.duplicate-map",
+        message:
+          `roadmap node ${node} is charted by ${ids.sort().join(" and ")} — one map per node ` +
+          "(a second one makes `nahel roadmap map show <node>` ambiguous)",
+        fix: "merge the two charts into one and delete the loser's record — this is what a merge of two charting sessions produces",
+      });
+    }
+  }
+
+  // Every ticket whose body was emptied THROUGH the CLI, by its distill event.
+  const distilled = new Set<string>();
+  for (const event of state.events) {
+    if (event.type !== CORE_EVENT_TYPES.ticketDistilled) continue;
+    for (const mutation of mutationRecords(event)) {
+      if (!("invalid" in mutation) && mutation.target === "ticket") {
+        distilled.add(mutation.record.id);
+      }
+    }
+  }
+
+  for (const { record, body, path } of state.tickets.values()) {
+    if (!state.mapFiles.has(record.map)) {
+      findings.push({
+        severity: "error",
+        check: "refs.ticket-map",
+        path,
+        message: `decision ticket ${record.id} hangs off map ${record.map}, which does not exist`,
+        fix: "chart the map, or re-point the ticket at the right one — a ticket with no map answers no destination",
+      });
+    }
+    for (const blocker of record.blockers) {
+      if (blocker === record.id) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.ticket-shape",
+          path,
+          message: `decision ticket ${record.id} is its own blocker — it can never come off the frontier`,
+          fix: `re-wire it with \`nahel roadmap ticket update ${record.id} --blocked-by <ticket-id>\` or \`--clear-blockers\` — this is advisory, nothing was refused`,
+        });
+      } else if (!state.ticketFiles.has(blocker)) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.ticket-blocker-missing",
+          path,
+          message: `decision ticket ${record.id} is blocked by ${blocker}, which does not exist`,
+          fix: "the blocking ticket may arrive by a later merge — otherwise re-wire it with `nahel roadmap ticket update <ref> --blocked-by <ticket-id>` or `--clear-blockers`",
+        });
+      } else {
+        // Blocking edges run between SIBLINGS — tickets charting the same
+        // destination. A cross-map edge holds this map's question until another
+        // map's question resolves (F8's frontier eligibility joins on exactly
+        // this list), gating work on a destination it does not share. Reported,
+        // never refused: blocking is advisory everywhere.
+        const target = state.tickets.get(blocker);
+        if (target !== undefined && target.record.map !== record.map) {
+          findings.push({
+            severity: "warning",
+            check: "roadmap.ticket-blocker-cross-map",
+            path,
+            message:
+              `decision ticket ${record.id} (map ${record.map}) is blocked by ${blocker}, which hangs off ` +
+              `map ${target.record.map} — blocking edges run between tickets on the same map`,
+            fix: "re-wire it onto a sibling with `nahel roadmap ticket update <ref> --blocked-by <ticket-id>` or `--clear-blockers`, or chart the shared question on this map — this is advisory, nothing was refused",
+          });
+        }
+      }
+    }
+    // `close --invalidated-by` records the decision that killed the question.
+    // A ref resolving to neither a ticket nor a journal event records nothing —
+    // reported like every other dangling ref in the layer, never refused (the
+    // target may arrive by a later merge, ADR-0012).
+    if (
+      record.invalidated_by !== undefined &&
+      !state.ticketFiles.has(record.invalidated_by) &&
+      !state.eventIds.has(record.invalidated_by)
+    ) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.ticket-invalidator-missing",
+        path,
+        message:
+          `decision ticket ${record.id} was closed as invalidated by ${record.invalidated_by}, ` +
+          "which is neither a ticket nor a journal event — nothing records what killed the question",
+        fix: "the invalidating record may arrive by a later merge — otherwise re-close it against the real decision (`nahel roadmap ticket close <ref> --invalidated-by <ticket-or-event-id> --reason <why>`)",
+      });
+    }
+    // The claimant and the state are one fact spelled twice: `claimed` means
+    // someone holds it, and no other state holds anything.
+    if (record.state === "claimed" && record.claimant === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.ticket-shape",
+        path,
+        message: `decision ticket ${record.id} is claimed but records no claimant — nothing says who is working it`,
+        fix: `release it with \`nahel roadmap ticket release ${record.id}\` and claim it again — the claim is advisory, so releasing is always permitted`,
+      });
+    }
+    if (record.state !== "claimed" && record.claimant !== undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.ticket-shape",
+        path,
+        message:
+          `decision ticket ${record.id} is ${record.state} but still records claimant ` +
+          `${record.claimant} — nothing stays assigned once it is decided`,
+        fix: "the CLI drops the claimant on every terminal transition; this record was written another way",
+      });
+    }
+    if (body === "" && !distilled.has(record.id)) {
+      findings.push({
+        severity: "error",
+        check: "roadmap.ticket-body",
+        path,
+        message:
+          `decision ticket ${record.id} has an empty body and no \`${CORE_EVENT_TYPES.ticketDistilled}\` event — ` +
+          "a ticket body is emptied through the CLI, never by editing the file (hard constraint 3)",
+        fix: `restore the body (\`nahel validate --repair\` replays the journaled record), then empty it with \`nahel roadmap ticket distill ${record.id}\``,
       });
     }
   }
@@ -1155,56 +2244,116 @@ function checkCycles(state: ParsedState): Finding[] {
 }
 
 /** A mutation event's parsed payload, or why it cannot be replayed. */
+type MutationTarget =
+  | "item"
+  | "run"
+  | "observation"
+  | "roadmap-node"
+  | "map"
+  | "ticket";
+
 type Mutation =
   | { target: "item"; record: WorkItemFrontmatter; body: string }
   | { target: "run"; record: Run }
   | { target: "observation"; record: ObservationFrontmatter; body: string }
-  | { target: "item" | "run" | "observation"; invalid: string };
+  | { target: "roadmap-node"; record: RoadmapNodeFrontmatter; body: string }
+  | { target: "map"; record: MapFrontmatter; body: string }
+  | { target: "ticket"; record: TicketFrontmatter; body: string }
+  | { target: MutationTarget; invalid: string };
+
+/** Each mutation target's schema, and whether its payload carries a body. */
+const MUTATION_SCHEMAS: Record<
+  MutationTarget,
+  { schema: z.ZodType<{ id: string }>; hasBody: boolean }
+> = {
+  item: { schema: workItemFrontmatterSchema, hasBody: true },
+  run: { schema: runSchema, hasBody: false },
+  observation: { schema: observationFrontmatterSchema, hasBody: true },
+  "roadmap-node": { schema: roadmapNodeFrontmatterSchema, hasBody: true },
+  map: { schema: mapFrontmatterSchema, hasBody: true },
+  ticket: { schema: ticketFrontmatterSchema, hasBody: true },
+};
+
+/** Parse one `{target, record, body}` triple out of a mutation payload. */
+function mutationEntry(entry: Record<string, unknown>, target: MutationTarget): Mutation {
+  const kind = MUTATION_SCHEMAS[target];
+  const result = kind.schema.safeParse(entry["record"]);
+  if (!result.success) return { target, invalid: zodIssues(result.error) };
+  const body = entry["body"];
+  if (kind.hasBody && typeof body !== "string") {
+    return { target, invalid: "payload body is not a string" };
+  }
+  // The cast is the same one parseState's kind table makes: TypeScript cannot
+  // relate the table's schema to the union member across a lookup, but within
+  // one target they always match.
+  return { target, record: result.data, body: typeof body === "string" ? body : "" } as Mutation;
+}
 
 /**
- * Parse a mutation event's payload record, when the event is a mutation.
+ * The mutation records one event carries, when the event is a mutation — one
+ * entry for a single-record mutation, one per record for a SEQUENCE (F7's
+ * `resolve` and `close` write several records under a single write-ahead
+ * event), and [] when the event is not a mutation at all.
+ *
  * Mutations are identified by event TYPE (the choke point's core mutation
  * types), never by payload shape — a mutation-shaped payload under `note` or
  * any open extension type (a forged `nahel log`, a rogue writer) is inert
  * data. Within a mutation type, payload shape is a validity check: a core
  * mutation event that cannot be replayed is reported, not ignored.
  */
-function mutationRecord(event: JournalEvent): Mutation | undefined {
-  if (!MUTATION_EVENT_TYPES.has(event.type)) return undefined;
+function mutationRecords(event: JournalEvent): Mutation[] {
+  if (!MUTATION_EVENT_TYPES.has(event.type)) return [];
   const payload = event.payload;
-  if (payload["target"] === "item") {
-    const result = workItemFrontmatterSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "item", invalid: zodIssues(result.error) };
-    const body = payload["body"];
-    if (typeof body !== "string") {
-      return { target: "item", invalid: "payload body is not a string" };
+  if (payload["target"] === "sequence") {
+    const records = payload["records"];
+    if (!Array.isArray(records)) {
+      return [{ target: sequenceTarget(event), invalid: "sequence payload carries no records list" }];
     }
-    return { target: "item", record: result.data, body };
-  }
-  if (payload["target"] === "run") {
-    const result = runSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "run", invalid: zodIssues(result.error) };
-    return { target: "run", record: result.data };
-  }
-  if (payload["target"] === "observation") {
-    const result = observationFrontmatterSchema.safeParse(payload["record"]);
-    if (!result.success) return { target: "observation", invalid: zodIssues(result.error) };
-    const body = payload["body"];
-    if (typeof body !== "string") {
-      return { target: "observation", invalid: "payload body is not a string" };
+    const mutations: Mutation[] = [];
+    for (const entry of records) {
+      if (entry === null || typeof entry !== "object") {
+        mutations.push({ target: sequenceTarget(event), invalid: "sequence record is not an object" });
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      const target = record["target"];
+      // A DOCUMENT step is a step of the sequence but not a record (F10): it
+      // has no id and no schema to compare against disk, and checkArchival
+      // reports it against the filesystem instead.
+      if (target === "document") continue;
+      if (typeof target !== "string" || !(target in MUTATION_SCHEMAS)) {
+        mutations.push({
+          target: sequenceTarget(event),
+          invalid: `sequence record names no known target (${JSON.stringify(target)})`,
+        });
+        continue;
+      }
+      mutations.push(mutationEntry(record, target as MutationTarget));
     }
-    return { target: "observation", record: result.data, body };
+    return mutations;
+  }
+  const target = payload["target"];
+  if (typeof target === "string" && target in MUTATION_SCHEMAS) {
+    return [mutationEntry(payload, target as MutationTarget)];
   }
   // A core mutation type whose payload lacks the target/record replay fields:
   // the choke point always writes them, so this event cannot be replayed.
-  return {
-    target: event.type.startsWith("item.")
-      ? "item"
-      : event.type.startsWith("observation.")
-        ? "observation"
-        : "run",
-    invalid: "payload carries no target/record mutation fields",
-  };
+  return [
+    {
+      target: sequenceTarget(event),
+      invalid: "payload carries no target/record mutation fields",
+    },
+  ];
+}
+
+/** The record kind an unreplayable event's TYPE implies, for the report. */
+function sequenceTarget(event: JournalEvent): MutationTarget {
+  if (event.type.startsWith("item.")) return "item";
+  if (event.type.startsWith("observation.")) return "observation";
+  if (event.type.startsWith("roadmap.map-")) return "map";
+  if (event.type.startsWith("roadmap.ticket-")) return "ticket";
+  if (event.type.startsWith("roadmap.")) return "roadmap-node";
+  return "run";
 }
 
 /**
@@ -1250,49 +2399,52 @@ function checkClaims(state: ParsedState): Finding[] {
   };
 
   for (const event of state.events) {
-    const mutation = mutationRecord(event);
-    if (mutation === undefined || "invalid" in mutation) continue;
-    // Observations touch no item — no claim can cover them (mutate() parity).
-    if (mutation.target === "observation") continue;
+    for (const mutation of mutationRecords(event)) {
+      if ("invalid" in mutation) continue;
+      // Observations, roadmap nodes, maps and tickets touch no item — no claim
+      // can cover them (mutate() parity: a claim freezes work, never the intent
+      // above it, and a ticket's own claim is advisory assignment).
+      if (mutation.target !== "item" && mutation.target !== "run") continue;
 
-    const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
-    if (event.actor.kind === "agent") {
-      const incomingParent =
-        mutation.target === "item" ? mutation.record.parent : undefined;
-      const claim = coveringClaim(targetItem, incomingParent);
-      if (claim !== undefined) {
-        const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
-        findings.push({
-          severity: "error",
-          check: "claims.violation",
-          message:
-            `event ${event.id} (${event.type}) is an agent mutation by ${event.actor.id} ` +
-            `on item ${targetItem}, which was claimed by ${claim.claimant}${via} at event time`,
-          fix: "review the merged history with the claimant — the claim was held when this mutation was journaled (PRD F9)",
-        });
+      const targetItem = mutation.target === "item" ? mutation.record.id : mutation.record.item;
+      if (event.actor.kind === "agent") {
+        const incomingParent =
+          mutation.target === "item" ? mutation.record.parent : undefined;
+        const claim = coveringClaim(targetItem, incomingParent);
+        if (claim !== undefined) {
+          const via = claim.id === targetItem ? "" : ` via claimed ancestor ${claim.id}`;
+          findings.push({
+            severity: "error",
+            check: "claims.violation",
+            message:
+              `event ${event.id} (${event.type}) is an agent mutation by ${event.actor.id} ` +
+              `on item ${targetItem}, which was claimed by ${claim.claimant}${via} at event time`,
+            fix: "review the merged history with the claimant — the claim was held when this mutation was journaled (PRD F9)",
+          });
+        }
       }
-    }
 
-    if (mutation.target === "item") {
-      const record = mutation.record;
-      const existing = claimedBy.get(record.id);
-      if (
-        record.claimed_by !== undefined &&
-        existing !== undefined &&
-        existing !== record.claimed_by
-      ) {
-        findings.push({
-          severity: "error",
-          check: "claims.conflict",
-          message:
-            `item ${record.id} has conflicting claims: claimed by ${existing}, ` +
-            `then by ${record.claimed_by} (event ${event.id}) with no handback between`,
-          fix: "decide the claimant: the loser hands back, then re-claim (nahel handback / nahel claim)",
-        });
+      if (mutation.target === "item") {
+        const record = mutation.record;
+        const existing = claimedBy.get(record.id);
+        if (
+          record.claimed_by !== undefined &&
+          existing !== undefined &&
+          existing !== record.claimed_by
+        ) {
+          findings.push({
+            severity: "error",
+            check: "claims.conflict",
+            message:
+              `item ${record.id} has conflicting claims: claimed by ${existing}, ` +
+              `then by ${record.claimed_by} (event ${event.id}) with no handback between`,
+            fix: "decide the claimant: the loser hands back, then re-claim (nahel handback / nahel claim)",
+          });
+        }
+        if (record.claimed_by === undefined) claimedBy.delete(record.id);
+        else claimedBy.set(record.id, record.claimed_by);
+        parentOf.set(record.id, record.parent);
       }
-      if (record.claimed_by === undefined) claimedBy.delete(record.id);
-      else claimedBy.set(record.id, record.claimed_by);
-      parentOf.set(record.id, record.parent);
     }
   }
   return findings;
@@ -1345,9 +2497,35 @@ function checkClaimedActiveRuns(state: ParsedState): Finding[] {
   return findings;
 }
 
-/** Journal well-formedness: monotonic seq per segment, globally unique ids. */
+/**
+ * Journal well-formedness: real timestamps, monotonic seq per segment, globally
+ * unique ids.
+ *
+ * The TIMESTAMP leg is the seam between the record schema and timestamp
+ * arithmetic (`schema/time.ts`). `ts` is validated as a SHAPE, and that gate
+ * has to stay loose — tightening it to the calendar would make a store carrying
+ * one impossible date unreadable, including by the `validate` run that would
+ * tell you about it — so `2026-02-30T00:00:00Z` parses cleanly and reaches
+ * every reader that orders or ages the journal. Arithmetic REFUSES it, which
+ * would otherwise retire the compaction-age threshold for a reason nobody could
+ * see. So it is reported here, once, as the corruption it is.
+ */
 function checkJournal(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
+  for (const segment of state.input.segments) {
+    for (const event of segment.events) {
+      if (epochSeconds(event.ts) !== undefined) continue;
+      findings.push({
+        severity: "error",
+        check: "journal.timestamp",
+        path: segment.path,
+        message:
+          `event ${event.id} is dated ${event.ts}, which is not a real instant — ` +
+          "every time-ordered read of the journal (ordering, windows, ages) rests on it",
+        fix: "the segment was edited or written by a non-nahel tool — restore it from git (segments are append-only)",
+      });
+    }
+  }
   for (const segment of state.input.segments) {
     let previous: JournalEvent | undefined;
     for (const event of segment.events) {
@@ -1406,8 +2584,8 @@ function checkDivergence(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
 
   for (const event of state.events) {
-    const mutation = mutationRecord(event);
-    if (mutation !== undefined && "invalid" in mutation) {
+    for (const mutation of mutationRecords(event)) {
+      if (!("invalid" in mutation)) continue;
       findings.push({
         severity: "error",
         check: "journal.payload",
@@ -1419,62 +2597,74 @@ function checkDivergence(state: ParsedState): Finding[] {
     }
   }
 
-  type ItemFinalist = { event: JournalEvent; record: WorkItemFrontmatter; body: string };
-  type RunFinalist = { event: JournalEvent; record: Run };
-  type ObservationFinalist = {
-    event: JournalEvent;
-    record: ObservationFrontmatter;
-    body: string;
-  };
-  const itemFinalists = new Map<string, ItemFinalist[]>();
-  const runFinalists = new Map<string, RunFinalist[]>();
-  const observationFinalists = new Map<string, ObservationFinalist[]>();
+  // Keyed by target and id, and mirroring the store's replayPending exactly: a
+  // SEQUENCE event (F7) contributes one finalist per record it carries, so an
+  // interruption between any two of its writes is reported record by record.
+  type Finalist = { event: JournalEvent; record: { id: string }; body: string };
+  const finalists = new Map<string, Finalist[]>();
   for (const segment of state.input.segments) {
     // Per segment, event order is causal order: later overwrites earlier.
-    const segmentItems = new Map<string, ItemFinalist>();
-    const segmentRuns = new Map<string, RunFinalist>();
-    const segmentObservations = new Map<string, ObservationFinalist>();
+    const latest = new Map<string, Finalist>();
     for (const event of segment.events) {
-      const mutation = mutationRecord(event);
-      if (mutation === undefined || "invalid" in mutation) continue;
-      if (mutation.target === "item") {
-        segmentItems.set(mutation.record.id, {
+      for (const mutation of mutationRecords(event)) {
+        if ("invalid" in mutation) continue;
+        const body = mutation.target === "run" ? "" : mutation.body;
+        latest.set(`${mutation.target}:${mutation.record.id}`, {
           event,
           record: mutation.record,
-          body: mutation.body,
-        });
-      } else if (mutation.target === "run") {
-        segmentRuns.set(mutation.record.id, { event, record: mutation.record });
-      } else {
-        segmentObservations.set(mutation.record.id, {
-          event,
-          record: mutation.record,
-          body: mutation.body,
+          body,
         });
       }
     }
-    for (const [id, finalist] of segmentItems) {
-      itemFinalists.set(id, [...(itemFinalists.get(id) ?? []), finalist]);
+    for (const [key, finalist] of latest) {
+      finalists.set(key, [...(finalists.get(key) ?? []), finalist]);
     }
-    for (const [id, finalist] of segmentRuns) {
-      runFinalists.set(id, [...(runFinalists.get(id) ?? []), finalist]);
-    }
-    for (const [id, finalist] of segmentObservations) {
-      observationFinalists.set(id, [...(observationFinalists.get(id) ?? []), finalist]);
-    }
+  }
+
+  /** The on-disk record and its file, per target — what divergence compares to. */
+  const onDisk: Record<
+    MutationTarget,
+    Map<string, { record: { id: string }; body?: string; path: string }>
+  > = {
+    item: state.items,
+    run: state.runs,
+    observation: state.observations,
+    "roadmap-node": state.roadmapNodes,
+    map: state.maps,
+    ticket: state.tickets,
+  };
+  /** What each target is called in the report. */
+  const noun: Record<MutationTarget, string> = {
+    item: "item",
+    run: "run",
+    observation: "observation",
+    "roadmap-node": "roadmap node",
+    map: "map",
+    ticket: "decision ticket",
+  };
+
+  // Records the journal says were RETIRED (C3), dropped for the same reason
+  // replayPending drops them: a superseded migration's node left the roadmap by
+  // a journaled act, so its absence is deliberate rather than the crash window.
+  // What is reported here and what repair materializes have to agree, or
+  // `--repair` would resurrect exactly what this check called gone.
+  for (const event of state.events) {
+    for (const id of supersededNodeIds(event)) finalists.delete(`roadmap-node:${id}`);
   }
 
   const repairFix =
     "run `nahel validate --repair` — it replays the journaled mutation and only materializes what the journal already records";
-  for (const [id, finalists] of itemFinalists) {
-    const disk = state.items.get(id);
-    const candidates = latestCandidates(finalists);
+  for (const [key, list] of finalists) {
+    const target = key.slice(0, key.indexOf(":")) as MutationTarget;
+    const id = key.slice(target.length + 1);
+    const disk = onDisk[target].get(id);
+    const candidates = latestCandidates(list);
     const inSync =
       disk !== undefined &&
       candidates.some(
         (candidate) =>
           JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
-          disk.body === candidate.body,
+          (disk.body ?? "") === candidate.body,
       );
     if (!inSync) {
       const pending = candidates[candidates.length - 1]!;
@@ -1483,54 +2673,132 @@ function checkDivergence(state: ParsedState): Finding[] {
         check: "journal.divergence",
         ...(disk === undefined ? {} : { path: disk.path }),
         message:
-          `item ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
+          `${noun[target]} ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
           `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
         fix: repairFix,
       });
     }
   }
-  for (const [id, finalists] of runFinalists) {
-    const disk = state.runs.get(id);
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      disk !== undefined &&
-      candidates.some(
-        (candidate) => JSON.stringify(disk.record) === JSON.stringify(candidate.record),
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
+  return findings;
+}
+
+/**
+ * The DOCUMENT half of divergence (Phase 4 F10). A journaled document step is
+ * the same promise a journaled record write is — the journal states what the
+ * filesystem should hold — so an act killed before the file work landed is
+ * reported in the same words and healed by the same flag.
+ *
+ * The shapes a `move` can be caught in are named separately, because they are
+ * different facts about where the document is:
+ *
+ * - the destination holds a document this event did NOT stamp: a reused PRD
+ *   basename pointing two deltas at one archive slot. Repair refuses to unlink
+ *   the live source into it, and this names why;
+ * - neither location holds it: repair cannot invent a document, so this is the
+ *   one archival state `--repair` will not fix, and it says so;
+ * - the destination is empty and the source still holds it: the move never
+ *   started, the journal is ahead;
+ * - BOTH hold it: the copy landed and the source was never unlinked — the one
+ *   partial state the move's own ordering can leave, and the next repair pass
+ *   removes the source.
+ *
+ * An `append` is judged by its MARKER, not by the line: a design doc is
+ * permanent and gets reworded, and the act has landed as long as the pointer it
+ * carried — event-scoped, so nothing else can have written it — is still in the
+ * document.
+ */
+function checkArchival(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const presence = state.input.documentPresence;
+  const repairFix =
+    "run `nahel validate --repair` — it applies the journaled document step and only makes real what the journal already records";
+  for (const event of state.events) {
+    const { edits, invalid } = eventDocuments(event);
+    for (const reason of invalid) {
       findings.push({
         severity: "error",
-        check: "journal.divergence",
-        ...(disk === undefined ? {} : { path: disk.path }),
+        check: "journal.payload",
         message:
-          `run ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
-          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
-        fix: repairFix,
+          `mutation event ${event.id} (${event.type}) carries an unusable document step — ${reason} — ` +
+          "repair cannot use it",
+        fix: "the event payload was corrupted — restore the segment from git",
       });
     }
-  }
-  for (const [id, finalists] of observationFinalists) {
-    const disk = state.observations.get(id);
-    const candidates = latestCandidates(finalists);
-    const inSync =
-      disk !== undefined &&
-      candidates.some(
-        (candidate) =>
-          JSON.stringify(disk.record) === JSON.stringify(candidate.record) &&
-          disk.body === candidate.body,
-      );
-    if (!inSync) {
-      const pending = candidates[candidates.length - 1]!;
-      findings.push({
-        severity: "error",
-        check: "journal.divergence",
-        ...(disk === undefined ? {} : { path: disk.path }),
-        message:
-          `observation ${id} record is ${disk === undefined ? "missing" : "behind"} its latest ` +
-          `mutation event ${pending.event.id} (${pending.event.type}) — the journal is ahead`,
-        fix: repairFix,
-      });
+    if (presence === undefined) continue;
+    for (const edit of edits) {
+      if (edit.op === "move") {
+        const to = presence[edit.to] === true;
+        const from = presence[edit.from] === true;
+        // A file AT the destination is not this move having happened: the
+        // stamp names the archival event, so only the stamp proves it.
+        if (to && !(state.input.documentText?.[edit.to] ?? "").includes(edit.header)) {
+          findings.push({
+            severity: "error",
+            check: "roadmap.document-collision",
+            path: edit.to,
+            message:
+              `event ${event.id} moved ${edit.from} to ${edit.to}, but the document at ${edit.to} carries a ` +
+              "different act's stamp — repair will not unlink a live document into an archive it did not write",
+            // The recovery is repair, NOT the verb: by the time this fires the
+            // event is journaled and the record refs already point at the
+            // archived path, so re-running `nahel roadmap archive` only earns
+            // the already-archived refusal. Freeing the destination is the one
+            // thing missing — repair has been holding the move all along.
+            fix: "move the document already at that path aside (the archive holds one file per delta, and an archived PRD is never overwritten), then run `nahel validate --repair` — it completes the journaled move",
+          });
+          continue;
+        }
+        if (!to && !from) {
+          findings.push({
+            severity: "error",
+            check: "roadmap.document-lost",
+            message:
+              `event ${event.id} moved ${edit.from} to ${edit.to}, and the document is at neither ` +
+              "location — nothing this store moves is ever deleted, so this is a hand deletion",
+            fix: "restore the document from git — `nahel validate --repair` cannot invent one",
+          });
+        } else if (!to) {
+          findings.push({
+            severity: "error",
+            check: "journal.divergence",
+            path: edit.to,
+            message: `document ${edit.to} is missing its journaled move from ${edit.from} (event ${event.id}) — the journal is ahead`,
+            fix: repairFix,
+          });
+        } else if (from) {
+          findings.push({
+            severity: "error",
+            check: "journal.divergence",
+            path: edit.from,
+            message: `document ${edit.from} was journaled as moved to ${edit.to} (event ${event.id}) but still exists at both — the journal is ahead`,
+            fix: repairFix,
+          });
+        }
+        continue;
+      }
+      if (presence[edit.path] !== true) {
+        // An ERROR, like every other journal-ahead-of-disk state: the act was
+        // recorded, the document it names is not there, and repair cannot
+        // converge until it is. A warning would let a store where an act is
+        // permanently half-done exit 0.
+        findings.push({
+          severity: "error",
+          check: "roadmap.design-doc-missing",
+          path: edit.path,
+          message: `event ${event.id} recorded a line for ${edit.path}, which does not exist on disk — the product design doc is permanent, never archived and never deleted, so the journal is ahead of nothing`,
+          fix: "restore the document from git and run `nahel validate --repair` (it appends the recorded line), or point the product node at the right one with `nahel roadmap node update <ref> --design-doc <path>`",
+        });
+        continue;
+      }
+      if (!(state.input.documentText?.[edit.path] ?? "").includes(edit.marker)) {
+        findings.push({
+          severity: "error",
+          check: "journal.divergence",
+          path: edit.path,
+          message: `document ${edit.path} does not carry what event ${event.id} recorded (${edit.marker}) — the journal is ahead`,
+          fix: repairFix,
+        });
+      }
     }
   }
   return findings;
@@ -1581,28 +2849,6 @@ function checkHotState(state: ParsedState): Finding[] {
     }
   }
   return findings;
-}
-
-const TIMESTAMP_PARTS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
-
-/**
- * Seconds since the Unix epoch for a schema-format UTC timestamp, computed
- * with plain calendar arithmetic (days-from-civil) — the validate layer is
- * pure and touches no ambient clock or date machinery. Undefined when the
- * string is not in the schema's timestamp format.
- */
-function epochSeconds(timestamp: string): number | undefined {
-  const parts = TIMESTAMP_PARTS.exec(timestamp);
-  if (parts === null) return undefined;
-  const [, year, month, day, hour, minute, second] = parts.map(Number) as number[];
-  const shiftedYear = month! <= 2 ? year! - 1 : year!;
-  const era = Math.floor(shiftedYear / 400);
-  const yearOfEra = shiftedYear - era * 400;
-  const dayOfYear = Math.floor((153 * (month! + (month! > 2 ? -3 : 9)) + 2) / 5) + day! - 1;
-  const dayOfEra =
-    yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
-  const epochDays = era * 146097 + dayOfEra - 719468;
-  return epochDays * 86400 + hour! * 3600 + minute! * 60 + second!;
 }
 
 const COMPACT_FIX =
@@ -1678,6 +2924,10 @@ function checkMaintenance(state: ParsedState): Finding[] {
     });
   }
 
+  // Either reading may be unreadable rather than absent — an impossible date in
+  // an archived segment, which `journal.timestamp` above reports by name. The
+  // age leg then measures nothing rather than measuring a fiction; the reader
+  // is already being told exactly which event to repair.
   const nowSeconds = state.input.now === undefined ? undefined : epochSeconds(state.input.now);
   const oldestSeconds = oldest === undefined ? undefined : epochSeconds(oldest);
   if (nowSeconds !== undefined && oldestSeconds !== undefined) {
@@ -1944,6 +3194,14 @@ export function validate(input: ValidationInput): Finding[] {
   const { state, findings } = parseState(input);
   findings.push(
     ...checkRefs(state),
+    ...checkRoadmapRefs(state),
+    ...checkRoadmapDerivation(state),
+    ...checkRoadmapRetractions(state),
+    ...checkMigrationAudit(state),
+    ...checkRoadmapAdrRefs(state),
+    ...checkPrdLifecycle(state),
+    ...checkRoadmapShape(state),
+    ...checkWayfinder(state),
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),
@@ -1956,6 +3214,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkClaimedActiveRuns(state),
     ...checkJournal(state),
     ...checkDivergence(state),
+    ...checkArchival(state),
     ...checkHotState(state),
     ...checkMaintenance(state),
     ...checkSkillsDrift(state),

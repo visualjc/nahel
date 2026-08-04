@@ -38,6 +38,15 @@ export function sessionSegmentPath(layout: StoreLayout, sessionId: string): stri
 export interface AppendEventInput {
   type: string;
   actor: Actor;
+  /**
+   * Pre-minted event id, for the one case where the payload must cite the id
+   * of the event carrying it: F7's `resolve` distills an observation whose
+   * `sources` name the resolution event, and that observation record travels
+   * INSIDE the resolution event's payload — so the id has to exist before the
+   * line is serialized. Minted with generateId(env) by the caller, off the same
+   * injected Env this function would have used; omitted everywhere else.
+   */
+  id?: string;
   /** Run ref; when present the event is appended to that run's segment. */
   run?: string;
   /** Work-item ref carried on the event. */
@@ -144,7 +153,7 @@ export async function appendEvent(
 ): Promise<JournalEvent> {
   const path = segmentPathFor(layout, input);
   const event = journalEventSchema.parse({
-    id: generateId(env),
+    id: input.id ?? generateId(env),
     ts: env.now(),
     seq: await nextSeq(path),
     type: input.type,
@@ -317,6 +326,32 @@ export async function* readJournal(layout: StoreLayout): AsyncGenerator<JournalE
     ...segments.archived.map((name) => join(layout.journalArchiveDir, name)),
   ];
   yield* mergeSegments(paths);
+}
+
+/**
+ * Which of `ids` no journal event carries — the provenance check every writer
+ * of an observation makes before citing a source. Shared, because both writers
+ * ask it: `nahel observe`, and F7's `resolve --source`. An observation's
+ * `sources` are VERIFIED rather than merely id-shaped (see `validate`'s
+ * refs.observation-sources, an error), so this is the one reading of "a source
+ * exists" and there is no second copy of the walk to drift from it.
+ *
+ * Streams, and stops the moment every id is accounted for, so a long journal is
+ * never fully loaded to check a handful of refs. The archive is read too —
+ * event ids are stable across rotation (ADR-0012), so provenance survives it.
+ * Sorted, so the refusal it feeds names the same ids in the same order twice.
+ */
+export async function missingEventIds(
+  layout: StoreLayout,
+  ids: Iterable<string>,
+): Promise<string[]> {
+  const missing = new Set(ids);
+  if (missing.size === 0) return [];
+  for await (const event of readJournal(layout)) {
+    missing.delete(event.id);
+    if (missing.size === 0) break;
+  }
+  return [...missing].sort();
 }
 
 /** One malformed segment line: unparseable JSON or an invalid event shape. */

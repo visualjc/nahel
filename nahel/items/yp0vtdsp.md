@@ -2,7 +2,7 @@
 id: yp0vtdsp
 name: roadmap-frontier
 type: feature
-status: in-review
+status: done
 lane: direct
 parent: bdgp78s4
 depends_on:
@@ -10,5 +10,5 @@ depends_on:
   - sb1fr7vk
 external_refs: []
 created: 2026-08-02T01:29:23Z
-updated: 2026-08-02T08:36:18Z
+updated: 2026-08-04T18:20:18Z
 ---

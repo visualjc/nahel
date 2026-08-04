@@ -1,0 +1,2 @@
+{"id":"2garzvx7","ts":"2026-08-04T18:22:51Z","seq":0,"type":"release.announced","actor":{"kind":"agent","id":"claude-code"},"item":"bdgp78s4","payload":{"version":"0.3.0","channel":"git main + local install","announcement":"https://github.com/visualjc/nahel/pull/26"}}
+{"id":"0ty98aar","ts":"2026-08-04T18:22:51Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

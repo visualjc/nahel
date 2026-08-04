@@ -1,0 +1,2 @@
+{"id":"vc4f471k","ts":"2026-08-04T18:20:17Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"ykvprab2","payload":{"target":"item","record":{"id":"ykvprab2","name":"roadmap-node-records","type":"feature","status":"done","lane":"direct","parent":"bdgp78s4","depends_on":[],"external_refs":[],"created":"2026-08-02T01:29:10Z","updated":"2026-08-04T18:20:17Z"},"body":""}}
+{"id":"52xph88m","ts":"2026-08-04T18:20:17Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

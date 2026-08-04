@@ -2,12 +2,12 @@
 id: 8nh9ja8c
 name: roadmap-derived-status
 type: feature
-status: in-review
+status: done
 lane: direct
 parent: bdgp78s4
 depends_on:
   - ykvprab2
 external_refs: []
 created: 2026-08-02T01:29:22Z
-updated: 2026-08-02T03:02:13Z
+updated: 2026-08-04T18:20:17Z
 ---

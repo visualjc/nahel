@@ -4,6 +4,16 @@ created: 2026-08-01T20:10:22Z
 updated: 2026-08-01T20:10:22Z
 ---
 
+> **Archived — the delta this PRD stated is closed.**
+>
+> - Release: released 0.3.0 2026-08-04T18:22:51Z
+> - Epic: bdgp78s4 — roadmap node phase-4-roadmap-layer (y0nje4nw)
+> - Journal: archived by event 4zx0yf0h
+>
+> The code and tests are the truth now — this PRD is never reopened and
+> never edited. Further work on this feature is a new node with a new PRD,
+> which may name this one as its predecessor.
+
 # Phase 4 — Roadmap layer
 
 > PRD authored by plan item `roadmap-layer` (`sp2yf32m`). Grounded in the

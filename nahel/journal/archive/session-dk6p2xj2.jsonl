@@ -1,0 +1,2 @@
+{"id":"vftcy22x","ts":"2026-08-04T18:20:18Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"0e0fh3em","payload":{"target":"item","record":{"id":"0e0fh3em","name":"roadmap-lifecycle-events","type":"feature","status":"done","lane":"direct","parent":"bdgp78s4","depends_on":["8nh9ja8c"],"external_refs":[],"created":"2026-08-02T01:29:23Z","updated":"2026-08-04T18:20:18Z"},"body":""}}
+{"id":"38j8qyp2","ts":"2026-08-04T18:20:18Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

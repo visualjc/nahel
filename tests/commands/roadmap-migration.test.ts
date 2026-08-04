@@ -127,12 +127,18 @@ async function logged(env: Env, root: string, args: string[]): Promise<string> {
   return id!;
 }
 
-/** Journal a selection set the way `nahel/workflows/migrate-roadmap.md` does. */
+/**
+ * Journal a selection set the way `nahel/workflows/migrate-roadmap.md` does —
+ * BOTH lists, always: an absent `excluded` is not the same call as an empty
+ * one, and the audit reads the set strictly.
+ */
 async function selection(env: Env, root: string, included: readonly string[]): Promise<string> {
   return logged(env, root, [
     MIGRATION_SELECTED_EVENT_TYPE,
     "--data",
     `included=${JSON.stringify(included)}`,
+    "--data",
+    "excluded=[]",
   ]);
 }
 
@@ -717,5 +723,70 @@ describe("supersession interrupted at every boundary of the sequence (C3)", () =
     const repaired = await validate(fixture.root, ["--repair"]);
     expect(repaired.code).toBe(0);
     expect(repaired.out).not.toContain("repaired");
+  });
+});
+
+/**
+ * Attribution to a RETIRED attempt, refused at the write seam (codex bundle-C
+ * review, finding 1). The verb used to stop scanning the journal at the
+ * selection event, so it never saw the supersession that came after — and
+ * happily created a live node pointing at an attempt the store had already
+ * retired, which no active-attempt audit would ever look at again.
+ */
+describe("--migration will not attribute a node to a retired attempt (C2)", () => {
+  test("refused, naming the supersession that retired it — and nothing is written", async () => {
+    const fixture = await migrated();
+    const { root, layout, env } = fixture;
+    await ok(env, root, ["migration", "supersede", fixture.selection, "--reason", "tainted"]);
+    const supersession = (await events(layout)).find(
+      (event) => event.type === CORE_EVENT_TYPES.migrationSuperseded,
+    )!;
+    const before = (await events(layout)).filter(
+      (event) => event.type === CORE_EVENT_TYPES.roadmapNodeCreated,
+    ).length;
+
+    const message = await fails(env, root, [
+      "node",
+      "new",
+      "feature",
+      "revived",
+      "--horizon",
+      "now",
+      "--epic",
+      fixture.epics[0]!,
+      "--intent",
+      "charted against the attempt that was retired",
+      "--migration",
+      fixture.selection,
+    ]);
+    expect(message).toContain(fixture.selection);
+    expect(message).toContain(supersession.id);
+    expect(
+      (await events(layout)).filter(
+        (event) => event.type === CORE_EVENT_TYPES.roadmapNodeCreated,
+      ),
+    ).toHaveLength(before);
+  });
+
+  test("the fresh selection after it is accepted — retirement blocks one attempt, not the verb", async () => {
+    const fixture = await migrated();
+    const { root, env } = fixture;
+    await ok(env, root, ["migration", "supersede", fixture.selection, "--reason", "tainted"]);
+    const redo = await selection(env, root, [fixture.epics[0]!]);
+    await ok(env, root, [
+      "node",
+      "new",
+      "feature",
+      "one-again",
+      "--horizon",
+      "now",
+      "--epic",
+      fixture.epics[0]!,
+      "--intent",
+      "the feature, charted by the second attempt",
+      "--migration",
+      redo,
+    ]);
+    expect((await validate(root)).code).toBe(0);
   });
 });

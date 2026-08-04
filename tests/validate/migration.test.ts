@@ -301,6 +301,109 @@ describe("the selection payload itself is audited (C2)", () => {
   });
 });
 
+/**
+ * Clause (a) at the strictness the schema layer uses everywhere else (codex
+ * bundle-C review, finding 2). The payload arrives through `nahel log --data`,
+ * which JSON-parses whatever it is handed: the set is the ONE input to this
+ * audit that no schema validates on the way in, so a lax reader turns a
+ * malformed call into a silently empty one — and an audit that reads a broken
+ * set as "nothing was excluded" reports a coverage story nobody made.
+ */
+describe("the selected set is read strictly, never salvaged (C2)", () => {
+  /** Journal a selection with a hand-built payload — the shapes `log` accepts. */
+  async function raw(
+    fixture: ValidateFixture,
+    payload: Record<string, unknown>,
+  ): Promise<JournalEvent> {
+    return appendEvent(fixture.layout, fixture.env, {
+      type: MIGRATION_SELECTED_EVENT_TYPE,
+      actor: fixture.agent.actor,
+      session: fixture.agent.session,
+      payload,
+    });
+  }
+
+  test("an included entry that is not an id is an error naming it", async () => {
+    const fixture = await setup();
+    await raw(fixture, { included: ["detached-state-repo"], excluded: [] });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("error");
+    expect(found[0]!.message).toContain("detached-state-repo");
+    expect(found[0]!.message).toContain("included");
+  });
+
+  test("an included list holding a non-string is an error, not a skipped entry", async () => {
+    const fixture = await setup();
+    await raw(fixture, { included: [42], excluded: [] });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("error");
+    expect(found[0]!.message).toContain("42");
+  });
+
+  test("an ABSENT excluded list is an error — silence is not the same as none", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    await raw(fixture, { included: [covered.id] });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("error");
+    expect(found[0]!.message).toContain("excluded");
+    // The fix is the empty list: a migration where nothing was arguable says so.
+    expect(found[0]!.fix).toContain("excluded");
+  });
+
+  test("an excluded payload that is not a list is an error, never read as empty", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    await raw(fixture, { included: [covered.id], excluded: "none" });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("excluded");
+  });
+
+  test("an excluded entry that is not an {id, reason} object is an error", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    const nearMiss = await createItem(fixture, { name: "two" });
+    await raw(fixture, { included: [covered.id], excluded: [nearMiss.id] });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("excluded");
+    expect(found[0]!.message).toContain("reason");
+  });
+
+  test("an excluded entry whose id is not an id is an error naming it", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    await raw(fixture, {
+      included: [covered.id],
+      excluded: [{ id: "the-flaky-test", reason: "a task under the epic" }],
+    });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("the-flaky-test");
+  });
+
+  test("a duplicated excluded id is an error — the near-miss list is a set too", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    const nearMiss = await createItem(fixture, { name: "two" });
+    await raw(fixture, {
+      included: [covered.id],
+      excluded: [
+        { id: nearMiss.id, reason: "a defect, not roadmap intent" },
+        { id: nearMiss.id, reason: "and again, with a different account" },
+      ],
+    });
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain(nearMiss.id);
+    expect(found[0]!.message).toContain("more than once");
+  });
+});
+
 describe("two active selections suspend the coverage audit (C2)", () => {
   test("exactly one error, and the uncovered ids of neither attempt are reported", async () => {
     const fixture = await setup();
@@ -332,6 +435,84 @@ describe("two active selections suspend the coverage audit (C2)", () => {
     });
     await createNode(fixture, { epic: covered.id, name: "one" }, second.id);
     expect(await findings(fixture)).toEqual([]);
+  });
+});
+
+/**
+ * A node attributed to an attempt that was RETIRED (codex bundle-C review,
+ * finding 1). The verb refuses to write one, but a refusal at the write seam is
+ * not a guarantee about the store: another worktree can chart against a
+ * selection this branch superseded, and the merge lands a live node whose
+ * attribution points at an attempt nobody is auditing. Silence there is the
+ * worst outcome the audit can produce — a node that looks migrated, belongs to
+ * no active attempt, and is therefore checked by nothing at all.
+ */
+describe("a live node attributed to a retired attempt is caught, not ignored (C2)", () => {
+  /** Retire `selection`, naming exactly the nodes it moved. */
+  async function retire(
+    fixture: ValidateFixture,
+    selectionId: string,
+    nodes: readonly string[],
+  ): Promise<JournalEvent> {
+    return appendEvent(fixture.layout, fixture.env, {
+      type: CORE_EVENT_TYPES.migrationSuperseded,
+      actor: fixture.agent.actor,
+      session: fixture.agent.session,
+      payload: { selection: selectionId, reason: "the attempt was tainted", nodes },
+    });
+  }
+
+  test("an error naming the node, the retired selection, and the supersession", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    const event = await selection(fixture, [covered.id]);
+    const retired = await createNode(fixture, { epic: covered.id, name: "one" }, event.id);
+    const supersession = await retire(fixture, event.id, [retired.id]);
+    // The merge-race shape: a node attributed to the retired attempt that the
+    // supersession never moved, because it did not exist when it ran.
+    const stray = await createNode(fixture, { epic: covered.id, name: "revived" }, event.id);
+    const found = await findings(fixture);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("error");
+    expect(found[0]!.message).toContain(stray.id);
+    expect(found[0]!.message).toContain(event.id);
+    expect(found[0]!.message).toContain(supersession.id);
+    // The node the supersession DID name is not reported here: its move is
+    // journaled, so the write-ahead machinery owns that state.
+    expect(found[0]!.message).not.toContain(retired.id);
+  });
+
+  test("the audit's other half stays suspended: a retired attempt owes no coverage", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    const uncovered = await createItem(fixture, { name: "two" });
+    const event = await selection(fixture, [covered.id, uncovered.id]);
+    const node = await createNode(fixture, { epic: covered.id, name: "one" }, event.id);
+    await retire(fixture, event.id, [node.id]);
+    const stray = await createNode(fixture, { epic: covered.id, name: "revived" }, event.id);
+    const found = await findings(fixture);
+    // Exactly the stray — never "included id two has no node", which a retired
+    // attempt does not owe.
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain(stray.id);
+    expect(found.map((finding) => finding.message).join("\n")).not.toContain(uncovered.id);
+  });
+
+  test("it fires even while two other selections are active — a different fact", async () => {
+    const fixture = await setup();
+    const covered = await createItem(fixture, { name: "one" });
+    const event = await selection(fixture, [covered.id]);
+    const node = await createNode(fixture, { epic: covered.id, name: "one" }, event.id);
+    const supersession = await retire(fixture, event.id, [node.id]);
+    const stray = await createNode(fixture, { epic: covered.id, name: "revived" }, event.id);
+    await selection(fixture, [covered.id]);
+    await selection(fixture, [covered.id]);
+    const found = await findings(fixture);
+    expect(found).toHaveLength(2);
+    const messages = found.map((finding) => finding.message).join("\n");
+    expect(messages).toContain(stray.id);
+    expect(messages).toContain(supersession.id);
+    expect(messages).toContain("active migration selections");
   });
 });
 

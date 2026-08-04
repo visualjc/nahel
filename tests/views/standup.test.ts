@@ -12,8 +12,14 @@ import type {
   RoadmapNodeFrontmatter,
   WorkItemFrontmatter,
 } from "../../src/schema/records";
+import { compareEvents } from "../../src/store/journal";
 import type { RoadmapNodeRecord } from "../../src/store/layout";
-import { isStandupEvent, renderStandup, resolveSince } from "../../src/views/standup";
+import {
+  collectStandupWindow,
+  isStandupEvent,
+  renderStandup,
+  resolveSince,
+} from "../../src/views/standup";
 import { makeFrontmatter, makeRun, seededEnv } from "../store/helpers";
 
 /**
@@ -185,7 +191,14 @@ describe("resolveSince — specs that name no instant", () => {
 describe("renderStandup — the window's honest empty output", () => {
   test("nothing moved → the window is stated and the emptiness is explicit", () => {
     expect(
-      renderStandup({ since: "2026-07-26T09:15:00Z", nodes: [], items: [], runs: [], events: [] }),
+      renderStandup({
+        since: "2026-07-26T09:15:00Z",
+        nodes: [],
+        items: [],
+        runs: [],
+        events: [],
+        baseline: new Map(),
+      }),
     ).toBe("standup since 2026-07-26T09:15:00Z\n\nno movement in this window");
   });
 
@@ -198,6 +211,7 @@ describe("renderStandup — the window's honest empty output", () => {
       nodes: [node],
       items,
       runs: [],
+      baseline: new Map(),
       events: [itemEvent(env, { ...child, status: "in-progress" }, "2026-07-20T08:00:00Z")],
     });
 
@@ -217,6 +231,7 @@ describe("renderStandup — the verbs, one per journaled act", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events,
     });
   }
@@ -317,6 +332,7 @@ describe("renderStandup — the verbs, one per journaled act", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [{ run, hotState: null }],
+      baseline: new Map(),
       events: [paused],
     });
 
@@ -395,6 +411,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events: [fixture.birth, closed],
     });
 
@@ -419,6 +436,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [fixture.node],
       items: [...fixture.items, solo],
       runs: [],
+      baseline: new Map(),
       events: [born, moved],
     });
 
@@ -453,6 +471,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [ghost],
       items: [orphan],
       runs: [],
+      baseline: new Map(),
       events: [shipped],
     });
 
@@ -477,6 +496,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [],
       items: [],
       runs: [],
+      baseline: new Map(),
       events: [release],
     });
 
@@ -504,6 +524,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [outerNode, innerNode],
       items: [outer, inner, { ...leaf, status: "done" }],
       runs: [],
+      baseline: new Map(),
       events: [closed],
     });
 
@@ -525,6 +546,7 @@ describe("renderStandup — grouping by node and item", () => {
       nodes: [fixture.node, quiet],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events: [closed],
     });
 
@@ -547,6 +569,7 @@ describe("renderStandup — determinism", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
     };
 
     const forwards = renderStandup({ ...inputs, events: [first, second] });
@@ -564,6 +587,7 @@ describe("renderStandup — determinism", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events: [itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z")],
     };
 
@@ -631,6 +655,7 @@ describe("renderStandup — a retracted lifecycle fact", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events: [fixture.birth, closed, release, retraction],
     });
 
@@ -674,6 +699,7 @@ describe("renderStandup — a retracted lifecycle fact", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events: [fixture.birth, release, retraction],
     });
 
@@ -718,6 +744,7 @@ describe("renderStandup — a retracted lifecycle fact", () => {
       nodes: [fixture.node],
       items: fixture.items,
       runs: [],
+      baseline: new Map(),
       events,
     });
 
@@ -752,6 +779,7 @@ describe("renderStandup — a retracted lifecycle fact", () => {
         nodes: [fixture.node],
         items: fixture.items,
         runs: [],
+        baseline: new Map(),
         events: [
           fixture.birth,
           release,
@@ -761,5 +789,193 @@ describe("renderStandup — a retracted lifecycle fact", () => {
       expect(out).toContain("no movement in this window");
       expect(out).not.toContain("retracted");
     }
+  });
+});
+
+/**
+ * collectStandupWindow (PR #26 review, follow-up E): the journal STREAMED into
+ * the window instead of held in it.
+ *
+ * The earlier reading kept every standup-relevant act of the whole journal and
+ * sorted a copy, so a `--since 24h` read cost the project's age. What it needed
+ * history for is small: a status per item, the surviving lifecycle facts the
+ * group headers derive their stage from, the facts an in-window retraction has
+ * to quote, and the withdrawn set itself.
+ *
+ * The contract is byte-identity — the collected slice must render exactly what
+ * the whole journal renders — so that is what the first case asserts directly,
+ * over a journal carrying every awkward shape at once.
+ */
+describe("collectStandupWindow — the journal streamed, never held", () => {
+  const COLUMN_RETRACTED = "roadmap.column-retracted";
+  const SINCE = "2026-07-26T09:15:00Z";
+
+  /**
+   * The events as a journal hands them over: the store's canonical total order,
+   * streamed. readJournal's own guarantee, and the one the collector reads the
+   * baseline under — the LAST pre-window status per item is only the last if
+   * the stream is ordered.
+   */
+  function streamed(events: readonly JournalEvent[]): () => AsyncIterable<JournalEvent> {
+    const ordered = [...events].sort(compareEvents);
+    return async function* stream() {
+      for (const event of ordered) yield event;
+    };
+  }
+
+  /** One retraction of `target`, stated with a reason, at `ts`. */
+  function retracts(env: Env, target: string, ts: string): JournalEvent {
+    return logged(env, COLUMN_RETRACTED, undefined, { event: target, reason: "wrong epic" }, ts);
+  }
+
+  /**
+   * A journal with a past, carrying every shape the collector has to get right
+   * at once: pre-window facts that survive, one withdrawn before the window and
+   * never mentioned again, one withdrawn from INSIDE it (the correction has to
+   * quote it), one withdrawn by a retraction journaled BEFORE the fact itself —
+   * legal, because a retraction is decided by id and not by when it was written
+   * — and the window's own movement.
+   */
+  function historied(env: Env) {
+    const fixture = charted(env, "done");
+    const item = fixture.child.id;
+    const started = itemEvent(env, { ...fixture.child, status: "in-progress" }, "2026-07-20T08:00:00Z");
+    const deploy = logged(env, DEPLOY_COMPLETED_EVENT_TYPE, item, { environment: "staging" }, "2026-07-21T08:00:00Z");
+    const stale = logged(env, RELEASE_ANNOUNCED_EVENT_TYPE, item, { version: "0.2.0" }, "2026-07-22T08:00:00Z");
+    const sweep = logged(env, QA_SWEEP_EVENT_TYPE, item, { failed: 1 }, "2026-07-23T08:00:00Z");
+    // The LAST pre-window sweep, and withdrawn before the window opened: it
+    // elects nothing and renders nothing, so nothing needs to remember it.
+    const doomed = logged(env, QA_SWEEP_EVENT_TYPE, item, { failed: 0 }, "2026-07-25T08:00:00Z");
+    const closed = itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z");
+    const early = logged(env, RELEASE_ANNOUNCED_EVENT_TYPE, item, { version: "0.4.0" }, "2026-07-29T08:00:00Z");
+    const release = logged(env, RELEASE_ANNOUNCED_EVENT_TYPE, item, { version: "0.3.0" }, "2026-07-31T08:00:00Z");
+    return {
+      fixture,
+      deploy,
+      stale,
+      doomed,
+      sweep,
+      closed,
+      early,
+      release,
+      events: [
+        fixture.birth,
+        started,
+        deploy,
+        stale,
+        sweep,
+        // Written BEFORE the release it withdraws: the derivation must still
+        // ignore that release, so this one outlives the window it predates.
+        retracts(env, early.id, "2026-07-24T08:00:00Z"),
+        doomed,
+        retracts(env, doomed.id, "2026-07-25T09:00:00Z"),
+        early,
+        closed,
+        release,
+        // Withdrawn from inside the window: one names a fact older than the
+        // window, one a fact inside it.
+        retracts(env, stale.id, "2026-07-30T10:00:00Z"),
+        retracts(env, release.id, "2026-07-31T09:00:00Z"),
+      ],
+    };
+  }
+
+  test("the collected slice renders EXACTLY what the whole journal renders", async () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const history = historied(env);
+    const fixture = history.fixture;
+    const facts = { since: SINCE, nodes: [fixture.node], items: fixture.items, runs: [] };
+
+    const window = await collectStandupWindow(SINCE, streamed(history.events));
+    const collected = renderStandup({ ...facts, events: window.events, baseline: window.baseline });
+
+    expect(collected).toBe(renderStandup({ ...facts, events: history.events, baseline: new Map() }));
+    // …and what the two agree on is a real page: the header's stage comes off a
+    // deploy older than the window, the transition names where it came from,
+    // and the correction quotes a release the window never saw announced.
+    expect(collected).toContain(`  feature  deployed  id=${fixture.node.frontmatter.id}`);
+    expect(collected).toContain(`closed  in-progress → done  act=${history.closed.id}`);
+    expect(collected).toContain(`retracted  shipped released 0.2.0 (act ${history.stale.id})`);
+    // The release withdrawn by an act older than itself still reports as the act
+    // it was, under a header that does not count it.
+    expect(collected).toContain(`shipped  released 0.4.0  act=${history.early.id}`);
+  });
+
+  test("what it keeps of the past: the baseline, the survivors, the quoted facts", async () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const history = historied(env);
+
+    const window = await collectStandupWindow(SINCE, streamed(history.events));
+    const kept = new Set(window.events.map((event: JournalEvent) => event.id));
+
+    // One word per item, not the acts that produced it.
+    expect(window.baseline).toEqual(new Map([[history.fixture.child.id, "in-progress"]]));
+    // The surviving winner of each pre-window column type, and no other.
+    expect(kept.has(history.deploy.id)).toBe(true);
+    expect(kept.has(history.sweep.id)).toBe(true);
+    expect(kept.has(history.doomed.id)).toBe(false);
+    // The withdrawn fact a line inside the window has to quote.
+    expect(kept.has(history.stale.id)).toBe(true);
+    // Never the acts the baseline replaced.
+    expect(kept.has(history.fixture.birth.id)).toBe(false);
+  });
+
+  test("the surviving fact is per ITEM — one node's history is not another's", async () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const here = charted(env, "done");
+    const epic = makeFrontmatter(env, { name: "other-epic", type: "plan", lane: "full" });
+    const child = makeFrontmatter(env, { name: "other-work", parent: epic.id, status: "done" });
+    const node = makeNode(env, { name: "other-feature", epic: epic.id });
+    // One deploy each, both older than the window: whichever is later must not
+    // stand in for the other, or one feature would read its neighbour's stage.
+    const mine = logged(env, DEPLOY_COMPLETED_EVENT_TYPE, here.child.id, { environment: "staging" }, "2026-07-21T08:00:00Z");
+    const theirs = logged(env, DEPLOY_COMPLETED_EVENT_TYPE, child.id, { environment: "prod" }, "2026-07-22T08:00:00Z");
+    const events = [
+      here.birth,
+      mine,
+      theirs,
+      itemEvent(env, { ...here.child, status: "done" }, "2026-07-30T09:00:00Z"),
+      itemEvent(env, child, "2026-07-30T09:30:00Z"),
+    ];
+    const facts = {
+      since: SINCE,
+      nodes: [here.node, node],
+      items: [...here.items, epic, child],
+      runs: [],
+    };
+
+    const window = await collectStandupWindow(SINCE, streamed(events));
+    const collected = renderStandup({ ...facts, events: window.events, baseline: window.baseline });
+
+    expect(collected).toBe(renderStandup({ ...facts, events, baseline: new Map() }));
+    expect(collected).toContain(`detached-state-repo  feature  deployed  id=${here.node.frontmatter.id}`);
+    expect(collected).toContain(`other-feature  feature  deployed  id=${node.frontmatter.id}`);
+  });
+
+  test("what it keeps does not grow with the journal's length", async () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    /** A store with `depth` acts of movement and lifecycle history behind it. */
+    const journal = (depth: number): JournalEvent[] => {
+      const events: JournalEvent[] = [fixture.birth];
+      for (let index = 0; index < depth; index += 1) {
+        const day = 10 + (index % 10);
+        events.push(
+          itemEvent(env, { ...fixture.child, status: "in-progress" }, `2026-07-${day}T08:00:00Z`),
+          logged(env, QA_SWEEP_EVENT_TYPE, fixture.child.id, { failed: 0 }, `2026-07-${day}T09:00:00Z`),
+        );
+      }
+      events.push(itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z"));
+      return events;
+    };
+
+    const shallow = await collectStandupWindow(SINCE, streamed(journal(5)));
+    const deep = await collectStandupWindow(SINCE, streamed(journal(500)));
+
+    // One in-window act, one surviving pre-window sweep, one status baseline —
+    // whether the item moved five times before the window or five hundred.
+    expect(shallow.events.length).toBe(2);
+    expect(deep.events.length).toBe(2);
+    expect(deep.baseline.size).toBe(1);
   });
 });

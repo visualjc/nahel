@@ -11,7 +11,12 @@ import type { JournalEvent, WorkItemFrontmatter } from "../schema/records";
 import { epochSeconds, timestampFromEpochSeconds, TIMESTAMP_PATTERN } from "../schema/time";
 import { compareEvents } from "../store/journal";
 import type { RoadmapNodeRecord } from "../store/layout";
-import { payloadText, roadmapNodeSummary, withdrawnEventId } from "./roadmap";
+import {
+  payloadText,
+  roadmapNodeSummary,
+  ROADMAP_COLUMN_FACT_TYPES,
+  withdrawnEventId,
+} from "./roadmap";
 import { epicCoverage, type RunSnapshot } from "./snapshot";
 
 /**
@@ -26,6 +31,18 @@ import { epicCoverage, type RunSnapshot } from "./snapshot";
  * PURE, like every other view: facts in, a string out. The window's lower edge
  * is resolved by the command from the injected `Env` (resolveSince below) and
  * arrives here as data — nothing on this path reads a clock.
+ *
+ * MEMORY is bounded by the store, never by its history (PR #26 follow-up E).
+ * collectStandupWindow below streams the journal into a small baseline plus the
+ * window's own acts, so what a render holds is
+ *
+ *   O(items) statuses + O(retractions) + O(acts inside the window)
+ *
+ * — plus the k-way merge's one head per segment, which is the streaming reader's
+ * own cost. Nothing here retains, or sorts, a lifetime of movement. The
+ * retraction term is the store's correction log and nothing else: a retraction
+ * is decided by id alone, whenever it was written, so the set of withdrawn ids
+ * is the one fact a window cannot derive from its own slice.
  */
 
 /** The relative window forms `--since` accepts: whole days or whole hours. */
@@ -114,11 +131,114 @@ export interface StandupInputs {
   /** Every run — the run → item mapping a run-scoped act is grouped by. */
   runs: readonly RunSnapshot[];
   /**
-   * The WHOLE journal, any order. Acts BEFORE the window are read too and
-   * render nothing: they are what a transition inside the window is measured
-   * against, so `in-progress → done` can name where the item came from.
+   * The acts this window renders from, any order: everything INSIDE it, plus
+   * the few pre-window acts the page still needs — the surviving lifecycle
+   * facts the group headers derive their stage from, the facts an in-window
+   * retraction withdraws, and every retraction in the store. That is exactly
+   * what collectStandupWindow keeps, and the whole journal is a valid value
+   * too: the walk below is total over ANY slice of it, which is what lets the
+   * collected slice be proven byte-identical to the lot.
    */
   events: readonly JournalEvent[];
+  /**
+   * What each item's status was at the window's lower edge — the pre-window
+   * history collapsed to one word per item, so a transition inside the window
+   * can name where it came from without the acts that got it there being held.
+   * An item absent here has no recorded past the caller could see, and renders
+   * `→ <status>` rather than an invented previous one.
+   */
+  baseline: ReadonlyMap<string, string>;
+}
+
+/** What one window needs off the journal, and nothing else (collect below). */
+export interface StandupWindow {
+  /** The acts to render (StandupInputs.events). */
+  events: JournalEvent[];
+  /** Status per item at the window's lower edge (StandupInputs.baseline). */
+  baseline: Map<string, string>;
+}
+
+/**
+ * Stream the journal into exactly what one window renders from, and nothing
+ * else (PR #26 follow-up E).
+ *
+ * The earlier reading kept every standup-relevant act of the WHOLE journal and
+ * then sorted a copy: the cost of a `--since 24h` read grew with the project's
+ * age rather than with the day it asked about. What it needed history for is
+ * small and knowable, so history is collapsed as it streams:
+ *
+ *   · a status per item, the baseline a transition is measured against;
+ *   · per item and lifecycle type, the last SURVIVING fact, because the group
+ *     headers carry F2's derived stage and that stage reads the whole journal;
+ *   · the pre-window facts an in-window retraction withdraws — a correction has
+ *     to say what the withdrawn act said, and after this its own line is the
+ *     only place those words still exist;
+ *   · every retraction, which is the set the derivation and the corrections
+ *     both read; a retraction is decided by id alone, so one written before the
+ *     fact it names counts exactly as much as one written a year after.
+ *
+ * TWO passes over the journal, which is deliberate: the surviving winner cannot
+ * be chosen until the withdrawn set is known, and a single pass would have to
+ * hold every candidate that a retraction still arriving might promote — the
+ * unbounded memory this exists to remove. The second read costs I/O, and I/O is
+ * not what was growing.
+ *
+ * `journal` is a THUNK for that reason: it is opened twice, and the collector
+ * never touches the store itself, so it stays as testable as the render.
+ */
+export async function collectStandupWindow(
+  since: string,
+  journal: () => AsyncIterable<JournalEvent>,
+): Promise<StandupWindow> {
+  const retractions: JournalEvent[] = [];
+  for await (const event of journal()) {
+    if (event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) retractions.push(event);
+  }
+  // What the derivation must ignore, and — a subset — what a line inside the
+  // window has to be able to quote back.
+  const withdrawn = new Set<string>();
+  const corrected = new Set<string>();
+  for (const event of retractions) {
+    const target = withdrawnEventId(event);
+    if (target === undefined) continue;
+    withdrawn.add(target);
+    if (event.ts >= since) corrected.add(target);
+  }
+
+  const events = [...retractions];
+  const baseline = new Map<string, string>();
+  // Per item and type, the last surviving pre-window fact. Keyed per ITEM rather
+  // than per node because coverage is the view's to decide: two nodes whose
+  // epics nest read the same item's facts, and the maximum over a set of items
+  // is the maximum of their own maxima.
+  const winners = new Map<string, JournalEvent>();
+  for await (const event of journal()) {
+    // Every retraction is already held, whichever side of the edge it sits on.
+    if (event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
+    if (event.ts >= since) {
+      if (isStandupEvent(event)) events.push(event);
+      continue;
+    }
+    if (ITEM_RECORD_EVENT_TYPES.has(event.type)) {
+      const recorded = recordedStatus(event);
+      if (recorded !== undefined && event.item !== undefined) baseline.set(event.item, recorded);
+      continue;
+    }
+    if (!ROADMAP_COLUMN_FACT_TYPES.has(event.type)) continue;
+    // A withdrawn fact is kept only as the words its correction quotes — an
+    // item-less one included, since that line still prints under `(no item
+    // ref)` — and never as a candidate the columns could still elect.
+    if (corrected.has(event.id)) {
+      events.push(event);
+      continue;
+    }
+    if (withdrawn.has(event.id) || event.item === undefined) continue;
+    const key = `${event.item} ${event.type}`;
+    const winner = winners.get(key);
+    if (winner === undefined || compareEvents(winner, event) < 0) winners.set(key, event);
+  }
+  events.push(...winners.values());
+  return { events, baseline };
 }
 
 /**
@@ -147,10 +267,10 @@ const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
 /**
  * True for every act a standup can read: the item mutations whose payload
  * carries a status, the run pause, the three lifecycle types — and the
- * retractions that withdraw one of those (A1). Exported so the command can KEEP
- * only these while streaming the journal — the isRoadmapColumnEvent precedent,
- * so a store whose journal outgrows memory still renders a standup. Anything
- * else is not movement and is dropped.
+ * retractions that withdraw one of those (A1). This is what collectStandupWindow
+ * KEEPS of the acts inside the window — the isRoadmapColumnEvent precedent, so
+ * a store whose journal outgrows memory still renders a standup. Anything else
+ * is not movement and is dropped.
  *
  * A retraction is kept for TWO reasons. The group headers carry
  * roadmapNodeSummary's derived stage, which reads retractions, so a filter that
@@ -207,16 +327,19 @@ function transitionVerb(status: string): string {
 /**
  * The movement inside the window, in the store's canonical order.
  *
- * Item status is tracked across the WHOLE journal so a transition can name
- * where it came from; an item whose earlier history the window (or a compacted
- * archive) does not cover renders `→ <status>` rather than inventing a
- * previous one. An act that moved no status at all — a claim, a handback, an
- * intent edit — is not movement and renders nothing: this is a curated read,
- * not the timeline `nahel progress` already prints.
+ * Item status starts at the caller's baseline — what each item stood at when
+ * the window opened — so a transition can name where it came from; an item
+ * neither the baseline nor the acts here cover renders `→ <status>` rather than
+ * inventing a previous one. Any pre-window act the caller DID hand over refines
+ * that baseline the same way it always did and renders nothing itself, which is
+ * what keeps the walk total over any slice of the journal, the collected one
+ * and the whole of it alike. An act that moved no status at all — a claim, a
+ * handback, an intent edit — is not movement and renders nothing: this is a
+ * curated read, not the timeline `nahel progress` already prints.
  */
 function movements(inputs: StandupInputs): Movement[] {
   const runItems = new Map(inputs.runs.map(({ run }) => [run.id, run.item]));
-  const status = new Map<string, string>();
+  const status = new Map(inputs.baseline);
   const found: Movement[] = [];
   // A retraction names its target by id and carries no item ref of its own, so
   // the whole window's events are indexed before the walk: the target may sit

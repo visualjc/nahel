@@ -1,9 +1,8 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import type { JournalEvent } from "../schema/records";
 import { readJournal } from "../store/journal";
 import { openStore, readConfig, readRoadmapNodes } from "../store/layout";
-import { isStandupEvent, renderStandup, resolveSince } from "../views/standup";
+import { collectStandupWindow, renderStandup, resolveSince } from "../views/standup";
 import { loadSnapshot } from "../views/snapshot";
 import { UsageError } from "./item";
 
@@ -63,14 +62,12 @@ async function runStandup(argv: string[], ctx: CommandContext): Promise<number> 
     // pointer instead of rendering a misleadingly quiet window.
     await readConfig(layout);
 
-    // Only the acts a standup can read are kept while streaming — the
-    // isRoadmapColumnEvent precedent, so a journal that outgrows memory still
-    // renders. Acts before the window are kept too: they are the baseline a
-    // transition inside it is measured against.
-    const events: JournalEvent[] = [];
-    for await (const event of readJournal(layout)) {
-      if (isStandupEvent(event)) events.push(event);
-    }
+    // The journal is STREAMED into the window rather than held: the acts inside
+    // it, plus history collapsed to a status per item and the few pre-window
+    // facts the headers and corrections still need (collectStandupWindow). A
+    // `--since 24h` read therefore costs the day it asks about, not the years
+    // before it.
+    const window = await collectStandupWindow(since, () => readJournal(layout));
     const snapshot = await loadSnapshot(layout);
     ctx.stdout(
       renderStandup({
@@ -78,7 +75,8 @@ async function runStandup(argv: string[], ctx: CommandContext): Promise<number> 
         nodes: await readRoadmapNodes(layout),
         items: snapshot.items,
         runs: snapshot.runs,
-        events,
+        events: window.events,
+        baseline: window.baseline,
       }),
     );
     return 0;

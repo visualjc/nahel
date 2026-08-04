@@ -1177,6 +1177,10 @@ describe("the archival gate: a release a reader can follow back (A3)", () => {
     expect(said).toContain("channel");
     expect(said).toContain("announcement");
     expect(said).not.toContain("stage unknown");
+    // And it does not claim the feature reads `released`: since the final gate
+    // a thin release earns no stage word at all, so a refusal saying otherwise
+    // would contradict the very view the reader just looked at.
+    expect(said).not.toContain("reads stage released");
   });
 
   test("one missing key is named alone — the refusal lists what is missing, not the shape", async () => {
@@ -1260,15 +1264,20 @@ describe("the archival gate: a release a reader can follow back (A3)", () => {
 });
 
 /**
- * The two facts the glossary now has to keep apart (PR #26 follow-up A3):
- * `stage released` — what a VIEW derives from any covering `release.announced`,
- * permissive by design — and an ARCHIVAL-QUALIFIED release, the stricter thing
- * `nahel roadmap archive` demands before it stamps a document closed forever.
- * A glossary that spelled them as one word would teach a workflow author that
- * a rendered `released` is an archivable one.
+ * What the glossary has to teach about archival (A3 as the final gate settled
+ * it, superseding the interim reading this block was written against).
+ *
+ * A3 split `stage released` from ARCHIVAL-QUALIFIED and left the stage word
+ * permissive; the final gate closed that, so the two are now ONE fact and the
+ * three keys decide both. What stays permissive is the RENDER — the release
+ * column still prints `released ? <ts>` for a release recording nothing. A
+ * glossary still spelling them as two facts would teach a workflow author that
+ * a rendered `released` might not be archivable, which is now backwards: the
+ * stage word is exactly the archival predicate, and it is the COLUMN that can
+ * show a fact no word rests on.
  */
-describe("stage released vs archival-qualified — documented vocabulary (A3)", () => {
-  test("the glossary names both facts and states which keys the stricter one needs", async () => {
+describe("archival qualification — documented vocabulary", () => {
+  test("the glossary states the keys, and that the stage word IS the archival predicate", async () => {
     const glossary = await readFile(join(import.meta.dir, "../../CONTEXT.md"), "utf8");
     const defined = glossary
       .split("\n")
@@ -1278,7 +1287,14 @@ describe("stage released vs archival-qualified — documented vocabulary (A3)", 
     for (const key of ["`version`", "`channel`", "`announcement`"]) {
       expect(defined).toContain(key);
     }
-    // And that the view stays permissive while the verb refuses.
+    // The superseded reading, in the words it used: the stage no longer differs
+    // from archival qualification, and no longer reads `released` off a release
+    // recording nothing.
+    expect(defined).not.toContain("are different facts");
+    expect(defined).not.toContain("stays permissive: any covering");
+    expect(defined).toContain("the same fact");
+    // What DOES stay permissive is the column, and the entry has to say so.
     expect(defined).toContain("`released ? <ts>`");
+    expect(defined).toContain("column");
   });
 });

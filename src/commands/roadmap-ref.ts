@@ -10,8 +10,9 @@ import { UsageError } from "./item";
  * The roadmap layer's shared reference resolution and text hardening. Both live
  * in their own module because all three verb families need them — `roadmap
  * node` links nodes to nodes, `roadmap map` attaches a map to one, `roadmap
- * ticket` writes the map's index lines, and their dispatcher is the same
- * command — and importing them from any one of those would close a cycle.
+ * ticket` records the decisions the map's index sections derive from, and their
+ * dispatcher is the same command — and importing them from any one of those
+ * would close a cycle.
  */
 
 /**

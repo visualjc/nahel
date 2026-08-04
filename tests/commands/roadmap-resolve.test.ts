@@ -22,10 +22,11 @@ import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
  * `nahel roadmap ticket resolve` and `close` (Phase 4 F7) — the two terminal
  * transitions, and the only MULTI-RECORD acts in the layer.
  *
- * `resolve` journals the decision, flips the ticket, distills an observation
- * sourcing the resolution event, and writes the map's index line — all under
- * ONE write-ahead event, which is what makes an interruption anywhere in the
- * sequence a recoverable partial state rather than a half-applied one.
+ * `resolve` journals the decision, flips the ticket and distills an observation
+ * sourcing the resolution event — all under ONE write-ahead event, which is what
+ * makes an interruption anywhere in the sequence a recoverable partial state
+ * rather than a half-applied one. The map's index sections are DERIVED from the
+ * tickets when it renders (follow-up D1): neither terminal verb writes the map.
  *
  * The point of the observation is permanence: wayfinder's decisions-are-forever
  * principle on nahel's recall design. The ticket body can be thrown away

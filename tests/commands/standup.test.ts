@@ -7,7 +7,9 @@ import { roadmapCommand } from "../../src/commands/roadmap";
 import { standupCommand } from "../../src/commands/standup";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
-import { ensureLayout, writeConfig } from "../../src/store/layout";
+import type { JournalEvent } from "../../src/schema/records";
+import { readJournal } from "../../src/store/journal";
+import { ensureLayout, writeConfig, type StoreLayout } from "../../src/store/layout";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 /**
@@ -384,5 +386,145 @@ describe("nahel standup — documented vocabulary", () => {
       expect(out).toContain(`  ${verb}  `);
       expect(defined).toContain(`\`${verb}\``);
     }
+  });
+});
+
+/**
+ * GOLDENS (PR #26 review, follow-up E). Every assertion above reads a LINE or a
+ * fragment of one; none of them pins the page. This block pins the whole page,
+ * byte for byte, over one store carrying every shape the window renders: a
+ * transition whose previous status was journaled BEFORE the window, a lifecycle
+ * fact from before the window that still decides the headers' derived stage, a
+ * retraction of a fact that predates the window, a retraction of one inside it,
+ * nested epics reported by both covering nodes, movement no node covers, and an
+ * act with no item ref at all.
+ *
+ * It exists because the window's memory shape is about to change — the journal
+ * streamed into a baseline instead of retained whole — and a pure refactor's
+ * only honest red is the output pinned before it moves.
+ *
+ * Ids and timestamps are read back off the store the fixture just wrote, so
+ * what the golden pins is what the refactor could break — which acts render,
+ * under which header, in which order, in which words — and not the seeded env's
+ * arithmetic.
+ */
+describe("nahel standup — the whole rendered window, pinned", () => {
+  /** Every journal event by id: where each rendered line's timestamp comes from. */
+  async function acts(layout: StoreLayout): Promise<JournalEvent[]> {
+    const events: JournalEvent[] = [];
+    for await (const event of readJournal(layout)) events.push(event);
+    return events;
+  }
+
+  /** The window's lower edge — everything `inside` writes lands after it. */
+  const CUTOFF = "2026-07-26T09:15:00Z";
+
+  /**
+   * The act that moved one item inside the window. `item update` prints no event
+   * id, so the id a rendered line carries is read back off the journal — one
+   * status act per item in the window here, which is what makes it unambiguous.
+   */
+  function movedInWindow(events: readonly JournalEvent[], item: string): string {
+    const found = events.filter(
+      (event) => event.item === item && event.ts >= CUTOFF && event.type === "item.updated",
+    );
+    expect(found.length).toBe(1);
+    return found[0]!.id;
+  }
+
+  /**
+   * A store with a history: everything under `before` is journaled a month
+   * outside the window, everything under `inside` a day within it. TWO Envs over
+   * one store is what makes a cross-window act expressible at all — a single
+   * seeded clock only ever moves forward by its own tick.
+   */
+  async function historied(root: string) {
+    const before = seededEnv({ seed: 7, now: "2026-07-01T08:00:00Z", tickSeconds: 1 });
+    const outer = await newItem(before, root, ["plan", "outer-epic", "full"]);
+    const inner = await newItem(before, root, ["plan", "inner-epic", "full", "--parent", outer]);
+    const leaf = await newItem(before, root, ["feature", "leaf-work", "direct", "--parent", inner]);
+    expect(await itemCommand.run(["update", leaf, "--status", "in-progress"], before, root)).toBe(0);
+    // Under no node's epic: its movement is what `outside the roadmap` collects.
+    const orphan = await newItem(before, root, ["chore", "solo-chore", "direct"]);
+    const nodes: { name: string; id: string; epic: string }[] = [];
+    for (const [name, epic] of [
+      ["a-outer", outer],
+      ["b-inner", inner],
+    ] as const) {
+      const at = logs.length;
+      expect(
+        await roadmapCommand.run(
+          ["node", "new", "feature", name, "--horizon", "now", "--intent", `Ship ${name}.`,
+            "--epic", epic],
+          before,
+          root,
+        ),
+      ).toBe(0);
+      nodes.push({ name, id: logs[at]!, epic });
+    }
+    // The one lifecycle fact nothing withdraws: both headers read `deployed` off
+    // it, and it is journaled OUTSIDE the window — a baseline the window cannot
+    // see would drop both headers back to their dev rollup.
+    await log(before, root, ["deploy.completed", "--item", leaf, "--data", "environment=staging"]);
+    const stale = await log(before, root, [
+      "release.announced", "--item", leaf, "--data", "version=0.2.0",
+    ]);
+
+    const inside = seededEnv({ seed: 11, now: "2026-08-01T09:00:00Z", tickSeconds: 1 });
+    expect(await itemCommand.run(["update", leaf, "--status", "done"], inside, root)).toBe(0);
+    // A fact from BEFORE the window withdrawn inside it: the correction has to
+    // name what the withdrawn act said, in the words that act's own line used.
+    const staleRetraction = await log(inside, root, [
+      "roadmap.column-retracted", "--data", `event=${stale}`,
+      "--data", "reason=announced against the wrong epic",
+    ]);
+    const release = await log(inside, root, [
+      "release.announced", "--item", leaf, "--data", "version=0.3.0",
+    ]);
+    const retraction = await log(inside, root, [
+      "roadmap.column-retracted", "--data", `event=${release}`,
+      "--data", "reason=cut from the wrong branch",
+    ]);
+    expect(await itemCommand.run(["update", orphan, "--status", "dropped"], inside, root)).toBe(0);
+    const homeless = await log(inside, root, ["release.announced", "--data", "version=9.9.9"]);
+    return { nodes, leaf, orphan, stale, staleRetraction, release, retraction, homeless };
+  }
+
+  test("the page is exactly these lines, in exactly this order", async () => {
+    const { root, layout } = await setup();
+    const fixture = await historied(root);
+    const frozen = seededEnv({ now: "2026-08-02T09:15:00Z", tickSeconds: 0 });
+    const journal = await acts(layout);
+    const at = new Map(journal.map((event) => [event.id, event]));
+    const line = (id: string, verb: string, detail: string): string =>
+      `    ${at.get(id)!.ts}  ${verb}  ${detail}  act=${id}`;
+    // Both nodes cover the leaf (nested epics), so both report the SAME acts
+    // under their own header — in the id order readRoadmapNodes returns.
+    const groups = [...fixture.nodes]
+      .sort((a, b) => (a.id < b.id ? -1 : 1))
+      .flatMap(({ name, id }) => [
+        "",
+        `${name}  feature  deployed  id=${id}`,
+        `  leaf-work  id=${fixture.leaf}`,
+        line(movedInWindow(journal, fixture.leaf), "closed", "in-progress → done"),
+        line(fixture.staleRetraction, "retracted", `shipped released 0.2.0 (act ${fixture.stale})`),
+        line(fixture.release, "shipped", "released 0.3.0"),
+        line(fixture.retraction, "retracted", `shipped released 0.3.0 (act ${fixture.release})`),
+      ]);
+
+    const out = await standup(frozen, root, ["--since", "7d"]);
+
+    expect(out).toBe(
+      [
+        `standup since ${CUTOFF}`,
+        ...groups,
+        "",
+        "outside the roadmap",
+        `  solo-chore  id=${fixture.orphan}`,
+        line(movedInWindow(journal, fixture.orphan), "parked", "backlog → dropped"),
+        "  (no item ref)",
+        line(fixture.homeless, "shipped", "released 9.9.9"),
+      ].join("\n"),
+    );
   });
 });

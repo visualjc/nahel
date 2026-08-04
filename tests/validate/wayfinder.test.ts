@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import { generateId } from "../../src/schema/id";
 import type { MapFrontmatter, TicketFrontmatter } from "../../src/schema/records";
 import { serializeFrontmatter } from "../../src/store/frontmatter";
-import { mapPath, readTicket, ticketPath } from "../../src/store/layout";
+import { observationPath, readTicket, ticketPath } from "../../src/store/layout";
 import { mutate } from "../../src/store/mutate";
 import { validateStore } from "../../src/validate";
 import { findingsFor, setupFixture, signConstitution, type ValidateFixture } from "./helpers";
@@ -61,7 +61,6 @@ async function createMap(
   const frontmatter: MapFrontmatter = {
     id: generateId(fixture.env),
     destination: "somewhere worth going",
-    decisions: [],
     fog: [],
     out_of_scope: [],
     created: ts,
@@ -277,8 +276,8 @@ describe("validate — the advisory shapes are warnings", () => {
 });
 
 describe("validate — a ticket body emptied outside the CLI (F7)", () => {
-  /** Resolve a ticket the way the CLI does: one sequence event, three records. */
-  async function resolve(fixture: ValidateFixture, ticket: TicketFrontmatter, map: MapFrontmatter) {
+  /** Resolve a ticket the way the CLI does: one sequence event, two records. */
+  async function resolve(fixture: ValidateFixture, ticket: TicketFrontmatter) {
     const eventId = generateId(fixture.env);
     const now = fixture.env.now();
     await mutate(fixture.agent, {
@@ -308,23 +307,14 @@ describe("validate — a ticket body emptied outside the CLI (F7)", () => {
           },
           body: "we decided\n",
         },
-        {
-          target: "map",
-          frontmatter: {
-            ...map,
-            decisions: [{ ticket: ticket.id, decision: "we decided" }],
-            updated: now,
-          },
-          body: "notes\n",
-        },
       ],
     });
   }
 
   test("an empty body with no distill event is reported, naming the verb that owns the act", async () => {
     const fixture = await setup();
-    const { map, ticket } = await charted(fixture);
-    await resolve(fixture, ticket, map);
+    const { ticket } = await charted(fixture);
+    await resolve(fixture, ticket);
 
     // The hand edit: a text editor empties the question. Nothing else changes.
     const record = await readTicket(fixture.layout, ticket.id);
@@ -342,8 +332,8 @@ describe("validate — a ticket body emptied outside the CLI (F7)", () => {
 
   test("a body emptied THROUGH the CLI reports nothing", async () => {
     const fixture = await setup();
-    const { map, ticket } = await charted(fixture);
-    await resolve(fixture, ticket, map);
+    const { ticket } = await charted(fixture);
+    await resolve(fixture, ticket);
     const resolvedRecord = await readTicket(fixture.layout, ticket.id);
     await mutate(fixture.agent, {
       target: "ticket",
@@ -360,9 +350,9 @@ describe("validate — a ticket body emptied outside the CLI (F7)", () => {
 describe("validate — a crashed sequence is named, record by record", () => {
   test("the resolve event's un-materialized records are each reported as journal-ahead", async () => {
     const fixture = await setup();
-    const { map, ticket } = await charted(fixture);
-    // The journal event lands; the map's index line is written by hand-rolling
-    // only the ticket record, exactly as a kill between the two writes leaves it.
+    const { ticket } = await charted(fixture);
+    // The journal event lands with both records; the observation is then removed
+    // by hand, exactly as a kill between the two writes leaves the store.
     const eventId = generateId(fixture.env);
     const now = fixture.env.now();
     const observationId = generateId(fixture.env);
@@ -393,24 +383,13 @@ describe("validate — a crashed sequence is named, record by record", () => {
           },
           body: "we decided\n",
         },
-        {
-          target: "map",
-          frontmatter: {
-            ...map,
-            decisions: [{ ticket: ticket.id, decision: "we decided" }],
-            updated: now,
-          },
-          body: "notes\n",
-        },
       ],
     });
-    // Roll the map record back to its pre-resolution state: the crash shape
-    // where the third write never happened.
-    await writeFile(mapPath(fixture.layout, map.id), serializeFrontmatter(map, "notes\n"));
+    await rm(observationPath(fixture.layout, observationId));
 
     const findings = findingsFor(await validateStore(fixture.layout), "journal.divergence");
     expect(findings).toHaveLength(1);
-    expect(findings[0]!.message).toContain(map.id);
+    expect(findings[0]!.message).toContain(observationId);
     expect(findings[0]!.message).toContain(eventId);
     expect(findings[0]!.fix).toContain("--repair");
   });

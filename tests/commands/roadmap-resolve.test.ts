@@ -141,9 +141,10 @@ async function charted() {
   return { root, layout, env, node, map, ticket };
 }
 
-describe("nahel roadmap ticket resolve — decision, observation, index line", () => {
-  test("one event carries all three records, and the observation sources it", async () => {
+describe("nahel roadmap ticket resolve — decision, observation, derived index", () => {
+  test("one event carries both records, and the observation sources it", async () => {
     const { root, layout, env, map, ticket } = await charted();
+    const before = await readMap(layout, map);
     await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION], "human:jim");
 
     const events = await journalEvents(layout);
@@ -168,9 +169,13 @@ describe("nahel roadmap ticket resolve — decision, observation, index line", (
     expect(observation.body.split("\n")[0]).toBe(DECISION);
     expect(observation.body).toContain(QUESTION);
 
-    expect((await readMap(layout, map)).frontmatter.decisions).toEqual([
-      { ticket, decision: DECISION },
-    ]);
+    // The map record is BYTE-UNTOUCHED: the decision index is composed at read
+    // time from the tickets, so resolving never writes the one record every
+    // ticket on the map shares (D1 — the shared-file hot spot is gone).
+    expect(await readMap(layout, map)).toEqual(before);
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain(
+      `${ticket}  ${DECISION}`,
+    );
 
     // The sequence is ONE event: no separate observation.created line, so a
     // crash between the steps leaves the journal ahead rather than half-told.
@@ -229,8 +234,10 @@ describe("nahel roadmap ticket resolve — decision, observation, index line", (
     }
     // Nothing moved: four refusals, no state, no observation, no index line.
     expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
-    expect((await readMap(layout, map)).frontmatter.decisions).toEqual([]);
     expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([]);
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain(
+      "decisions so far (0)",
+    );
     expect(await listObservations(layout)).toEqual([]);
   });
 
@@ -249,13 +256,48 @@ describe("nahel roadmap ticket resolve — decision, observation, index line", (
     expect(message).toContain("resolved");
     expect(await readTicket(layout, ticket)).toEqual(before);
     expect(await listObservations(layout)).toHaveLength(1);
-    expect((await readMap(layout, map)).frontmatter.decisions).toHaveLength(1);
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain(
+      "decisions so far (1)",
+    );
+  });
+
+  test("the derived index follows the RESOLUTION EVENTS, and distilling does not re-shuffle it", async () => {
+    // `distill` moves a ticket's `updated`, so an index ordered by the record's
+    // own clock would re-order itself every time a body was emptied.
+    const { root, layout, env, map, ticket } = await charted();
+    const second = lastId(
+      await ok(env, root, [
+        "ticket",
+        "new",
+        "--map",
+        map,
+        "--type",
+        "task",
+        "--question",
+        "which region do we deploy to?",
+      ]),
+    );
+    await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION]);
+    await ok(env, root, ["ticket", "resolve", second, "--decision", "we deploy to iad only"]);
+    const index = async (): Promise<string[]> => {
+      const lines = (await ok(env, root, ["map", "show", map])).join("\n").split("\n");
+      const at = lines.indexOf("decisions so far (2):");
+      expect(at).toBeGreaterThan(-1);
+      return lines.slice(at + 1, at + 3);
+    };
+
+    const before = await index();
+    expect(before[0]).toBe(`  ${ticket}  ${DECISION}`);
+    expect(before[1]).toBe(`  ${second}  we deploy to iad only`);
+    await ok(env, root, ["ticket", "distill", ticket]);
+    expect(await index()).toEqual(before);
   });
 });
 
 describe("nahel roadmap ticket close — two dispositions, and only one of them is Out of scope", () => {
-  test("--out-of-scope adds one line to Out of scope with its reason, and never to Decisions", async () => {
+  test("--out-of-scope renders one Out-of-scope line derived from the ticket, and never a decision", async () => {
     const { root, layout, env, map, ticket } = await charted();
+    const before = await readMap(layout, map);
     await ok(
       env,
       root,
@@ -276,16 +318,19 @@ describe("nahel roadmap ticket close — two dispositions, and only one of them 
     expect(record.frontmatter.decision).toBeUndefined();
     expect(record.frontmatter.invalidated_by).toBeUndefined();
 
-    const chart = await readMap(layout, map);
-    expect(chart.frontmatter.out_of_scope).toEqual([
-      { reason: "marketing announcements are a later phase", ticket },
-    ]);
-    expect(chart.frontmatter.decisions).toEqual([]);
-    // A close records no decision, so it distills no observation either.
-    expect(await listObservations(layout)).toEqual([]);
-
     const closed = (await journalEvents(layout)).find((e) => e.type === "roadmap.ticket-closed")!;
     expect(closed.actor).toEqual({ kind: "human", id: "jim" });
+    // The close records the event that took it, exactly as a resolve does — the
+    // derived sections order by it.
+    expect(record.frontmatter.closure).toBe(closed.id);
+
+    // The map record is BYTE-UNTOUCHED: the line is composed at read time.
+    expect(await readMap(layout, map)).toEqual(before);
+    const shown = (await ok(env, root, ["map", "show", map])).join("\n");
+    expect(shown).toContain(`marketing announcements are a later phase  (${ticket})`);
+    expect(shown).toContain("decisions so far (0)");
+    // A close records no decision, so it distills no observation either.
+    expect(await listObservations(layout)).toEqual([]);
   });
 
   test("--invalidated-by records the decision that killed the question, and writes NO Out-of-scope line", async () => {
@@ -326,13 +371,13 @@ describe("nahel roadmap ticket close — two dispositions, and only one of them 
     expect(record.frontmatter.invalidated_by).toBe(ticket);
     expect(record.frontmatter.reason).toBe("the fly.io decision already settles the region");
 
-    const chart = await readMap(layout, map);
-    expect(chart.frontmatter.out_of_scope).toEqual([]);
-    // And it is not a decision either: the index carries the resolution only.
-    expect(chart.frontmatter.decisions).toEqual([{ ticket, decision: DECISION }]);
+    expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([]);
 
-    // The map says why the question died, beside the decision that killed it.
+    // The map says why the question died, beside the decision that killed it —
+    // and it is not a decision either: the index carries the resolution only.
     const shown = (await ok(env, root, ["map", "show", map])).join("\n");
+    expect(shown).toContain("decisions so far (1):");
+    expect(shown).toContain(`${ticket}  ${DECISION}`);
     expect(shown).toContain("invalidated by a decision (1)");
     expect(shown).toContain(second);
     expect(shown).toContain(ticket);
@@ -385,7 +430,8 @@ describe("nahel roadmap ticket close — two dispositions, and only one of them 
     expect(
       await fails(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "again"]),
     ).toContain("closed");
-    expect((await readMap(layout, map)).frontmatter.out_of_scope).toHaveLength(1);
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain("out of scope (1):");
+    expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([]);
   });
 
   test("a closed ticket can no longer be resolved — the table has no such row", async () => {

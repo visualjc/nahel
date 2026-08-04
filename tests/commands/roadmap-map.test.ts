@@ -134,8 +134,7 @@ describe("nahel roadmap map new — the chart attached to a node", () => {
       "how does a rollback get journaled?",
       "who owns the release notes?",
     ]);
-    expect(map.frontmatter.out_of_scope).toEqual([{ reason: "marketing announcements" }]);
-    expect(map.frontmatter.decisions).toEqual([]);
+    expect(map.frontmatter.out_of_scope).toEqual(["marketing announcements"]);
     expect(map.body).toBe("Two stores to cover; the CLI already records the events.\n");
 
     const created = (await journalEvents(layout)).find((e) => e.type === "roadmap.map-created")!;

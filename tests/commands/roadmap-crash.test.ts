@@ -23,8 +23,10 @@ import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
  * forward, and re-running the original verb afterwards changes nothing.
  *
  * How the kill is injected: the sequence's steps are `resolve`'s one write-ahead
- * journal event followed by three record writes (ticket → observation → map
- * index line), so an interruption point IS a record write that never happened.
+ * journal event followed by two record writes (ticket → observation), so an
+ * interruption point IS a record write that never happened. The map is NOT one
+ * of them: its two index sections are derived from the tickets at read time, so
+ * neither terminal verb writes the record every ticket on that map shares.
  * Each test makes exactly one of those writes fail — the record's directory is
  * chmod'ed read-only, so every READ in the verb still succeeds and only the
  * write at that step dies — then restores the mode. What is left on disk is
@@ -152,13 +154,12 @@ async function charted() {
 }
 
 /** The store's whole answer about one resolution, after everything settles. */
-async function resolution(layout: StoreLayout, map: string, ticket: string) {
+async function resolution(layout: StoreLayout, ticket: string) {
   const observations = await listObservations(layout);
   return {
     state: (await readTicket(layout, ticket)).frontmatter.state,
     decision: (await readTicket(layout, ticket)).frontmatter.decision,
     observations: observations.length,
-    decisions: (await readMap(layout, map)).frontmatter.decisions.length,
     resolutions: (await Array.fromAsync(readJournal(layout))).filter(
       (e) => e.type === "roadmap.ticket-resolved",
     ).length,
@@ -171,13 +172,9 @@ describe("resolve interrupted between any two steps (F7)", () => {
    * run the real verb, and prove the whole convergence — validate names it,
    * --repair completes it, re-running is a no-op.
    */
-  async function interruptedAt(step: "ticket" | "observation" | "map") {
+  async function interruptedAt(step: "ticket" | "observation") {
     const { root, layout, env, map, ticket } = await charted();
-    const frozen = {
-      ticket: layout.ticketsDir,
-      observation: layout.observationsDir,
-      map: layout.mapsDir,
-    }[step];
+    const frozen = { ticket: layout.ticketsDir, observation: layout.observationsDir }[step];
 
     await freeze(frozen);
     expect(await fails(env, root, ["ticket", "resolve", ticket, "--decision", DECISION])).not.toBe(
@@ -196,21 +193,24 @@ describe("resolve interrupted between any two steps (F7)", () => {
     const repaired = await validate(root, ["--repair"]);
     expect(repaired.out).toContain("repaired");
     expect(repaired.code).toBe(0);
-    const settled = await resolution(layout, map, ticket);
+    const settled = await resolution(layout, ticket);
     expect(settled).toEqual({
       state: "resolved",
       decision: DECISION,
       observations: 1,
-      decisions: 1,
       resolutions: 1,
     });
+    // The decision reads back off the map, derived from the healed ticket.
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain(
+      `${ticket}  ${DECISION}`,
+    );
 
     // 3. Re-running the original verb afterwards is a no-op: no duplicate
     //    observation, no second index line, and nothing journaled twice.
     expect(await fails(env, root, ["ticket", "resolve", ticket, "--decision", DECISION])).toContain(
       "resolved",
     );
-    expect(await resolution(layout, map, ticket)).toEqual(settled);
+    expect(await resolution(layout, ticket)).toEqual(settled);
 
     // 4. And the store is clean — a repaired sequence leaves no finding behind.
     const after = await validate(root);
@@ -223,20 +223,47 @@ describe("resolve interrupted between any two steps (F7)", () => {
     await interruptedAt("ticket");
   });
 
-  test("killed between the ticket state and the observation", async () => {
+  test("killed between the ticket state and the observation — the last record of the sequence", async () => {
     await interruptedAt("observation");
   });
 
-  test("killed between the observation and the map's index line", async () => {
-    await interruptedAt("map");
+  test("a frozen maps/ directory stops NEITHER verb — no terminal act writes the map", async () => {
+    // The concurrency point behind the derived index: two sessions resolving
+    // tickets on one map never contend for the map record, because neither of
+    // them opens it for writing at all.
+    const { root, layout, env, map, ticket } = await charted();
+    const second = lastId(
+      await ok(env, root, [
+        "ticket",
+        "new",
+        "--map",
+        map,
+        "--type",
+        "task",
+        "--question",
+        "which region do we deploy to?",
+      ]),
+    );
+    const before = await readMap(layout, map);
+
+    await freeze(layout.mapsDir);
+    await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION]);
+    await ok(env, root, ["ticket", "close", second, "--out-of-scope", "--reason", "a later phase"]);
+    await thaw(layout.mapsDir);
+
+    expect(await readMap(layout, map)).toEqual(before);
+    const shown = (await ok(env, root, ["map", "show", map])).join("\n");
+    expect(shown).toContain(`${ticket}  ${DECISION}`);
+    expect(shown).toContain(`a later phase  (${second})`);
+    expect((await validate(root)).code).toBe(0);
   });
 });
 
 describe("distill interrupted between its two steps (F7)", () => {
   test("the event lands, the emptied body does not: validate names it, --repair completes it, re-running is a no-op", async () => {
-    const { root, layout, env, map, ticket } = await charted();
+    const { root, layout, env, ticket } = await charted();
     await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION]);
-    const settled = await resolution(layout, map, ticket);
+    const settled = await resolution(layout, ticket);
 
     await freeze(layout.ticketsDir);
     expect(await fails(env, root, ["ticket", "distill", ticket])).not.toBe("");
@@ -255,7 +282,7 @@ describe("distill interrupted between its two steps (F7)", () => {
 
     // Re-running distills nothing twice, and the decision still stands.
     expect(await fails(env, root, ["ticket", "distill", ticket])).toContain("already");
-    expect(await resolution(layout, map, ticket)).toEqual(settled);
+    expect(await resolution(layout, ticket)).toEqual(settled);
     expect(
       (await Array.fromAsync(readJournal(layout))).filter(
         (e) => e.type === "roadmap.ticket-distilled",
@@ -270,10 +297,10 @@ describe("distill interrupted between its two steps (F7)", () => {
   });
 });
 
-describe("close interrupted between its two steps (F7)", () => {
-  test("the out-of-scope line rolls forward from the same one event", async () => {
+describe("close interrupted before its record write (F7)", () => {
+  test("the closed ticket rolls forward from the same one event, and the line is derived from it", async () => {
     const { root, layout, env, map, ticket } = await charted();
-    await freeze(layout.mapsDir);
+    await freeze(layout.ticketsDir);
     expect(
       await fails(env, root, [
         "ticket",
@@ -284,17 +311,18 @@ describe("close interrupted between its two steps (F7)", () => {
         "a later phase owns it",
       ]),
     ).not.toBe("");
-    await thaw(layout.mapsDir);
+    await thaw(layout.ticketsDir);
 
-    expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([]);
+    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
     expect((await validate(root)).code).toBe(1);
     expect((await validate(root, ["--repair"])).code).toBe(0);
-    expect((await readMap(layout, map)).frontmatter.out_of_scope).toEqual([
-      { reason: "a later phase owns it", ticket },
-    ]);
+    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("closed");
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain(
+      `a later phase owns it  (${ticket})`,
+    );
     expect(
       await fails(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "again"]),
     ).toContain("closed");
-    expect((await readMap(layout, map)).frontmatter.out_of_scope).toHaveLength(1);
+    expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain("out of scope (1):");
   });
 });

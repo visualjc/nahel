@@ -21,7 +21,6 @@ const MAP = {
   id: "kqm3vx7t",
   node: "9m38trg4",
   destination: "a deploy story a fresh agent can drive end to end",
-  decisions: [],
   fog: [],
   out_of_scope: [],
   created: "2026-08-01T12:00:00Z",
@@ -54,15 +53,15 @@ describe("decision-ticket vocabulary (F7)", () => {
 });
 
 describe("map record shape (F7)", () => {
-  test("a minimal map — node, destination, three empty sections — is valid", () => {
+  test("a minimal map — node, destination, two empty sections — is valid", () => {
     expect(mapFrontmatterSchema.parse(MAP)).toEqual(MAP);
   });
 
-  test("the three list sections are REQUIRED keys: an omitted one is a schema error", () => {
+  test("the two stored list sections are REQUIRED keys: an omitted one is a schema error", () => {
     // Unlike a roadmap node's per-kind links (soft, so optional), every map
-    // carries all five sections — the CLI writes them on every mutation, so an
-    // absent key means a hand-edited record, not an un-charted section.
-    for (const key of ["decisions", "fog", "out_of_scope"]) {
+    // carries the sections it OWNS — the CLI writes them on every mutation, so
+    // an absent key means a hand-edited record, not an un-charted section.
+    for (const key of ["fog", "out_of_scope"]) {
       const { [key as keyof typeof MAP]: _dropped, ...without } = MAP;
       expect(mapFrontmatterSchema.safeParse(without).success).toBe(false);
     }
@@ -74,41 +73,33 @@ describe("map record shape (F7)", () => {
     expect(mapFrontmatterSchema.safeParse(without).success).toBe(false);
   });
 
-  test("a decision index entry names its ticket and carries the one-liner", () => {
-    const parsed = mapFrontmatterSchema.parse({
-      ...MAP,
-      decisions: [{ ticket: "x1rr51c4", decision: "ship the shim generator unchanged" }],
-    });
-    expect(parsed.decisions[0]).toEqual({
-      ticket: "x1rr51c4",
-      decision: "ship the shim generator unchanged",
-    });
-    // The ticket ref is an id, and the line must say something.
-    expect(
-      mapFrontmatterSchema.safeParse({ ...MAP, decisions: [{ ticket: "nope", decision: "x" }] })
-        .success,
-    ).toBe(false);
+  test("there is NO stored decision index — the section is derived from the tickets (D1)", () => {
+    // A decision is the ticket's act, and the ticket already records it. Storing
+    // a second copy on the map made every resolution write the one record every
+    // ticket on that map shares; the section is composed at read time instead.
+    expect(mapFrontmatterSchema.safeParse({ ...MAP, decisions: [] }).success).toBe(false);
     expect(
       mapFrontmatterSchema.safeParse({
         ...MAP,
-        decisions: [{ ticket: "x1rr51c4", decision: "" }],
+        decisions: [{ ticket: "x1rr51c4", decision: "ship the shim generator unchanged" }],
       }).success,
     ).toBe(false);
   });
 
-  test("an out-of-scope entry carries its reason; the ticket that earned it is optional", () => {
-    // Charting rules things out of scope before any ticket exists (the fog
-    // sketch), and `ticket close` adds one with the ticket named.
+  test("out_of_scope holds the CHARTED lines only — plain text, no ticket ref", () => {
+    // Charting rules things out of scope before any ticket exists; a close's
+    // line is derived from the ticket that earned it, never stored here, so an
+    // entry carrying a ticket ref is a shape this field no longer has.
     expect(
-      mapFrontmatterSchema.parse({ ...MAP, out_of_scope: [{ reason: "no tracker mirrors" }] })
-        .out_of_scope[0],
-    ).toEqual({ reason: "no tracker mirrors" });
+      mapFrontmatterSchema.parse({ ...MAP, out_of_scope: ["no tracker mirrors"] }).out_of_scope,
+    ).toEqual(["no tracker mirrors"]);
+    expect(mapFrontmatterSchema.safeParse({ ...MAP, out_of_scope: [""] }).success).toBe(false);
     expect(
-      mapFrontmatterSchema.parse({
+      mapFrontmatterSchema.safeParse({
         ...MAP,
         out_of_scope: [{ reason: "no tracker mirrors", ticket: "x1rr51c4" }],
-      }).out_of_scope[0],
-    ).toEqual({ reason: "no tracker mirrors", ticket: "x1rr51c4" });
+      }).success,
+    ).toBe(false);
   });
 
   test("there is no status, progress, or count field on a map — nothing to hand-set", () => {
@@ -148,6 +139,21 @@ describe("ticket record shape (F7)", () => {
     expect(ticketFrontmatterSchema.safeParse({ ...TICKET, resolution: "nope" }).success).toBe(
       false,
     );
+  });
+
+  test("a close records its own event id, the way a resolve records the resolution's", () => {
+    // The two terminal acts are what the map's derived sections order by, so a
+    // close needs the same event ref a resolve has — an order read off `updated`
+    // would re-shuffle the moment a body was distilled.
+    expect(
+      ticketFrontmatterSchema.parse({
+        ...TICKET,
+        state: "closed",
+        reason: "a later phase owns it",
+        closure: "kqm3vx7t",
+      }).closure,
+    ).toBe("kqm3vx7t");
+    expect(ticketFrontmatterSchema.safeParse({ ...TICKET, closure: "nope" }).success).toBe(false);
   });
 
   test("blockers is a REQUIRED list of ids — an unwired ticket carries an empty one", () => {

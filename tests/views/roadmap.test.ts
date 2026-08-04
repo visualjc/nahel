@@ -9,10 +9,12 @@ import {
 } from "../../src/schema/events";
 import type {
   JournalEvent,
+  MapFrontmatter,
   RoadmapNodeFrontmatter,
+  TicketFrontmatter,
   WorkItemFrontmatter,
 } from "../../src/schema/records";
-import type { RoadmapNodeRecord } from "../../src/store/layout";
+import type { MapRecord, RoadmapNodeRecord, TicketRecord } from "../../src/store/layout";
 import {
   BRIEF_ROADMAP_MAX_LINES,
   BRIEF_ROADMAP_NOW_CAP,
@@ -20,6 +22,7 @@ import {
   featureStatus,
   productFeatureNodes,
   renderBriefRoadmap,
+  renderMap,
   renderProductStatus,
 } from "../../src/views/roadmap";
 import { makeFrontmatter, seededEnv } from "../store/helpers";
@@ -1534,5 +1537,191 @@ describe("renderBriefRoadmap — what each line says", () => {
       BRIEF_ROADMAP_MAX_LINES,
     );
     expect(BRIEF_ROADMAP_NOW_CAP).toBe(10);
+  });
+});
+
+/**
+ * A map record with the sections a chart owns: the destination, the notes body,
+ * the fog, and the out-of-scope lines an agent RULED at charting time.
+ */
+function makeMapRecord(env: Env, overrides: Partial<MapFrontmatter> = {}): MapRecord {
+  const ts = env.now();
+  return {
+    frontmatter: {
+      id: generateId(env),
+      node: "9m38trg4",
+      destination: "a deploy a fresh agent can drive",
+      fog: [],
+      out_of_scope: [],
+      created: ts,
+      updated: ts,
+      ...overrides,
+    },
+    body: "",
+  };
+}
+
+function makeTicketRecord(
+  env: Env,
+  map: string,
+  overrides: Partial<TicketFrontmatter> = {},
+  body = "a question?\n",
+): TicketRecord {
+  const ts = env.now();
+  return {
+    frontmatter: {
+      id: generateId(env),
+      map,
+      type: "research",
+      state: "open",
+      blockers: [],
+      created: ts,
+      updated: ts,
+      ...overrides,
+    },
+    body,
+  };
+}
+
+/** One terminal ticket act, at the ts/seq the map's derived order reads. */
+function terminalEvent(id: string, ts: string, seq = 0): JournalEvent {
+  return {
+    id,
+    ts,
+    seq,
+    type: CORE_EVENT_TYPES.ticketResolved,
+    actor: { kind: "agent", id: "codex" },
+    payload: {},
+  };
+}
+
+/**
+ * The map's two index sections are DERIVED from the tickets (D1) — nothing
+ * about a decision or an out-of-scope ruling is stored on the map, so resolving
+ * and closing never touch the shared record at all.
+ */
+describe("renderMap — the derived decision index and out-of-scope lines", () => {
+  test("decisions so far are composed from the resolved tickets, not from a stored array", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const map = makeMapRecord(env);
+    const resolved = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "we own the fly.io deploy",
+      resolution: "aaaaaaa1",
+    });
+    const open = makeTicketRecord(env, map.frontmatter.id);
+
+    const rendered = renderMap(map, null, [resolved, open], [
+      terminalEvent("aaaaaaa1", "2026-08-01T12:00:00Z"),
+    ]);
+
+    expect(rendered).toContain("decisions so far (1):");
+    expect(rendered).toContain(`${resolved.frontmatter.id}  we own the fly.io deploy`);
+  });
+
+  test("out of scope keeps the map's CHARTED lines and adds one per out-of-scope close", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const map = makeMapRecord(env, { out_of_scope: ["marketing announcements"] });
+    const closed = makeTicketRecord(env, map.frontmatter.id, {
+      state: "closed",
+      reason: "a later phase owns it",
+      closure: "aaaaaaa2",
+    });
+    // An INVALIDATED close is never an out-of-scope line: it was never beyond
+    // the destination, and it renders beside the decisions instead.
+    const invalidated = makeTicketRecord(env, map.frontmatter.id, {
+      state: "closed",
+      reason: "the fly.io decision settles it",
+      invalidated_by: closed.frontmatter.id,
+      closure: "aaaaaaa3",
+    });
+
+    const rendered = renderMap(map, null, [closed, invalidated], [
+      terminalEvent("aaaaaaa2", "2026-08-01T12:00:00Z"),
+      terminalEvent("aaaaaaa3", "2026-08-01T12:00:01Z"),
+    ]);
+
+    expect(rendered).toContain("out of scope (2):");
+    expect(rendered).toContain("  marketing announcements");
+    expect(rendered).toContain(`  a later phase owns it  (${closed.frontmatter.id})`);
+    expect(rendered).toContain("invalidated by a decision (1):");
+  });
+
+  test("the order is the RESOLUTION EVENT's, never the ticket's `updated`", () => {
+    // `distill` moves `updated` long after the decision was made, so an
+    // updated-ordered index would re-shuffle every time a body was emptied.
+    const env = seededEnv({ tickSeconds: 1 });
+    const map = makeMapRecord(env);
+    const first = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "decided first",
+      resolution: "aaaaaaa1",
+      updated: "2026-08-09T12:00:00Z",
+    });
+    const second = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "decided second",
+      resolution: "aaaaaaa2",
+      updated: "2026-08-02T12:00:00Z",
+    });
+    const events = [
+      terminalEvent("aaaaaaa1", "2026-08-01T12:00:00Z"),
+      terminalEvent("aaaaaaa2", "2026-08-01T12:00:01Z"),
+    ];
+
+    for (const tickets of [
+      [first, second],
+      [second, first],
+    ]) {
+      const lines = renderMap(map, null, tickets, events).split("\n");
+      const index = lines.indexOf("decisions so far (2):");
+      expect(lines[index + 1]).toBe(`  ${first.frontmatter.id}  decided first`);
+      expect(lines[index + 2]).toBe(`  ${second.frontmatter.id}  decided second`);
+    }
+  });
+
+  test("same ts breaks on seq then event id — a total order, never a wobble", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const map = makeMapRecord(env);
+    const a = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "seq one",
+      resolution: "aaaaaaa1",
+    });
+    const b = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "seq zero",
+      resolution: "aaaaaaa2",
+    });
+    const rendered = renderMap(map, null, [a, b], [
+      terminalEvent("aaaaaaa1", "2026-08-01T12:00:00Z", 1),
+      terminalEvent("aaaaaaa2", "2026-08-01T12:00:00Z", 0),
+    ]);
+    const lines = rendered.split("\n");
+    const index = lines.indexOf("decisions so far (2):");
+    expect(lines[index + 1]).toBe(`  ${b.frontmatter.id}  seq zero`);
+    expect(lines[index + 2]).toBe(`  ${a.frontmatter.id}  seq one`);
+  });
+
+  test("a ticket whose terminal event the journal cannot explain sorts LAST, by id", () => {
+    // A compacted history, or a hand-written record: it is still a decision, and
+    // it is not given a date it never earned.
+    const env = seededEnv({ tickSeconds: 1 });
+    const map = makeMapRecord(env);
+    const dated = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "dated",
+      resolution: "aaaaaaa1",
+    });
+    const undated = makeTicketRecord(env, map.frontmatter.id, {
+      state: "resolved",
+      decision: "undated",
+    });
+    const lines = renderMap(map, null, [undated, dated], [
+      terminalEvent("aaaaaaa1", "2026-08-01T12:00:00Z"),
+    ]).split("\n");
+    const index = lines.indexOf("decisions so far (2):");
+    expect(lines[index + 1]).toBe(`  ${dated.frontmatter.id}  dated`);
+    expect(lines[index + 2]).toBe(`  ${undated.frontmatter.id}  undated`);
   });
 });

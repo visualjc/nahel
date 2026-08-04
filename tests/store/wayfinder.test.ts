@@ -84,7 +84,6 @@ function makeMap(env: SeededEnv, node: string, overrides: Partial<MapFrontmatter
     id: generateId(env),
     node,
     destination: "a deploy a fresh agent can drive with no tribal knowledge",
-    decisions: [],
     fog: [],
     out_of_scope: [],
     created: ts,
@@ -122,13 +121,12 @@ describe("map and ticket records on disk (F7)", () => {
     expect(() => ticketPath(layout, "../../PRODUCT")).toThrow(InvalidIdError);
   });
 
-  test("write/read round-trips a map with all five sections populated", async () => {
+  test("write/read round-trips a map with every section it OWNS populated", async () => {
     const { layout, env } = await setup();
     const node = makeNode(env);
     const map = makeMap(env, node.id, {
-      decisions: [{ ticket: "x1rr51c4", decision: "one shim generator, no second path" }],
       fog: ["how does a rollback get journaled?"],
-      out_of_scope: [{ reason: "no tracker mirrors", ticket: "x1rr51c4" }],
+      out_of_scope: ["no tracker mirrors"],
     });
     await writeMap(layout, map, "notes prose\n");
     const read = await readMap(layout, map.id);
@@ -244,13 +242,12 @@ describe("map and ticket mutations ride the write-ahead choke point (F7)", () =>
   });
 });
 
-describe("the resolve sequence: one event, three records (F7)", () => {
-  /** The three-record resolve sequence, as the command layer composes it. */
+describe("the resolve sequence: one event, two records (F7)", () => {
+  /** The two-record resolve sequence, as the command layer composes it. */
   async function resolveSequence(
     ctx: Awaited<ReturnType<typeof setup>>["ctx"],
     env: SeededEnv,
     ticket: TicketFrontmatter,
-    map: MapFrontmatter,
   ) {
     // The observation cites the resolution event id, and it travels INSIDE
     // that event's payload — so the id is minted before the append.
@@ -269,11 +266,6 @@ describe("the resolve sequence: one event, three records (F7)", () => {
       tags: ["decision"],
       sources: [eventId],
     };
-    const charted: MapFrontmatter = {
-      ...map,
-      decisions: [...map.decisions, { ticket: ticket.id, decision: "one shim generator" }],
-      updated: env.now(),
-    };
     const result = await mutate(ctx, {
       target: "sequence",
       eventType: CORE_EVENT_TYPES.ticketResolved,
@@ -281,10 +273,9 @@ describe("the resolve sequence: one event, three records (F7)", () => {
       writes: [
         { target: "ticket", frontmatter: resolved, body: "why?\n" },
         { target: "observation", frontmatter: observation, body: "one shim generator\n" },
-        { target: "map", frontmatter: charted, body: "notes\n" },
       ],
     });
-    return { eventId, resolved, observation, charted, result };
+    return { eventId, resolved, observation, result };
   }
 
   async function chartedStore() {
@@ -308,12 +299,8 @@ describe("the resolve sequence: one event, three records (F7)", () => {
 
   test("the sequence event carries every record, and its id is the one the observation cites", async () => {
     const { layout, env, ctx, map, ticket } = await chartedStore();
-    const { eventId, resolved, observation, charted, result } = await resolveSequence(
-      ctx,
-      env,
-      ticket,
-      map,
-    );
+    const before = await readMap(layout, map.id);
+    const { eventId, resolved, observation, result } = await resolveSequence(ctx, env, ticket);
 
     expect(result.event.id).toBe(eventId);
     expect(result.event.type).toBe("roadmap.ticket-resolved");
@@ -322,17 +309,15 @@ describe("the resolve sequence: one event, three records (F7)", () => {
       records: [
         { target: "ticket", record: resolved, body: "why?\n" },
         { target: "observation", record: observation, body: "one shim generator\n" },
-        { target: "map", record: charted, body: "notes\n" },
       ],
     });
     expect(observation.sources).toEqual([result.event.id]);
 
-    // All three records materialized, in the order the sequence lists them.
+    // Both records materialized, in the order the sequence lists them — and the
+    // map, whose index is derived from the tickets, is untouched.
     expect((await readTicket(layout, ticket.id)).frontmatter).toEqual(resolved);
     expect((await readObservation(layout, observation.id)).frontmatter).toEqual(observation);
-    expect((await readMap(layout, map.id)).frontmatter.decisions).toEqual([
-      { ticket: ticket.id, decision: "one shim generator" },
-    ]);
+    expect(await readMap(layout, map.id)).toEqual(before);
   });
 
   test("a sequence interrupted at its SECOND record leaves the journal ahead, and replay rolls it forward", async () => {
@@ -345,23 +330,21 @@ describe("the resolve sequence: one event, three records (F7)", () => {
     let sequence: Awaited<ReturnType<typeof resolveSequence>> | undefined;
     await expect(
       (async () => {
-        sequence = await resolveSequence(ctx, env, ticket, map);
+        sequence = await resolveSequence(ctx, env, ticket);
       })(),
     ).rejects.toThrow();
     await rm(layout.observationsDir);
     await rename(`${layout.observationsDir}.parked`, layout.observationsDir);
 
-    // Partial: the ticket landed, the observation and the map line did not.
+    // Partial: the ticket landed, the observation did not.
     expect((await readTicket(layout, ticket.id)).frontmatter.state).toBe("resolved");
     expect(await readdir(layout.observationsDir)).toEqual([]);
-    expect((await readMap(layout, map.id)).frontmatter.decisions).toEqual([]);
 
     const repaired = await replayPending(layout);
-    expect(repaired.map((r) => r.target).sort()).toEqual(["map", "observation"]);
+    expect(repaired.map((r) => r.target).sort()).toEqual(["observation"]);
     const events = await Array.fromAsync(readJournal(layout));
     const resolution = events.find((e) => e.type === "roadmap.ticket-resolved")!;
     expect(repaired.every((r) => r.eventId === resolution.id)).toBe(true);
-    expect((await readMap(layout, map.id)).frontmatter.decisions).toHaveLength(1);
     expect((await readdir(layout.observationsDir)).length).toBe(1);
 
     // Replay never journals: it only makes real what the journal records.
@@ -371,23 +354,23 @@ describe("the resolve sequence: one event, three records (F7)", () => {
     expect(sequence).toBeUndefined();
   });
 
-  test("a sequence interrupted at its FIRST record materializes all three from the one event", async () => {
-    const { layout, env, ctx, map, ticket } = await chartedStore();
+  test("a sequence interrupted at its FIRST record materializes both from the one event", async () => {
+    const { layout, env, ctx, ticket } = await chartedStore();
     await rename(layout.ticketsDir, `${layout.ticketsDir}.parked`);
     await writeFile(layout.ticketsDir, "not a directory");
-    await expect(resolveSequence(ctx, env, ticket, map)).rejects.toThrow();
+    await expect(resolveSequence(ctx, env, ticket)).rejects.toThrow();
     await rm(layout.ticketsDir);
     await rename(`${layout.ticketsDir}.parked`, layout.ticketsDir);
 
     expect((await readTicket(layout, ticket.id)).frontmatter.state).toBe("open");
     const repaired = await replayPending(layout);
-    expect(repaired.map((r) => r.target).sort()).toEqual(["map", "observation", "ticket"]);
+    expect(repaired.map((r) => r.target).sort()).toEqual(["observation", "ticket"]);
     expect((await readTicket(layout, ticket.id)).frontmatter.state).toBe("resolved");
     expect(await replayPending(layout)).toEqual([]);
   });
 
   test("a forged sequence payload under an open-extension type never replays", async () => {
-    const { layout, env, ctx, map, ticket } = await chartedStore();
+    const { layout, env, ctx, ticket } = await chartedStore();
     const { appendEvent } = await import("../../src/store/journal");
     await appendEvent(layout, env, {
       type: "note",
@@ -406,6 +389,5 @@ describe("the resolve sequence: one event, three records (F7)", () => {
     });
     expect(await replayPending(layout)).toEqual([]);
     expect((await readTicket(layout, ticket.id)).frontmatter.state).toBe("open");
-    expect((await readMap(layout, map.id)).frontmatter.decisions).toEqual([]);
   });
 });

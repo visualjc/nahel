@@ -1,3 +1,4 @@
+import { CORE_EVENT_TYPES } from "../schema/events";
 import type { JournalEvent } from "../schema/records";
 import { ID_PATTERN } from "../schema/id";
 import { readJournal } from "../store/journal";
@@ -46,6 +47,28 @@ export async function columnEvents(layout: StoreLayout): Promise<JournalEvent[]>
   const events: JournalEvent[] = [];
   for await (const event of readJournal(layout)) {
     if (isRoadmapColumnEvent(event)) events.push(event);
+  }
+  return events;
+}
+
+/** The two terminal ticket acts a map's derived sections order by (F7). */
+const TICKET_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  CORE_EVENT_TYPES.ticketResolved,
+  CORE_EVENT_TYPES.ticketClosed,
+]);
+
+/**
+ * The acts that resolved or closed a ticket, collected the same STREAMING way
+ * the columns are: a map's Decisions so far and its earned Out-of-scope lines
+ * are ordered by the event that took each ticket, and no other event type can
+ * answer that. The whole store's terminal acts are read rather than one map's,
+ * because a journal is indexed by nothing — the view drops what it does not
+ * need when it joins on the tickets it was given.
+ */
+export async function ticketTerminalEvents(layout: StoreLayout): Promise<JournalEvent[]> {
+  const events: JournalEvent[] = [];
+  for await (const event of readJournal(layout)) {
+    if (TICKET_TERMINAL_EVENT_TYPES.has(event.type)) events.push(event);
   }
   return events;
 }

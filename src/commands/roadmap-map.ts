@@ -14,7 +14,7 @@ import {
 import { closeStoreContext, mutate } from "../store/mutate";
 import { renderMap } from "../views/roadmap";
 import { commandContext, requireValid, UsageError } from "./item";
-import { requireSingleLine, resolveNodeRef } from "./roadmap-ref";
+import { requireSingleLine, resolveNodeRef, ticketTerminalEvents } from "./roadmap-ref";
 
 /**
  * `nahel roadmap map` (Phase 4 F7): the wayfinder map — one chart per roadmap
@@ -23,17 +23,18 @@ import { requireSingleLine, resolveNodeRef } from "./roadmap-ref";
  * store, with every mutation flowing through mutate()'s write-ahead choke
  * point and no filesystem or journal access of its own.
  *
- * Two sections are deliberately NOT writable here. **Decisions so far** is
- * written only by `ticket resolve`, and **Out of scope** gains its lines from
- * `ticket close` — the decision is the ticket's act, and a hand-written index
- * line would be an index of nothing. Out-of-scope lines may still be AUTHORED
- * at charting time (`--out-of-scope`), because ruling something beyond the
- * destination needs no ticket; a decision always does.
+ * Two sections are deliberately NOT writable here, because neither is stored:
+ * **Decisions so far** and the ticket-earned part of **Out of scope** are
+ * derived from the map's tickets at read time — the decision is the ticket's
+ * act, and a hand-written index line would be an index of nothing. Out-of-scope
+ * lines may still be AUTHORED at charting time (`--out-of-scope`), because
+ * ruling something beyond the destination needs no ticket; a decision always
+ * does. Those charted lines are the only ones this record stores.
  */
 
 const DESTINATION_FIELD = mapFrontmatterSchema.shape.destination;
 const FOG_FIELD = mapFrontmatterSchema.shape.fog.element;
-const OUT_OF_SCOPE_FIELD = mapFrontmatterSchema.shape.out_of_scope.element.shape.reason;
+const OUT_OF_SCOPE_FIELD = mapFrontmatterSchema.shape.out_of_scope.element;
 
 export const MAP_USAGE = `  nahel roadmap map new --node <ref> --destination <text> [--notes <text>]
                         [--fog <line>]... [--out-of-scope <line>]...
@@ -137,12 +138,9 @@ async function mapNew(
   const fog = (values.fog ?? []).map((line) =>
     requireSingleLine(requireValid(FOG_FIELD, line, "--fog"), "--fog"),
   );
-  const outOfScope = (values["out-of-scope"] ?? []).map((line) => ({
-    reason: requireSingleLine(
-      requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"),
-      "--out-of-scope",
-    ),
-  }));
+  const outOfScope = (values["out-of-scope"] ?? []).map((line) =>
+    requireSingleLine(requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"), "--out-of-scope"),
+  );
 
   const ctx = await commandContext(cwd, env, actorOverride);
   const node = await resolveNodeRef(ctx.layout, values.node, "--node");
@@ -162,7 +160,6 @@ async function mapNew(
     id: generateId(env),
     node,
     destination,
-    decisions: [],
     fog,
     out_of_scope: outOfScope,
     created,
@@ -238,17 +235,12 @@ async function mapUpdate(
     );
   }
   if (values["out-of-scope"] !== undefined) {
-    // Re-authoring the section keeps the ticket refs the closes recorded: an
-    // entry whose reason is re-stated verbatim keeps its ticket, so re-writing
-    // the section does not orphan the lines `ticket close` earned.
-    next.out_of_scope = values["out-of-scope"].map((line) => {
-      const reason = requireSingleLine(
-        requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"),
-        "--out-of-scope",
-      );
-      const previous = current.frontmatter.out_of_scope.find((entry) => entry.reason === reason);
-      return previous ?? { reason };
-    });
+    // Re-authoring replaces the CHARTED lines only, and cannot orphan anything:
+    // the lines `ticket close` earned are derived from those tickets and were
+    // never in this list to lose.
+    next.out_of_scope = values["out-of-scope"].map((line) =>
+      requireSingleLine(requireValid(OUT_OF_SCOPE_FIELD, line, "--out-of-scope"), "--out-of-scope"),
+    );
   }
   if (values["clear-fog"] === true) next.fog = [];
   if (values["clear-out-of-scope"] === true) next.out_of_scope = [];
@@ -273,10 +265,18 @@ async function mapShow(args: string[], cwd: string): Promise<number> {
   }
   const layout = await openStore(cwd);
   const record = await requireMap(layout, positionals[0]!);
-  // The node's name and the map's tickets are facts held by OTHER records, so
-  // both are read here rather than derived from the map alone.
+  // The node's name, the map's tickets, and the acts that resolved or closed
+  // them are facts held ELSEWHERE — by other records and by the journal — so
+  // all three are read here rather than derived from the map alone.
   const node = await resolveRoadmapNode(layout, record.frontmatter.node);
-  console.log(renderMap(record, node, await ticketsForMap(layout, record.frontmatter.id)));
+  console.log(
+    renderMap(
+      record,
+      node,
+      await ticketsForMap(layout, record.frontmatter.id),
+      await ticketTerminalEvents(layout),
+    ),
+  );
   return 0;
 }
 

@@ -7,10 +7,16 @@ args: "<node-slug-or-id>"
 # Workflow: chart-map
 
 Load and follow this workflow to chart a **map** on a roadmap node — usually
-a feature or an initiative whose shape is still foggy. A map holds five
+a feature or an initiative whose shape is still foggy. A map shows five
 sections: **Destination**, **Notes**, **Decisions so far**, **Not yet
 specified** (the fog), and **Out of scope**. Every one of them moves through
 the CLI; never hand-edit anything under `nahel/`.
+
+**Decisions so far is not a section you write.** It is derived from the map's
+resolved tickets, and the Out-of-scope lines a ticket earned are derived from
+its closed ones — the record itself stores only what you chart here with no
+ticket behind it. That is why the steps below rule things out of scope but
+never record a decision: a decision is a ticket's act.
 
 Before any `nahel` command: if you are an agent, set
 `NAHEL_ACTOR=agent:<your-id>` so every journal event carries your identity.
@@ -82,6 +88,10 @@ interrupted session leaves state `nahel validate --repair` rolls forward.
    keeps the map from growing without bound; entries never graduate back:
 
        nahel roadmap map update <node-slug> --out-of-scope "<what is beyond the destination, and why>"
+
+   `--out-of-scope` replaces the CHARTED lines, the same way `--fog` does, so
+   pass every line you want kept. It cannot drop a line a ticket earned:
+   those are derived from the closed tickets and were never in this list.
 
 8. Confirm the chart, and leave it readable:
 

@@ -122,19 +122,69 @@ function ticketLines(record: TicketRecord): string[] {
 }
 
 /**
+ * Order the tickets of a map by the JOURNAL EVENT that put each in its terminal
+ * state — `resolution` for a resolve, `closure` for a close — in the store's
+ * canonical total order (`ts` → `seq` → `id`, compareEvents), so the derived
+ * sections read the same on every machine and whatever order `tickets` arrives
+ * in.
+ *
+ * Deliberately NOT `updated`: `distill` moves a ticket's `updated` long after
+ * the decision was made, so an index ordered by the record's own clock would
+ * re-shuffle itself every time a body was emptied.
+ *
+ * A ticket whose event the journal does not carry — a compacted history, or a
+ * record written another way — sorts AFTER every dated one rather than being
+ * given a date it never earned, and those tie by ticket id (the precedent
+ * horizonEntryOrder set for the same problem).
+ */
+function terminalActOrder(
+  tickets: readonly TicketRecord[],
+  events: ReadonlyMap<string, JournalEvent>,
+  ref: (record: TicketRecord) => string | undefined,
+): TicketRecord[] {
+  const actOf = (record: TicketRecord): JournalEvent | undefined => {
+    const id = ref(record);
+    return id === undefined ? undefined : events.get(id);
+  };
+  return [...tickets].sort((a, b) => {
+    const first = actOf(a);
+    const second = actOf(b);
+    if (first !== undefined && second !== undefined) {
+      const order = compareEvents(first, second);
+      if (order !== 0) return order;
+    } else if (first !== undefined || second !== undefined) {
+      return first !== undefined ? -1 : 1;
+    }
+    const ids = [a.frontmatter.id, b.frontmatter.id];
+    return ids[0]! < ids[1]! ? -1 : ids[0]! > ids[1]! ? 1 : 0;
+  });
+}
+
+/**
  * Render one map (F7): the node it charts, its destination, its Notes prose,
  * and its listed sections — decisions so far, the questions a decision
- * invalidated (derived from the tickets, see below), not yet specified, out of
- * scope, and the tickets hanging off it. Pure over records already read, so two
- * reads of an unchanged store are byte-identical (HC1).
+ * invalidated, not yet specified, out of scope, and the tickets hanging off it.
+ * Pure over records already read, so two reads of an unchanged store are
+ * byte-identical (HC1).
+ *
+ * THREE of those sections are derived from the tickets rather than stored on
+ * the map: every decision, the questions another decision killed, and the
+ * out-of-scope lines a close earned. The facts already live on the tickets, and
+ * the layer's rule is that anything derivable is derived and never hand-set
+ * (F2) — which is also what keeps a resolve and a close off the one record
+ * every ticket on the map shares. What the map still stores is what it CHARTED:
+ * its fog, and the out-of-scope lines ruled before any ticket existed.
  *
  * `node` is the record the map charts, or null when no node carries that id yet
  * (it may arrive by a later merge — `validate` reports the dangling ref).
+ * `events` are the terminal ticket acts the derived order reads; an event the
+ * caller did not collect simply leaves its ticket undated (see terminalActOrder).
  */
 export function renderMap(
   record: MapRecord,
   node: RoadmapNodeRecord | null,
   tickets: readonly TicketRecord[],
+  events: readonly JournalEvent[],
 ): string {
   const map = record.frontmatter;
   const lines = [`map of ${node?.frontmatter.name ?? map.node}  id=${map.id}`];
@@ -143,18 +193,19 @@ export function renderMap(
   lines.push(`  created=${map.created}  updated=${map.updated}`);
   const notes = record.body.trimEnd();
   if (notes !== "") lines.push("", notes);
-  section(
-    lines,
-    "decisions so far",
-    map.decisions.map((entry) => `${entry.ticket}  ${entry.decision}`),
-  );
+  const acts = new Map(events.map((event) => [event.id, event]));
+
+  const decisions: string[] = [];
+  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.resolution)) {
+    if (frontmatter.state !== "resolved" || frontmatter.decision === undefined) continue;
+    decisions.push(`${frontmatter.id}  ${frontmatter.decision}`);
+  }
+  section(lines, "decisions so far", decisions);
   // The questions another decision answered out of existence (F7's invalidated
-  // close). DERIVED from the tickets rather than stored as a sixth section: the
-  // fact already lives on the ticket that died, and the layer's rule is that
-  // anything derivable is derived and never hand-set (F2). It prints HERE, next
-  // to the decisions, because the decision that killed each of these is one of
-  // them — and deliberately NOT under Out of scope, which means "ruled beyond
-  // the destination" and would be false of every line below.
+  // close). It prints HERE, next to the decisions, because the decision that
+  // killed each of these is one of them — and deliberately NOT under Out of
+  // scope, which means "ruled beyond the destination" and would be false of
+  // every line below.
   section(
     lines,
     "invalidated by a decision",
@@ -167,13 +218,17 @@ export function renderMap(
       ),
   );
   section(lines, "not yet specified", map.fog);
-  section(
-    lines,
-    "out of scope",
-    map.out_of_scope.map((entry) =>
-      entry.ticket === undefined ? entry.reason : `${entry.reason}  (${entry.ticket})`,
-    ),
-  );
+  // The charted lines first, in the order they were charted, then one per
+  // out-of-scope close in the order the closes happened: a ruling made before
+  // any ticket existed genuinely precedes every ruling a ticket earned.
+  const outOfScope = [...map.out_of_scope];
+  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.closure)) {
+    if (frontmatter.state !== "closed" || frontmatter.invalidated_by !== undefined) continue;
+    outOfScope.push(
+      [frontmatter.reason, `(${frontmatter.id})`].filter((part) => part !== undefined).join("  "),
+    );
+  }
+  section(lines, "out of scope", outOfScope);
   lines.push("", `tickets (${tickets.length}):`);
   if (tickets.length === 0) lines.push("  (none)");
   for (const ticket of tickets) for (const line of ticketLines(ticket)) lines.push(`  ${line}`);

@@ -239,41 +239,28 @@ export const roadmapNodeFrontmatterSchema = z.strictObject({
 export type RoadmapNodeFrontmatter = z.infer<typeof roadmapNodeFrontmatterSchema>;
 
 /**
- * One line of a map's **Decisions so far** index (Phase 4 F7): the ticket that
- * produced the decision, and the one-liner itself. An INDEX, not a store — the
- * decision's full reasoning lives in the journal event the resolution wrote and
- * in the observation distilled from it, which is exactly why a ticket body can
- * later be thrown away without losing anything.
- */
-export const mapDecisionSchema = z.strictObject({
-  ticket: idField,
-  decision: nonEmptyString("decision"),
-});
-export type MapDecision = z.infer<typeof mapDecisionSchema>;
-
-/**
- * One line of a map's **Out of scope** section (F7): what was ruled beyond the
- * destination, and — when a `ticket close` earned the line — which ticket. The
- * ticket ref is optional because charting rules things out before any ticket
- * exists. Out-of-scope entries never graduate: nothing moves a line back.
- */
-export const mapOutOfScopeSchema = z.strictObject({
-  reason: nonEmptyString("out-of-scope reason"),
-  ticket: idField.optional(),
-});
-export type MapOutOfScope = z.infer<typeof mapOutOfScopeSchema>;
-
-/**
  * Map frontmatter (Phase 4 F7) — the wayfinder chart attached to ONE roadmap
  * node: where this effort is going, what has been decided, what is still foggy,
  * and what was ruled out. The fifth section, **Notes**, is the markdown body
  * (the node/observation precedent: the prose IS the body).
  *
- * The three list sections are REQUIRED keys, unlike a node's per-kind links: a
- * node's links are optional because WHICH kind carries which is a soft
- * `validate` judgment, while every map has all five sections and the CLI writes
- * all three lists on every mutation. An absent key here therefore means a
- * hand-edited record, which is a finding rather than a shape to tolerate.
+ * A map stores only the sections it OWNS. **Decisions so far** is not one of
+ * them, and neither is the part of **Out of scope** a ticket earned: both are
+ * composed at read time from the map's tickets, which already carry the decision
+ * and the ruling (see views/roadmap.ts renderMap). Storing a second copy made
+ * every resolve and every out-of-scope close rewrite the one record that every
+ * ticket on the map shares — a hot spot two concurrent sessions contend for, to
+ * hold facts that were already written down. The split this leaves is:
+ *
+ * - `out_of_scope` — the lines an agent CHARTED, before any ticket existed.
+ *   Ruling something beyond the destination needs no ticket; a decision does.
+ * - the ticket-earned lines, and every decision — derived, never stored.
+ *
+ * The two stored list sections are REQUIRED keys, unlike a node's per-kind
+ * links: a node's links are optional because WHICH kind carries which is a soft
+ * `validate` judgment, while the CLI writes both of these on every map
+ * mutation. An absent key here therefore means a hand-edited record, which is a
+ * finding rather than a shape to tolerate.
  *
  * There is deliberately no status, count, or progress field: a map's state is
  * read from its tickets, and F8's frontier is the only view that ranks them.
@@ -284,12 +271,14 @@ export const mapFrontmatterSchema = z.strictObject({
   node: idField,
   /** Where this effort is going; a map without one charts nothing. */
   destination: nonEmptyString("destination"),
-  /** Decisions so far: the one-line index, in the order they were decided. */
-  decisions: z.array(mapDecisionSchema),
   /** Not yet specified: in-scope questions not sharp enough to ticket yet. */
   fog: z.array(nonEmptyString("fog entry")),
-  /** Out of scope: ruled beyond the destination; never graduates. */
-  out_of_scope: z.array(mapOutOfScopeSchema),
+  /**
+   * Out of scope, the CHARTED lines only: ruled beyond the destination before
+   * any ticket existed, and never graduating. The lines a `ticket close`
+   * earned are derived from those tickets and render alongside these.
+   */
+  out_of_scope: z.array(nonEmptyString("out-of-scope entry")),
   created: timestampField,
   updated: timestampField,
 });
@@ -323,7 +312,7 @@ export const ticketFrontmatterSchema = z.strictObject({
    * warning). Advisory throughout: nothing anywhere refuses work over one (F8).
    */
   blockers: z.array(idField),
-  /** The one-liner `resolve` recorded (also indexed on the map). */
+  /** The one-liner `resolve` recorded — the map's Decisions index derives from it. */
   decision: nonEmptyString("decision").optional(),
   /** Why `close` ruled the question away — required by both dispositions. */
   reason: nonEmptyString("reason").optional(),
@@ -332,14 +321,23 @@ export const ticketFrontmatterSchema = z.strictObject({
    * INVALIDATED disposition (F7's close row): the resolved ticket — or the
    * journal event — whose decision answered it out of existence. Its presence
    * is what tells the two closes apart: an out-of-scope close carries none and
-   * adds a line to the map's Out of scope instead, while an invalidated
+   * earns a line under the map's Out of scope instead, while an invalidated
    * question was never beyond the destination, so filing it there would be
-   * false. The map renders these beside its Decisions so far, derived from the
-   * tickets — there is no sixth stored section (F2: derive, never hand-set).
+   * false. Both readings are derived from the tickets (F2: derive, never
+   * hand-set) — the map stores neither.
    */
   invalidated_by: idField.optional(),
   /** The resolution event id — what the decision's observation cites as its source. */
   resolution: idField.optional(),
+  /**
+   * The close event id, `resolution`'s counterpart for the other terminal act:
+   * what the closed question's observation cites as its source, and the key the
+   * map's derived Out-of-scope lines order by. Recorded on the record because
+   * `updated` cannot answer WHEN the question was ruled away — `distill` moves
+   * it long afterwards, and an order read off it would re-shuffle every time a
+   * body was emptied.
+   */
+  closure: idField.optional(),
   created: timestampField,
   updated: timestampField,
 });

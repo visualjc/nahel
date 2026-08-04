@@ -60,11 +60,13 @@ Before any `nahel` command: if you are an agent, set
 
        nahel roadmap ticket resolve <ticket-id> --decision "<the decision, in one line>"
 
-   One command does four things: it journals the decision, flips the ticket,
-   writes the map's index line, and distills an **observation** so
-   `nahel recall <terms>` finds the decision forever. Write the one-liner as
-   the answer, not the topic — "we own the fly.io deploy and nothing
-   downstream of it", never "deploy target decided".
+   One command does three things: it journals the decision, flips the ticket,
+   and distills an **observation** so `nahel recall <terms>` finds the decision
+   forever. The map's index line needs no fourth: **Decisions so far** is
+   derived from the resolved tickets, so the map record is never touched and
+   two sessions resolving two tickets on one map never collide. Write the
+   one-liner as the answer, not the topic — "we own the fly.io deploy and
+   nothing downstream of it", never "deploy target decided".
 
    If the question is not going to be answered, close it instead — and say
    WHICH of the two reasons it is, because they are different facts and only
@@ -76,13 +78,14 @@ Before any `nahel` command: if you are an agent, set
        nahel roadmap ticket close <ticket-id> --invalidated-by <ticket-or-event-id> \
          --reason "<which decision answered it out of existence>"
 
-   `--out-of-scope` adds the reason to the map's **Out of scope** section:
-   ruled beyond the destination, and it never graduates. `--invalidated-by`
-   records the decision that killed the question on the ticket, and the map
-   shows it beside Decisions so far — a question another decision answered was
-   never beyond the destination, so filing it under Out of scope would be
-   false, and would turn the one section that bounds the map into a graveyard
-   nobody trusts.
+   `--out-of-scope` earns the reason a line under the map's **Out of scope**
+   section: ruled beyond the destination, and it never graduates.
+   `--invalidated-by` records the decision that killed the question on the
+   ticket, and the map shows it beside Decisions so far — a question another
+   decision answered was never beyond the destination, so filing it under Out
+   of scope would be false, and would turn the one section that bounds the map
+   into a graveyard nobody trusts. Both readings are derived from the closed
+   ticket; like `resolve`, neither disposition writes the map.
 
    If you are stopping without an answer, hand it back:
 

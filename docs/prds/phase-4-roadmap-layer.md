@@ -452,13 +452,32 @@ Matt Pocock's wayfinder method, adapted onto in-store records — no issue
 tracker anywhere:
 
 - A **map** is a lightweight record attached to a node (usually a feature or
-  initiative), holding: **Destination**, **Notes**, **Decisions so far** (a
+  initiative), showing: **Destination**, **Notes**, **Decisions so far** (a
   one-line index, not a store), **Not yet specified** (the fog — in-scope
   questions not yet sharp enough to ticket), and **Out of scope** (ruled
   beyond the destination; never graduates).
 - A **decision ticket** is a lightweight child record of the map with
   `type: research | prototype | grilling | task`, a question body, and
   advisory blocking edges to sibling tickets.
+
+**The index sections are DERIVED, and the map record stores neither**
+(contract clarification, PR #26 review, superseding the earlier reading in
+which `resolve` appended to a `decisions` array on the map and an
+out-of-scope `close` appended to its `out_of_scope` array). **Decisions so
+far** and the ticket-earned part of **Out of scope** are composed at read
+time from the map's own tickets, which already carry the decision and the
+ruling — storing a second copy made every resolution and every out-of-scope
+close rewrite the one record that every ticket on the map shares: a hot spot
+two concurrent sessions contend for, holding facts that were already written
+down. The map still **stores** what it charted with no ticket behind it: its
+fog, and the out-of-scope lines ruled before any ticket existed
+(`--out-of-scope` at `map new` / `map update`). Ruling something beyond the
+destination needs no ticket; a decision always does. Both derived sections
+order by the **journal event** that resolved or closed each ticket, in the
+store's canonical `ts → seq → id` total order — never by the ticket's
+`updated`, which `distill` moves long after the decision was made. A closed
+ticket therefore records its close event id (`closure`) exactly as a resolved
+one records its `resolution`.
 
 **Ticket lifecycle** — four states, and every transition is a CLI mutation
 (HC3), journaled:
@@ -473,11 +492,12 @@ tracker anywhere:
 | `resolved`/`closed` → body distilled | `nahel roadmap ticket distill <ref>` |
 
 A close **states which disposition it is**, because the two the row covers are
-different facts: `--out-of-scope` means ruled beyond the destination and adds
-the reason to that section, while `--invalidated-by` means another decision
-answered the question out of existence — it was never beyond the destination,
-so it records the invalidating ref on the ticket and writes no Out-of-scope
-line (the map renders those beside Decisions so far, derived from the tickets).
+different facts: `--out-of-scope` means ruled beyond the destination and earns
+the reason a line in that section, while `--invalidated-by` means another
+decision answered the question out of existence — it was never beyond the
+destination, so it records the invalidating ref on the ticket and earns no
+Out-of-scope line, rendering beside Decisions so far instead. Both readings
+are derived from the closed ticket; neither writes the map.
 
 **Claim semantics** are advisory assignment, deliberately NOT the
 intervention claim (`nahel intervene claim` keeps its freeze semantics for
@@ -515,24 +535,26 @@ state**, not corruption: `validate` names it and `validate --repair`
   resolve, close, distill.
 - Claiming a claimed ticket exits non-zero naming the holder; release by any
   actor succeeds and returns the ticket to the frontier (F8).
-- `resolve` writes the decision event, the map's index line, **and** an
-  observation whose `sources` include the resolution event id; `nahel recall
-  <decision terms>` returns it.
+- `resolve` writes the decision event **and** an observation whose `sources`
+  include the resolution event id; `nahel recall <decision terms>` returns it,
+  and `map show` renders the index line derived from the resolved ticket.
 - `distill` empties the body **through the CLI** and journals it; afterwards
   the decision is still fully readable from `nahel recall` and `nahel
   progress` alone — exercised by actually distilling one. A ticket body
   removed by a raw file edit is reported by `validate` as a finding (no
   distill event for an emptied body).
 - **Crash-shape**: with the process killed between **any two** steps of
-  `resolve` (decision event → ticket state → observation → map index line)
-  and of `distill`, `validate` names the partial state, `validate --repair`
-  completes it, and re-running the original verb afterwards is idempotent —
-  no duplicate observation, no second index line. Exercised at every
-  interruption point, not just the first.
-- An out-of-scope ruling `close --out-of-scope`s the ticket, adds one line to
-  Out of scope with its reason, and never appears in Decisions so far; a
-  `close --invalidated-by <ref>` records the invalidating ref on the ticket
-  instead, adds NO Out-of-scope line, and never appears in Decisions so far
+  `resolve` (decision event → ticket state → observation), of `close`
+  (close event → ticket state → observation) and of `distill`, `validate`
+  names the partial state, `validate --repair` completes it, and re-running
+  the original verb afterwards is idempotent — no duplicate observation, no
+  second index line. Exercised at every interruption point, not just the
+  first. The map is at no interruption point in any of them, because no
+  terminal verb writes it.
+- An out-of-scope ruling `close --out-of-scope`s the ticket, earns one line
+  under Out of scope with its reason, and never appears in Decisions so far;
+  a `close --invalidated-by <ref>` records the invalidating ref on the ticket
+  instead, earns NO Out-of-scope line, and never appears in Decisions so far
   either — and a close naming neither disposition (or both) is refused.
 - Both workflow docs pass the workflow-format doc tests and are installed by
   the existing shim generator like every other workflow (HC5: drivable by

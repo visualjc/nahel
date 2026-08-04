@@ -15,12 +15,7 @@ import {
   type StoreLayout,
   type TicketRecord,
 } from "../store/layout";
-import {
-  closeStoreContext,
-  mutate,
-  type SequenceWrite,
-  type StoreContext,
-} from "../store/mutate";
+import { closeStoreContext, mutate, type StoreContext } from "../store/mutate";
 import { renderTicket } from "../views/roadmap";
 import { commandContext, requireValid, UsageError } from "./item";
 import { requireMap } from "./roadmap-map";
@@ -71,18 +66,19 @@ export const TICKET_USAGE = `  nahel roadmap ticket new --map <ref> --type <t> -
     Hand it back to the frontier. Permitted to any actor, always.
 
   nahel roadmap ticket resolve <ref> --decision <one-liner>
-    Record the decision: journals it, indexes it on the map, and distills an
-    observation citing the resolution event — so \`nahel recall\` finds it.
+    Record the decision: journals it and distills an observation citing the
+    resolution event — so \`nahel recall\` finds it. The map's Decisions so far
+    index is derived from this ticket; no map record is written.
 
   nahel roadmap ticket close <ref> --reason <why> (--out-of-scope | --invalidated-by <ref>)
     Rule the question away, stating WHICH disposition it is. Under either one
-    it never becomes a decision.
-      --out-of-scope: ruled beyond the destination — adds the reason as one
-        line in the map's Out of scope section, which never graduates.
+    it never becomes a decision, and no map record is written.
+      --out-of-scope: ruled beyond the destination — the reason renders as one
+        line under the map's Out of scope section, which never graduates.
       --invalidated-by <ticket-or-event-id>: another decision answered the
         question out of existence — records that ref on the ticket, and the map
         shows it beside Decisions so far. It was never beyond the destination,
-        so no line is added to the section above.
+        so it earns no line in the section above.
 
   nahel roadmap ticket distill <ref>
     Empty a resolved or closed ticket's body through the CLI, once the decision
@@ -387,7 +383,7 @@ function parseResolveArgs(args: string[]): { ref: string; decision: string } {
     decision: requireOneLineText(
       values.decision,
       "--decision",
-      "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, indexed on the map, and distilled into an observation)",
+      "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, distilled into an observation, and indexed on the map from this ticket)",
     ),
   };
 }
@@ -396,13 +392,17 @@ function parseResolveArgs(args: string[]): { ref: string; decision: string } {
  * How a close disposes of the question — the two cases F7's close row names,
  * and the reason they cannot share one spelling:
  *
- * - `out-of-scope`: ruled BEYOND the destination. Gains a line in the map's Out
- *   of scope, which is the section that keeps the map from growing without
- *   bound; entries there never graduate.
+ * - `out-of-scope`: ruled BEYOND the destination. Earns a line under the map's
+ *   Out of scope, the section that keeps the map from growing without bound;
+ *   entries there never graduate.
  * - `invalidated`: another decision answered the question out of existence. It
  *   was never beyond the destination, so an Out-of-scope line would be false —
- *   the invalidating ref goes on the TICKET, and the map renders it beside
- *   Decisions so far, derived from the tickets rather than stored a second time.
+ *   the invalidating ref goes on the ticket, and the map renders it beside
+ *   Decisions so far instead.
+ *
+ * Both readings are derived from the ticket the close wrote; neither is stored
+ * on the map, which is why the two dispositions differ in what they RECORD on
+ * the ticket rather than in which records they touch.
  */
 type CloseDisposition = { kind: "out-of-scope" } | { kind: "invalidated"; by: string };
 
@@ -432,10 +432,10 @@ function parseCloseArgs(args: string[]): {
   }
   if (!outOfScope && invalidatedBy === undefined) {
     throw new UsageError(
-      "a close states WHICH disposition it is: --out-of-scope (ruled beyond the destination — it gains a " +
-        "line in the map's Out of scope) or --invalidated-by <ticket-or-event-id> (another decision " +
-        "answered the question out of existence — it was never beyond the destination, so no Out-of-scope " +
-        "line is written)",
+      "a close states WHICH disposition it is: --out-of-scope (ruled beyond the destination — it earns a " +
+        "line under the map's Out of scope) or --invalidated-by <ticket-or-event-id> (another decision " +
+        "answered the question out of existence — it was never beyond the destination, so it renders " +
+        "beside Decisions so far instead)",
     );
   }
   const reason = requireOneLineText(
@@ -460,9 +460,14 @@ function parseCloseArgs(args: string[]): {
 }
 
 /**
- * `resolve`: the decision, the ticket, the observation and the map's index
- * line, under ONE write-ahead event (F7). The event id is minted first because
- * the observation's `sources` must cite the very event carrying it.
+ * `resolve`: the decision, the ticket and the observation under ONE write-ahead
+ * event (F7). The event id is minted first because the observation's `sources`
+ * must cite the very event carrying it.
+ *
+ * The MAP is not written. Its Decisions so far index is composed at read time
+ * from its tickets, so a resolution touches only the two records it owns — and
+ * two sessions resolving two tickets on one map never contend for the record
+ * they share. The map is still READ, for the destination the observation names.
  */
 async function ticketResolve(
   args: string[],
@@ -503,15 +508,6 @@ async function ticketResolve(
     writes: [
       { target: "ticket", frontmatter: resolved, body: current.body },
       { target: "observation", frontmatter: observation.frontmatter, body: observation.body },
-      {
-        target: "map",
-        frontmatter: {
-          ...map.frontmatter,
-          decisions: [...map.frontmatter.decisions, { ticket: resolved.id, decision }],
-          updated: now,
-        },
-        body: map.body,
-      },
     ],
   });
   await closeStoreContext(ctx);
@@ -520,10 +516,14 @@ async function ticketResolve(
 
 /**
  * `close`: rule the question away, saying WHICH way (see CloseDisposition).
- * The ticket and — for an out-of-scope ruling — the map's Out of scope line
- * ride one event, the same shape `resolve` does. A closed question never
- * becomes a decision under either disposition, so nothing is indexed in
- * Decisions so far and nothing is distilled.
+ * A closed question never becomes a decision under either disposition, so
+ * nothing is indexed in Decisions so far.
+ *
+ * Like `resolve`, this writes NO map record under either disposition: an
+ * out-of-scope line is derived from the ticket that earned it, so a close
+ * touches only the ticket. The event id is minted first because the ticket
+ * records it (`closure`) — the key the derived section orders by, which
+ * `updated` cannot be, since `distill` moves it long afterwards.
  */
 async function ticketClose(
   args: string[],
@@ -535,36 +535,22 @@ async function ticketClose(
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "close");
-  const map = await readMap(ctx.layout, current.frontmatter.map);
 
-  const now = ctx.env.now();
+  const eventId = generateId(ctx.env);
   const { claimant: _released, ...rest } = current.frontmatter;
   const closed: TicketFrontmatter = {
     ...rest,
     state: "closed",
     reason,
     ...(disposition.kind === "invalidated" ? { invalidated_by: disposition.by } : {}),
-    updated: now,
+    closure: eventId,
+    updated: ctx.env.now(),
   };
-  // An invalidated close touches only the ticket: the map already carries the
-  // decision that killed the question, and renders the death beside it.
-  const writes: SequenceWrite[] = [{ target: "ticket", frontmatter: closed, body: current.body }];
-  if (disposition.kind === "out-of-scope") {
-    writes.push({
-      target: "map",
-      frontmatter: {
-        ...map.frontmatter,
-        out_of_scope: [...map.frontmatter.out_of_scope, { reason, ticket: rest.id }],
-        updated: now,
-      },
-      body: map.body,
-    });
-  }
   await mutate(ctx, {
     target: "sequence",
     eventType: CORE_EVENT_TYPES.ticketClosed,
-    eventId: generateId(ctx.env),
-    writes,
+    eventId,
+    writes: [{ target: "ticket", frontmatter: closed, body: current.body }],
   });
   await closeStoreContext(ctx);
   return 0;

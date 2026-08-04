@@ -387,6 +387,27 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("no active migration");
   });
 
+  test("an attempt interrupted before its first node is retired too, acknowledged (review)", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    // The two ordinary crash shapes — killed after the set, killed after the
+    // product node — leave nothing attributed, and a doc that did not name the
+    // acknowledging flag would leave such a store unable to migrate at all.
+    expect(body).toContain("--nothing-to-move");
+    expect(body).toContain("authority");
+  });
+
+  test("step 4 is create-or-REUSE: the product node belongs to the store, not the attempt", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    expect(body).toContain("reuse");
+    // A retry adjusts the surviving node in place rather than creating a
+    // second: a store has one product node, and its slug is unique anyway.
+    expect(body).toContain("nahel roadmap node update");
+    expect(body).toContain("Never create a second");
+    // And the reason, which is what makes the rule survive a rewrite: the node
+    // belongs to the store, not to the attempt that happened to create it.
+    expect(body).toContain("SINGLETON");
+  });
+
   test("states the layer's rules: actor attribution, no hand-editing, and the degraded fallback", async () => {
     const { body } = await shippedWorkflow("migrate-roadmap.md");
     expect(body).toContain("NAHEL_ACTOR");

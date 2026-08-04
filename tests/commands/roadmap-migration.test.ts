@@ -790,3 +790,267 @@ describe("--migration will not attribute a node to a retired attempt (C2)", () =
     expect((await validate(root)).code).toBe(0);
   });
 });
+
+/**
+ * Authority-only supersession (external codex review on PR #26, the verified
+ * blocker). The workflow journals the selected set FIRST and creates the
+ * product node BEFORE any feature node — and neither of those carries an
+ * attribution, because the product node covers no work item. So the two
+ * ordinary crash shapes of a migration in progress are exactly the states the
+ * zero-attributed refusal stranded:
+ *
+ *   (a) killed after the selection, before any node — nothing attributed;
+ *   (b) killed after the product node, before the first feature — nothing
+ *       attributed, AND a live product node a retry would collide with.
+ *
+ * In both, the attempt could not be retired, so no fresh selection was ever
+ * allowed: a store one interrupted command away from being unable to migrate.
+ * The answer is that supersession retires the attempt's AUTHORITY, which is a
+ * real act even when it moves no record — behind an explicit acknowledgement,
+ * so nobody expecting an undo retires a finished legacy migration by reflex.
+ */
+describe("supersession with nothing to move retires the attempt's authority (review)", () => {
+  /** A store killed right after the selected set landed: no node at all. */
+  async function selectionOnly() {
+    const { root, layout, env } = await setup();
+    const epics = [await newItem(env, root, "one"), await newItem(env, root, "two")];
+    return { root, layout, env, epics, selection: await selection(env, root, epics) };
+  }
+
+  test("without the flag it is still refused — and the refusal explains BOTH paths", async () => {
+    const fixture = await selectionOnly();
+    const message = await fails(fixture.env, fixture.root, [
+      "migration",
+      "supersede",
+      fixture.selection,
+      "--reason",
+      "the enumeration was wrong",
+    ]);
+    expect(message).toContain(fixture.selection);
+    // Path one: you meant to undo nodes, and there are none attributed.
+    expect(message).toContain("attribut");
+    // Path two: you meant to retire the attempt so a fresh one may follow.
+    expect(message).toContain("--nothing-to-move");
+    expect(
+      (await events(fixture.layout)).filter(
+        (event) => event.type === CORE_EVENT_TYPES.migrationSuperseded,
+      ),
+    ).toEqual([]);
+  });
+
+  test("with the flag: authority retired, zero records moved, same event shape", async () => {
+    const fixture = await selectionOnly();
+    const printed = (
+      await ok(fixture.env, fixture.root, [
+        "migration",
+        "supersede",
+        fixture.selection,
+        "--reason",
+        "the enumeration was wrong",
+        "--nothing-to-move",
+      ])
+    ).join("\n");
+    expect(printed).toContain(fixture.selection);
+    expect(printed).toContain("authority");
+    expect(printed).toContain("0 node record(s)");
+
+    const superseded = (await events(fixture.layout)).filter(
+      (event) => event.type === CORE_EVENT_TYPES.migrationSuperseded,
+    );
+    expect(superseded).toHaveLength(1);
+    expect(superseded[0]!.payload[MIGRATION_SELECTION_PAYLOAD_KEY]).toBe(fixture.selection);
+    expect(superseded[0]!.payload[MIGRATION_SUPERSEDED_REASON_KEY]).toContain("enumeration");
+    // Same shape as any other supersession — an empty move list, not a missing one.
+    expect(superseded[0]!.payload[MIGRATION_NODES_PAYLOAD_KEY]).toEqual([]);
+    expect(await listRoadmapNodes(fixture.layout)).toEqual([]);
+    expect((await validate(fixture.root)).code).toBe(0);
+  });
+
+  test("the output names live nodes covering the retired set — leftovers to look at", async () => {
+    const fixture = await selectionOnly();
+    // An unattributed node covering one of the selected ids: not the
+    // migration's by attribution, but plainly about the same work.
+    const leftover = lastId(
+      await ok(fixture.env, fixture.root, [
+        "node",
+        "new",
+        "feature",
+        "one",
+        "--horizon",
+        "now",
+        "--epic",
+        fixture.epics[0]!,
+        "--intent",
+        "charted by hand while the migration was interrupted",
+      ]),
+    );
+    const printed = (
+      await ok(fixture.env, fixture.root, [
+        "migration",
+        "supersede",
+        fixture.selection,
+        "--reason",
+        "restarting the enumeration",
+        "--nothing-to-move",
+      ])
+    ).join("\n");
+    expect(printed).toContain(leftover);
+    expect(printed).toContain(fixture.epics[0]!);
+    // Advisory only: the node is untouched and still renders.
+    expect(await listRoadmapNodes(fixture.layout)).toContain(leftover);
+    expect(printed).not.toContain(fixture.epics[1]!);
+  });
+
+  test("the flag is refused when there ARE records to move — it acknowledges one state", async () => {
+    const fixture = await migrated();
+    const message = await fails(fixture.env, fixture.root, [
+      "migration",
+      "supersede",
+      fixture.selection,
+      "--reason",
+      "tainted",
+      "--nothing-to-move",
+    ]);
+    expect(message).toContain("--nothing-to-move");
+    expect(message).toContain("2");
+    expect((await shape(fixture)).failed).toEqual([]);
+    expect(
+      (await events(fixture.layout)).filter(
+        (event) => event.type === CORE_EVENT_TYPES.migrationSuperseded,
+      ),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The whole recovery loop, driven through supported commands only — no hand
+ * edits, no git. Both crash shapes end where a migration is supposed to end:
+ * one active selection, its nodes attributed to it, and `nahel validate`
+ * reporting no error at all.
+ */
+describe("a migration interrupted mid-flight recovers through the CLI alone (review)", () => {
+  /** Complete a migration for `epics` under `product`, attributed to a fresh set. */
+  async function migrateAgain(
+    env: Env,
+    root: string,
+    epics: readonly string[],
+    product: string,
+    slugs: readonly string[],
+  ): Promise<string> {
+    const redo = await selection(env, root, epics);
+    for (const [index, epic] of epics.entries()) {
+      await ok(env, root, [
+        "node",
+        "new",
+        "feature",
+        slugs[index]!,
+        "--horizon",
+        "now",
+        "--parent",
+        product,
+        "--epic",
+        epic,
+        "--intent",
+        "the feature",
+        "--migration",
+        redo,
+      ]);
+    }
+    return redo;
+  }
+
+  test("(a) killed after the selection: retire the authority, then migrate cleanly", async () => {
+    const { root, layout, env } = await setup();
+    const epics = [await newItem(env, root, "one"), await newItem(env, root, "two")];
+    const stranded = await selection(env, root, epics);
+
+    await ok(env, root, [
+      "migration",
+      "supersede",
+      stranded,
+      "--reason",
+      "killed before any node was created",
+      "--nothing-to-move",
+    ]);
+    await ok(env, root, [
+      "node",
+      "new",
+      "product",
+      "the-product",
+      "--horizon",
+      "now",
+      "--intent",
+      "what this product is",
+    ]);
+    await migrateAgain(env, root, epics, "the-product", ["one", "two"]);
+
+    const validated = await validate(root);
+    expect(validated.code).toBe(0);
+    expect(validated.out).not.toContain("error [");
+    expect(validated.out).not.toContain("migration-audit");
+    expect(await listRoadmapNodes(layout)).toHaveLength(3);
+  });
+
+  test("(b) killed after the product node: the retry REUSES it, never a second one", async () => {
+    const { root, layout, env } = await setup();
+    const epics = [await newItem(env, root, "one"), await newItem(env, root, "two")];
+    const stranded = await selection(env, root, epics);
+    // The product node the interrupted attempt got as far as creating. It
+    // carries no attribution — it covers no work item — so it survives the
+    // supersession untouched, which is exactly why the retry must reuse it.
+    const product = lastId(
+      await ok(env, root, [
+        "node",
+        "new",
+        "product",
+        "the-product",
+        "--horizon",
+        "now",
+        "--intent",
+        "a first pass at what this product is",
+      ]),
+    );
+
+    await ok(env, root, [
+      "migration",
+      "supersede",
+      stranded,
+      "--reason",
+      "killed after the product node, before the first feature",
+      "--nothing-to-move",
+    ]);
+    expect(await listRoadmapNodes(layout)).toEqual([product]);
+
+    // Step 4 on the retry: reuse, adjusting the intent in place. Creating a
+    // second product node would collide with one-product-per-store, and the
+    // duplicate slug is refused outright anyway.
+    expect(
+      await fails(env, root, [
+        "node",
+        "new",
+        "product",
+        "the-product",
+        "--horizon",
+        "now",
+        "--intent",
+        "a second product node",
+      ]),
+    ).toContain("already used");
+    await ok(env, root, [
+      "node",
+      "update",
+      "the-product",
+      "--intent",
+      "what this product is, restated on the retry",
+    ]);
+    await migrateAgain(env, root, epics, "the-product", ["one", "two"]);
+
+    const validated = await validate(root);
+    expect(validated.code).toBe(0);
+    expect(validated.out).not.toContain("error [");
+    expect(validated.out).not.toContain("migration-audit");
+    const live = await listRoadmapNodes(layout);
+    expect(live).toHaveLength(3);
+    expect(live).toContain(product);
+  });
+});

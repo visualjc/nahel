@@ -617,11 +617,22 @@ sweep found.
 ### F10 — PRD lifecycle: live until released, then archived
 
 - A feature's PRD lives at `docs/prds/<name>.md` and is **live** — edited as
-  the feature evolves — until the feature reaches `released`.
-- On release, the PRD is **archived**: moved to `docs/prds/archived/` with a
-  stamped header — released date, epic/item link, the **journal-pointer
-  line** (the id of the archival event), and the line that the **code and
-  tests are the truth now**. **No PRD is ever deleted.**
+  the feature evolves — until the feature is **archival-qualified**.
+- **Stage `released` and archival-qualified are different facts** (contract
+  clarification, PR #26 review). The stage is a **view** of what the store
+  holds and stays permissive by design: any covering `release.announced` reads
+  `released`, and one recording nothing still renders `released ? <ts>` (F2's
+  render table, F9's precedence table — both unchanged). Archival is not a
+  view. It stamps a document closed **forever** on a header that **cites the
+  release**, so it demands a release a reader can follow back: the winning
+  unretracted `release.announced` must carry a **nonblank `version`,
+  `channel` and `announcement`**. Without all three the verb refuses, naming
+  the release event and every missing key, and the PRD stays live.
+- On archival the PRD is **moved** to `docs/prds/archived/` with a stamped
+  header — released date, epic/item link, the **journal-pointer line** (the id
+  of the archival event), and the line that the **code and tests are the truth
+  now**. The archival event **names the release event it rests on**, so the
+  pointer reads both ways. **No PRD is ever deleted.**
 - **Every stored reference to the moved path is updated in the same act,
   through the CLI** (HC3). The complete set: (1) the **feature node's** PRD
   link; (2) the **owning plan item's** `prd` field — the item that authored
@@ -631,8 +642,8 @@ sweep found.
   after archival is a bug, not a warning.
 - **Product design docs are permanent** — updated in place on release, never
   archived. They state what the product is; a PRD stated one delta.
-- **Released means the delta is closed.** An archived PRD is never reopened
-  and never edited. Further development on a released feature is a **new
+- **An archival-qualified release means the delta is closed.** An archived PRD
+  is never reopened and never edited. Further development on a released feature is a **new
   feature node with a new PRD**, which may link the predecessor node for
   lineage — that is what keeps an archived PRD an honest record of what
   shipped rather than a document that quietly drifts after the fact.
@@ -656,10 +667,21 @@ sweep found.
   After archival, **zero** records in the store hold the old path
   (`rg`-checkable), and every update went through the CLI (journaled, no
   hand-edited frontmatter).
-- The archival journal event names the old and the new path.
-- A feature that has not reached `released` is never archived; `validate`
-  warns on a released feature whose PRD is still live, and on any `prd` path
-  pointing at a missing file.
+- The archival journal event names the old and the new path, **and the id of
+  the `release.announced` the archival rests on**.
+- A feature that has not reached `released` is never archived, and neither is
+  one whose winning release lacks a nonblank `version`, `channel` or
+  `announcement`: the refusal **names the release event and every missing
+  key**, and each of the three keys is exercised by its own case, blank
+  counting as missing. A **retracted** release is no release at all and earns
+  the ordinary stage refusal instead.
+- `validate` and the verb read the **same eligibility predicate**, so the
+  report can never name a command that then refuses:
+  `roadmap.prd-unarchived` fires on exactly the nodes archival accepts, while
+  a feature at stage `released` on a release too thin to carry an archival
+  gets `roadmap.release-incomplete` — naming the event and the missing keys,
+  with a fix that is **re-logging the release**, never archiving. A `prd` path
+  pointing at a missing file warns as before.
 - The product design doc referenced by the product node is updated in the
   same act (diffable), not archived.
 - **Crash-shape**: the process is killed at **every** boundary of the write

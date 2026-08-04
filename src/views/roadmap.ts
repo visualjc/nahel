@@ -8,6 +8,7 @@ import {
   RELEASE_ANNOUNCED_EVENT_TYPE,
   RELEASE_VERSION_PAYLOAD_KEY,
   RETRACTION_EVENT_PAYLOAD_KEY,
+  RETRACTION_REASON_PAYLOAD_KEY,
   ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 } from "../schema/events";
 import type {
@@ -358,19 +359,48 @@ export const ROADMAP_COLUMN_FACT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The event id one retraction withdraws, or undefined when its payload names
- * none readably (absent, non-string, or blank). Events are data — the rule
- * every journal reader here follows — and a retraction that names nothing is
- * never read as naming EVERYTHING.
+ * The event id one retraction NAMES, or undefined when its payload names none
+ * readably (absent, non-string, or blank). Events are data — the rule every
+ * journal reader here follows — and a retraction that names nothing is never
+ * read as naming EVERYTHING.
  *
- * Shared with `validate`, so the check reports exactly the target the
- * derivation acted on rather than a second reading of the same payload.
+ * Naming a target is HALF of a retraction; withdrawnEventId below is the whole.
+ * Both are exported so `validate` can tell the halves apart in its message
+ * while judging completeness by exactly the rule the derivation applies.
  */
 export function retractedEventId(event: JournalEvent): string | undefined {
   const value = event.payload[RETRACTION_EVENT_PAYLOAD_KEY];
   if (typeof value !== "string") return undefined;
   const id = value.trim();
   return id === "" ? undefined : id;
+}
+
+/**
+ * The reason one retraction STATES, or undefined when it states none (absent,
+ * non-string, or blank). The other half, and not decoration: a withdrawal
+ * nobody can account for is worse than the fact it withdraws.
+ */
+export function retractionReason(event: JournalEvent): string | undefined {
+  const value = event.payload[RETRACTION_REASON_PAYLOAD_KEY];
+  if (typeof value !== "string") return undefined;
+  const reason = value.trim();
+  return reason === "" ? undefined : reason;
+}
+
+/**
+ * The event id a retraction actually WITHDRAWS: a target it names, stated with
+ * a reason. Undefined when either half is missing — an incomplete retraction
+ * withdraws nothing.
+ *
+ * ONE predicate, because more than one surface has to agree on it. `validate`
+ * calls a reason-less retraction malformed and says it changes nothing; a
+ * derivation that withdrew the fact anyway would leave the store rendering one
+ * thing while the report claimed another. Every reader of a retraction — the
+ * columns below, `standup`'s movement, the check — goes through here.
+ */
+export function withdrawnEventId(event: JournalEvent): string | undefined {
+  if (retractionReason(event) === undefined) return undefined;
+  return retractedEventId(event);
 }
 
 /**
@@ -389,7 +419,7 @@ function retractedFacts(events: readonly JournalEvent[]): ReadonlySet<string> {
   const retracted = new Set<string>();
   for (const event of events) {
     if (event.type !== ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
-    const target = retractedEventId(event);
+    const target = withdrawnEventId(event);
     if (target !== undefined) retracted.add(target);
   }
   return retracted;

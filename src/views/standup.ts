@@ -11,7 +11,7 @@ import type { JournalEvent, WorkItemFrontmatter } from "../schema/records";
 import { epochSeconds, timestampFromEpochSeconds, TIMESTAMP_PATTERN } from "../schema/time";
 import { compareEvents } from "../store/journal";
 import type { RoadmapNodeRecord } from "../store/layout";
-import { payloadText, roadmapNodeSummary } from "./roadmap";
+import { payloadText, roadmapNodeSummary, withdrawnEventId } from "./roadmap";
 import { epicCoverage, type RunSnapshot } from "./snapshot";
 
 /**
@@ -152,13 +152,14 @@ const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
  * so a store whose journal outgrows memory still renders a standup. Anything
  * else is not movement and is dropped.
  *
- * A retraction is kept for the GROUP HEADERS, not for a line of its own: each
- * header carries roadmapNodeSummary's derived stage, which reads retractions,
- * so a filter that dropped them would print a stage the roadmap view no longer
- * shows. It renders no movement line — the journal is append-only and a standup
- * reports the acts that happened, each named by its id; that a fact was later
- * withdrawn is a statement about the derivation, and the header is where the
- * derivation speaks.
+ * A retraction is kept for TWO reasons. The group headers carry
+ * roadmapNodeSummary's derived stage, which reads retractions, so a filter that
+ * dropped them would print a stage the roadmap view no longer shows. And a
+ * withdrawal is movement in its own right (see retractionMovement): without a
+ * line of its own, a window whose only act was a retraction reports "no
+ * movement", and a release retracted in the SAME window renders `shipped
+ * released 0.3.0` under a header reading `built`, with nothing on the page
+ * reconciling the two.
  */
 export function isStandupEvent(event: JournalEvent): boolean {
   return (
@@ -217,6 +218,10 @@ function movements(inputs: StandupInputs): Movement[] {
   const runItems = new Map(inputs.runs.map(({ run }) => [run.id, run.item]));
   const status = new Map<string, string>();
   const found: Movement[] = [];
+  // A retraction names its target by id and carries no item ref of its own, so
+  // the whole window's events are indexed before the walk: the target may sit
+  // anywhere, including well before the window's lower edge.
+  const byId = new Map(inputs.events.map((event) => [event.id, event]));
   for (const event of [...inputs.events].sort(compareEvents)) {
     const inWindow = event.ts >= inputs.since;
 
@@ -252,6 +257,11 @@ function movements(inputs: StandupInputs): Movement[] {
       });
       continue;
     }
+    if (event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) {
+      const retracted = retractionMovement(event, byId);
+      if (retracted !== undefined) found.push(retracted);
+      continue;
+    }
     const lifecycle = lifecycleMovement(event);
     if (lifecycle !== undefined) found.push(lifecycle);
   }
@@ -284,6 +294,44 @@ function lifecycleMovement(event: JournalEvent): Movement | undefined {
     return of("shipped", `released ${payloadText(event.payload, RELEASE_VERSION_PAYLOAD_KEY)}`);
   }
   return undefined;
+}
+
+/**
+ * A withdrawal, as movement: `retracted  <what the withdrawn act's own line
+ * said> (act <its id>)`, named by the retraction's id like every other line.
+ *
+ * The original act line stays exactly where it was — the journal is append-only
+ * and a standup reports what happened — so a same-window pair reads as the two
+ * acts it is: the release was announced, then taken back. The withdrawn act's
+ * OWN words are reused verbatim (lifecycleMovement, the one place they live) so
+ * a reader can match the two lines without translating between them.
+ *
+ * It groups under the WITHDRAWN fact's item, because the retraction carries no
+ * item ref of its own — the event-id edge is the whole relationship — and that
+ * is the item whose derived stage just changed.
+ *
+ * Undefined when the retraction withdraws nothing: an incomplete payload
+ * (withdrawnEventId requires a target AND a reason), an id no event here
+ * carries, or a target that is not a lifecycle fact. That is the same silence
+ * the derivation keeps, which is the point — a line here for a retraction the
+ * columns ignored would report a change that did not happen.
+ */
+function retractionMovement(
+  event: JournalEvent,
+  byId: ReadonlyMap<string, JournalEvent>,
+): Movement | undefined {
+  const target = withdrawnEventId(event);
+  if (target === undefined) return undefined;
+  const withdrawn = byId.get(target);
+  if (withdrawn === undefined) return undefined;
+  const said = lifecycleMovement(withdrawn);
+  if (said === undefined) return undefined;
+  return {
+    ...(withdrawn.item === undefined ? {} : { item: withdrawn.item }),
+    event,
+    verb: "retracted",
+    detail: `${said.verb} ${said.detail} (act ${withdrawn.id})`,
+  };
 }
 
 /** The bucket an act with no item ref falls into — shown, never dropped. */

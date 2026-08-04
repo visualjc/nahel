@@ -38,7 +38,6 @@ import {
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
-  RETRACTION_REASON_PAYLOAD_KEY,
   ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 } from "../schema/events";
 import { epochSeconds } from "../schema/time";
@@ -56,6 +55,7 @@ import {
   featureDevStatus,
   featureStatus,
   retractedEventId,
+  retractionReason,
   ROADMAP_COLUMN_FACT_TYPES,
 } from "../views/roadmap";
 
@@ -847,18 +847,20 @@ function checkRoadmapRetractions(state: ParsedState): Finding[] {
   for (const event of state.events) {
     if (event.type !== ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
     const target = retractedEventId(event);
-    const reason = event.payload[RETRACTION_REASON_PAYLOAD_KEY];
-    const stated = typeof reason === "string" && reason.trim() !== "";
-    if (target === undefined || !stated) {
+    if (target === undefined || retractionReason(event) === undefined) {
       findings.push({
         severity: "warning",
         check: "roadmap.retraction-malformed",
         message:
           `retraction ${event.id} carries no ${target === undefined ? "`event` id" : "`reason`"} — ` +
-          "a retraction withdraws ONE named lifecycle fact and says why",
-        fix: `re-log it in full: \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE} --data event=<event-id> --data reason="<why>"\` (this one changes nothing)`,
+          "a retraction withdraws ONE named lifecycle fact and says why, and this one withdraws nothing",
+        fix: `re-log it in full: \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE} --data event=<event-id> --data reason="<why>"\``,
       });
-      if (target === undefined) continue;
+      // Nothing further to say. It never reached whatever it named — the
+      // derivation goes through withdrawnEventId, which requires both halves —
+      // so a second finding about that target would read as a second defect and
+      // imply the retraction otherwise worked.
+      continue;
     }
     const found = byId.get(target);
     if (found === undefined) {

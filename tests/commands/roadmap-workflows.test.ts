@@ -215,6 +215,43 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("later");
   });
 
+  /**
+   * The candidate rule as Jim revised it (PR #26 follow-up C1). The doc used to
+   * draw the candidate line at status `backlog`, which contradicted the
+   * roadmap's own built/in-flight/planned goal: a product whose features are
+   * already delivered would migrate to an EMPTY roadmap, and speed-count —
+   * where the shipped work IS the product — would come out historyless.
+   */
+  test("the candidate line is TOP-LEVEL and not dropped — done features included", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    expect(body).toContain("top-level");
+    // The line is drawn by PARENT, not by status: a child item is a piece of
+    // work under the feature that earns the node.
+    expect(body).toContain("no parent");
+    // Every status but one, named so the reader picks rather than infers.
+    for (const status of ["backlog", "in-progress", "in-review", "blocked", "done"]) {
+      expect(body).toContain(status);
+    }
+    expect(body).toContain("dropped");
+    // A done top-level feature is BUILT capability the roadmap keeps carrying,
+    // and its node's column derives itself (childless-epic rule, or a rollup).
+    expect(body).toContain("derive");
+    expect(body).toContain("built");
+    // The superseded rule is GONE, not merely contradicted further down.
+    expect(body).not.toContain("migration covers the backlog");
+    expect(body).not.toContain("every item at status `backlog`");
+  });
+
+  test("pre-history is explicitly OUT: a bare node claiming shipped history is false history", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    // A capability that shipped before the store existed carries no work item,
+    // so its node would render `planned` while claiming shipped.
+    expect(body).toContain("before this store existed");
+    expect(body).toContain("false history");
+    // And the honest answer: wait for the separately-designed import.
+    expect(body).toContain("historical import");
+  });
+
   test("the selection is a judgment, so the doc says whose it is and what a near-miss is", async () => {
     const { body } = await shippedWorkflow("migrate-roadmap.md");
     expect(body).toContain("judgment");
@@ -350,6 +387,18 @@ describe("the vocabulary the migration is recorded under (F6)", () => {
     expect(defined).toContain("backlog");
     expect(defined).toContain("`nahel status`");
     expect(defined).toContain("`nahel/workflows/migrate-roadmap.md`");
+  });
+
+  test("the glossary draws the candidate line where the workflow draws it (C1)", async () => {
+    const defined = await entry("Roadmap migration");
+    // Top-level and not dropped — done included, so a delivered product
+    // migrates with its history rather than to an empty roadmap.
+    expect(defined).toContain("top-level");
+    expect(defined).toContain("dropped");
+    expect(defined).toContain("done");
+    // A glossary that still says "backlog item" as the RULE teaches the
+    // superseded contract to the next store's migrating agent.
+    expect(defined).not.toContain("roadmap-shaped **backlog** item");
   });
 
   test("the glossary states the journal-first discipline and the event that carries the set", async () => {

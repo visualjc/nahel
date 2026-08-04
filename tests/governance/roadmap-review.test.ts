@@ -369,3 +369,75 @@ describe("awaitingRoadmapReview — what the count and the node list mean", () =
     expect(status.nodes).toEqual([{ id: "brokenev", name: "brokenev" }]);
   });
 });
+
+/**
+ * Retraction (PR #26 follow-up A1): withdrawing a lifecycle fact CHANGES what
+ * every roadmap surface derives — a feature can drop from `released` back to
+ * `built` without a single record write — so under a human-owned product it is
+ * a roadmap act the human should see, exactly like a node edit.
+ *
+ * It names no node, though, and cannot: the fact it withdraws covers an epic
+ * SUBTREE, and this function reads governance and journal events only. So the
+ * act is COUNTED and no node is invented for it — the alternative, keying it by
+ * its own act id like a malformed node payload, would print an event id in a
+ * list of node slugs and read as a node that does not exist.
+ */
+describe("awaitingRoadmapReview — a retracted lifecycle fact is a roadmap act", () => {
+  const COLUMN_RETRACTED = "roadmap.column-retracted";
+
+  /** One retraction, as `nahel log` writes it: no record payload at all. */
+  function retractionEvent(ts: string, actor: Actor, target: string): JournalEvent {
+    counter += 1;
+    return {
+      id: `retr${String(counter).padStart(4, "0")}`,
+      ts,
+      seq: 0,
+      type: COLUMN_RETRACTED,
+      actor,
+      payload: { event: target, reason: "logged against the wrong epic" },
+    };
+  }
+
+  test.each(HUMAN_MODES)("under governance.product: %s an agent retraction raises the surface", (product) => {
+    const events = [
+      nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      retractionEvent("2026-08-01T11:00:00Z", AGENT, "swp00001"),
+    ];
+    const status = awaitingRoadmapReview({ product, architecture: "human" }, HUMAN, events)!;
+    expect(status).toBeDefined();
+    expect(status.changes).toBe(1);
+    // It touched no node, and none is invented for it.
+    expect(status.nodes).toEqual([]);
+    expect(status.more).toBe(0);
+  });
+
+  test("it is counted ALONGSIDE the node acts, which still name their nodes", () => {
+    const events = [
+      nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      nodeEvent("2026-08-01T11:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+      retractionEvent("2026-08-01T11:30:00Z", AGENT, "swp00001"),
+    ];
+    const status = awaitingRoadmapReview(undefined, HUMAN, events)!;
+    expect(status.changes).toBe(2);
+    expect(status.nodes).toEqual([{ id: "n1", name: "alpha" }]);
+  });
+
+  test("under governance.product: agent it raises nothing, like every other roadmap act", () => {
+    const events = [
+      nodeEvent("2026-08-01T10:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      retractionEvent("2026-08-01T11:00:00Z", AGENT, "swp00001"),
+    ];
+    expect(
+      awaitingRoadmapReview({ product: "agent", architecture: "human" }, HUMAN, events),
+    ).toBeUndefined();
+  });
+
+  test("a HUMAN retraction clears the window — a human who corrects the roadmap has seen it", () => {
+    const events = [
+      nodeEvent("2026-08-01T09:00:00Z", HUMAN, { id: "n1", name: "alpha" }),
+      nodeEvent("2026-08-01T10:00:00Z", AGENT, { id: "n1", name: "alpha" }),
+      retractionEvent("2026-08-01T11:00:00Z", HUMAN, "swp00001"),
+    ];
+    expect(awaitingRoadmapReview(undefined, HUMAN, events)).toBeUndefined();
+  });
+});

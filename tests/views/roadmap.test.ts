@@ -738,6 +738,165 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
   });
 });
 
+/**
+ * Retraction (PR #26 follow-up A1): a lifecycle fact recorded in error is
+ * withdrawn by a LATER event naming it, never by deleting the journal line —
+ * the journal is append-only, so the correction is itself an act.
+ *
+ * The edge is the EVENT ID and nothing else: not the retraction's timestamp,
+ * not its `item` ref, not who wrote it. A retracted fact leaves the
+ * column-winner computation entirely and the winner is recomputed from the
+ * survivors, so retracting the latest sweep promotes the one before it rather
+ * than emptying the column.
+ *
+ * Only the three lifecycle facts may be retracted. A retraction naming
+ * anything else — an item mutation, another retraction, an id no event carries
+ * — is structurally invalid: `validate` warns, and the derivation ignores it
+ * rather than guessing what was meant.
+ */
+describe("featureStatus — retracted lifecycle facts", () => {
+  const COLUMN_RETRACTED = "roadmap.column-retracted";
+
+  /** One retraction naming `target`, with the reason every retraction carries. */
+  function retraction(id: string, target: string, ts = "2026-07-20T12:00:00Z"): JournalEvent {
+    return makeEvent({
+      id,
+      ts,
+      type: COLUMN_RETRACTED,
+      payload: { event: target, reason: "logged against the wrong epic" },
+    });
+  }
+
+  /** A feature over an epic with one done child, deriving over the events given. */
+  function statusOf(build: (epic: string) => readonly JournalEvent[]) {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    return featureStatus(node, items, build(epic.id));
+  }
+
+  test("the winner is recomputed from the SURVIVORS, not emptied", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, ts: "2026-07-16T12:00:00Z", payload: { failed: 0 } }),
+      makeEvent({ id: "aaaaaaa2", item: epic, ts: "2026-07-17T12:00:00Z", payload: { failed: 9 } }),
+      retraction("aaaaaaa3", "aaaaaaa2"),
+    ]);
+
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+    expect(status.stage).toBe("tested");
+  });
+
+  test("retracting the ONLY covering sweep empties the column and drops back to the rollup", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      retraction("aaaaaaa3", "aaaaaaa1"),
+    ]);
+
+    expect(status.qa).toBe("—");
+    expect(status.stage).toBe("built");
+  });
+
+  test("retracting the release drops the stage to the deploy below it", () => {
+    const status = statusOf((epic) => [
+      makeEvent({
+        id: "aaaaaaa1",
+        item: epic,
+        type: DEPLOY_COMPLETED_EVENT_TYPE,
+        payload: { environment: "prod" },
+      }),
+      makeEvent({
+        id: "aaaaaaa2",
+        item: epic,
+        type: RELEASE_ANNOUNCED_EVENT_TYPE,
+        payload: { version: "0.3.0" },
+      }),
+      retraction("aaaaaaa3", "aaaaaaa2"),
+    ]);
+
+    expect(status.release).toBe("—");
+    expect(status.deploy).toBe("deployed prod 2026-07-16T12:00:00Z");
+    expect(status.stage).toBe("deployed");
+  });
+
+  test("a retraction naming a NON-lifecycle event is ignored — the fact stands", () => {
+    const status = statusOf((epic) => [
+      makeEvent({
+        id: "aaaaaaa0",
+        item: epic,
+        type: CORE_EVENT_TYPES.itemUpdated,
+        payload: { target: "item" },
+      }),
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      retraction("aaaaaaa3", "aaaaaaa0"),
+    ]);
+
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("a retraction naming ANOTHER retraction is ignored; the first one still applies", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      retraction("aaaaaaa3", "aaaaaaa1"),
+      retraction("aaaaaaa4", "aaaaaaa3"),
+    ]);
+
+    expect(status.qa).toBe("—");
+  });
+
+  test("a retraction naming an id no event carries changes nothing at all", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      retraction("aaaaaaa3", "zzzzzzzz"),
+    ]);
+
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("two identical retractions are one — retraction is idempotent", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, ts: "2026-07-16T12:00:00Z", payload: { failed: 0 } }),
+      makeEvent({ id: "aaaaaaa2", item: epic, ts: "2026-07-17T12:00:00Z", payload: { failed: 9 } }),
+      retraction("aaaaaaa3", "aaaaaaa2"),
+      retraction("aaaaaaa4", "aaaaaaa2"),
+    ]);
+
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+
+  test("a retraction recorded BEFORE the fact it names still removes it — the id is the edge", () => {
+    const status = statusOf((epic) => [
+      retraction("aaaaaaa3", "aaaaaaa1", "2026-01-01T00:00:00Z"),
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+    ]);
+
+    expect(status.qa).toBe("—");
+  });
+
+  test("a retraction carrying no item ref of its own still removes the fact it names", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      // No `item` on the retraction — coverage is the FACT's business.
+      retraction("aaaaaaa3", "aaaaaaa1"),
+    ]);
+
+    expect(status.qa).toBe("—");
+  });
+
+  test("a retraction whose payload names no event is ignored, not read as a wildcard", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      makeEvent({
+        id: "aaaaaaa3",
+        type: COLUMN_RETRACTED,
+        payload: { reason: "no target recorded" },
+      }),
+      makeEvent({ id: "aaaaaaa4", type: COLUMN_RETRACTED, payload: { event: "  ", reason: "x" } }),
+    ]);
+
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+  });
+});
+
 describe("featureStatus — the epic's subtree is walked once", () => {
   /**
    * Wrap each item so reading `parent` is counted. The subtree walk is the

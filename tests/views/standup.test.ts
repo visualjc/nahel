@@ -13,7 +13,7 @@ import type {
   WorkItemFrontmatter,
 } from "../../src/schema/records";
 import type { RoadmapNodeRecord } from "../../src/store/layout";
-import { renderStandup, resolveSince } from "../../src/views/standup";
+import { isStandupEvent, renderStandup, resolveSince } from "../../src/views/standup";
 import { makeFrontmatter, makeRun, seededEnv } from "../store/helpers";
 
 /**
@@ -568,5 +568,69 @@ describe("renderStandup — determinism", () => {
     };
 
     expect(renderStandup(inputs)).toBe(renderStandup(inputs));
+  });
+});
+
+/**
+ * Retraction (PR #26 follow-up A1). A standup's group header carries the node's
+ * derived stage — the SAME derivation `nahel roadmap` renders — so a retracted
+ * lifecycle fact has to reach this view, or the header would claim a stage the
+ * roadmap no longer shows.
+ *
+ * The act LINES are deliberately untouched: the journal is append-only and a
+ * standup reports what happened, naming each act by id. The release was
+ * announced; that it was later withdrawn is a fact about the derivation, and
+ * the header is where the derivation speaks.
+ */
+describe("renderStandup — a retracted lifecycle fact", () => {
+  const COLUMN_RETRACTED = "roadmap.column-retracted";
+
+  test("the retraction type is standup input — the header derives over it", () => {
+    expect(
+      isStandupEvent({
+        id: "retr0001",
+        ts: "2026-07-30T09:00:00Z",
+        seq: 0,
+        type: COLUMN_RETRACTED,
+        actor: { kind: "agent", id: "claude-code" },
+        payload: { event: "aaaaaaa1", reason: "wrong epic" },
+      }),
+    ).toBe(true);
+  });
+
+  test("the node header drops back to the rollup while the announced act still shows", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    const closed = itemEvent(env, { ...fixture.child, status: "done" }, "2026-07-30T09:00:00Z");
+    const release = logged(
+      env,
+      RELEASE_ANNOUNCED_EVENT_TYPE,
+      fixture.epic.id,
+      { version: "0.3.0" },
+      "2026-07-31T09:00:00Z",
+    );
+    const retraction = logged(
+      env,
+      COLUMN_RETRACTED,
+      undefined,
+      { event: release.id, reason: "announced against the wrong epic" },
+      "2026-07-31T10:00:00Z",
+    );
+
+    const out = renderStandup({
+      since: "2026-07-26T09:15:00Z",
+      nodes: [fixture.node],
+      items: fixture.items,
+      runs: [],
+      events: [fixture.birth, closed, release, retraction],
+    });
+
+    // The header reads the rollup, not the withdrawn release.
+    expect(out).toContain(
+      `detached-state-repo  feature  built  id=${fixture.node.frontmatter.id}`,
+    );
+    expect(out).not.toContain("feature  released");
+    // The act itself is still reported — nothing is erased from the journal.
+    expect(out).toContain(`shipped  released 0.3.0  act=${release.id}`);
   });
 });

@@ -737,6 +737,34 @@ describe("renderBrief — roadmap changes since your last touch (Phase 4 F5)", (
     expect(brief).not.toContain(AWAITING);
   });
 
+  /**
+   * A retracted lifecycle fact (PR #26 follow-up A1) is a roadmap change that
+   * touches no node — it withdraws a `release.announced`, not a record — so the
+   * line has to count the act without a node clause. `on 0 nodes — ` would be a
+   * list header over nothing, and naming the act's own id would print an event
+   * id where the reader expects a node slug.
+   */
+  test("an act that names no node counts, with no node clause and the pointer instead", () => {
+    const retraction: JournalEvent = {
+      id: "retract1",
+      ts: "2026-08-01T11:00:00Z",
+      seq: 0,
+      type: "roadmap.column-retracted",
+      actor: { kind: "agent", id: "claude-code" },
+      payload: { event: "sweep001", reason: "logged against the wrong epic" },
+    };
+    const brief = renderBrief(
+      makeInputs({
+        governance: { product: "human", architecture: "human" },
+        events: [HUMAN_TOUCH, retraction],
+      }),
+    );
+    const line = brief.split("\n").find((text) => text.startsWith(AWAITING))!;
+    expect(line).toBe(
+      "roadmap changes since your last touch (2026-08-01T10:00:00Z): 1 agent act — nahel roadmap",
+    );
+  });
+
   test("beyond the cap the named nodes stop and the remainder is counted, with the pointer", () => {
     const events: JournalEvent[] = [HUMAN_TOUCH];
     for (let i = 0; i < 12; i += 1) {

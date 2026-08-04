@@ -495,3 +495,77 @@ describe("the vocabulary the two types are recorded under (F9)", () => {
     expect(defined).toContain("no stage field");
   });
 });
+
+/**
+ * Retraction (PR #26 follow-up A1), driven end to end: a lifecycle fact
+ * recorded in error is withdrawn by `nahel log roadmap.column-retracted`, and
+ * the rendered roadmap changes with NO record write anywhere — the journal is
+ * append-only, so the correction is itself an act.
+ */
+describe("a lifecycle fact retracted through the REAL logging path (A1)", () => {
+  const COLUMN_RETRACTED = "roadmap.column-retracted";
+
+  /** The id of the one event of this type in the store. */
+  async function idOf(layout: StoreLayout, type: string): Promise<string> {
+    const matches = (await journalEvents(layout)).filter((event) => event.type === type);
+    expect(matches).toHaveLength(1);
+    return matches[0]!.id;
+  }
+
+  test("retracting the release drops the rendered stage to the deploy below it", async () => {
+    const { root, layout, env } = await setup();
+    const { epic } = await feature(env, root);
+    await log(env, root, deployArgs(epic));
+    await log(env, root, releaseArgs(epic));
+    expect(await view(env, root)).toContain("released 0.3.0");
+
+    const release = await idOf(layout, RELEASE_ANNOUNCED_EVENT_TYPE);
+    await log(env, root, [
+      COLUMN_RETRACTED,
+      "--data",
+      `event=${release}`,
+      "--data",
+      "reason=announced against the wrong epic",
+    ]);
+
+    const after = await view(env, root);
+    expect(after).toContain("detached-state-repo  deployed");
+    expect(after).toContain("release=—");
+    expect(after).not.toContain("released 0.3.0");
+    // Nothing was deleted: the announcement is still in the journal.
+    expect(await idOf(layout, RELEASE_ANNOUNCED_EVENT_TYPE)).toBe(release);
+  });
+
+  test("re-logging the fact is how a mis-retraction is corrected — a new id nothing names", async () => {
+    const { root, layout, env } = await setup();
+    const { epic } = await feature(env, root);
+    await log(env, root, releaseArgs(epic));
+    const release = await idOf(layout, RELEASE_ANNOUNCED_EVENT_TYPE);
+    await log(env, root, [
+      COLUMN_RETRACTED,
+      "--data",
+      `event=${release}`,
+      "--data",
+      "reason=retracted by mistake",
+    ]);
+    expect(await view(env, root)).toContain("release=—");
+
+    await log(env, root, releaseArgs(epic));
+
+    const after = await view(env, root);
+    expect(after).toContain("released 0.3.0");
+    expect(after).toContain("detached-state-repo  released");
+  });
+
+  test("the glossary defines the type, its payload, and the no-un-retraction rule", async () => {
+    const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
+    const defined = glossary.split("\n").find((each) => each.startsWith("- **Retraction** —"));
+    expect(defined).toBeDefined();
+    expect(defined!).toContain(`\`${COLUMN_RETRACTED}\``);
+    expect(defined!).toContain("`event`");
+    expect(defined!).toContain("`reason`");
+    expect(defined!).toContain("idempotent");
+    expect(defined!).toContain("re-logging the original fact");
+    expect(defined!).toContain("append-only");
+  });
+});

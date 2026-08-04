@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CORE_EVENT_TYPES, RELEASE_ANNOUNCED_EVENT_TYPE } from "../../src/schema/events";
-import { appendEvent } from "../../src/store/journal";
+import {
+  CORE_EVENT_TYPES,
+  QA_SWEEP_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+} from "../../src/schema/events";
+import { appendEvent, readJournal } from "../../src/store/journal";
 import { generateId } from "../../src/schema/id";
-import type { RoadmapNodeFrontmatter } from "../../src/schema/records";
+import type { JournalEvent, RoadmapNodeFrontmatter } from "../../src/schema/records";
 import { mutate } from "../../src/store/mutate";
 import { validateStore } from "../../src/validate";
 import {
@@ -600,5 +604,138 @@ describe("validate — the PRD lifecycle (F10)", () => {
     expect(findings[0]!.severity).toBe("warning");
     expect(findings[0]!.message).toContain(node.id);
     expect(findings[0]!.message).toContain("docs/prds/never-written.md");
+  });
+});
+
+/**
+ * Lifecycle-fact retraction (PR #26 follow-up A1). A retraction is an ordinary
+ * logged event, so nothing about it is refused at write time — which is
+ * exactly why `validate` has to read it back. Three shapes are worth saying,
+ * and all three are WARNINGS: the derivation ignores an invalid retraction, so
+ * the store still renders, it just renders as though the retraction were not
+ * there.
+ */
+describe("validate — retracted lifecycle facts (A1)", () => {
+  const COLUMN_RETRACTED = "roadmap.column-retracted";
+
+  /** A feature node over an epic, with one covering sweep already logged. */
+  async function sweptFeature(fixture: ValidateFixture) {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "swept-epic", type: "plan", lane: "full" });
+    await createItem(fixture, { name: "leaf-work", status: "done", parent: epic.id });
+    const node = await createNode(fixture, {
+      name: "swept-feature",
+      parent: product.id,
+      epic: epic.id,
+    });
+    const sweep = await appendEvent(fixture.layout, fixture.env, {
+      type: QA_SWEEP_EVENT_TYPE,
+      actor: { kind: "agent", id: "claude-code" },
+      item: epic.id,
+      payload: { failed: 0 },
+      session: fixture.agent.session,
+    });
+    return { product, epic, node, sweep };
+  }
+
+  /** Log one retraction with the payload given. */
+  async function retract(
+    fixture: ValidateFixture,
+    payload: Record<string, unknown>,
+  ): Promise<JournalEvent> {
+    return appendEvent(fixture.layout, fixture.env, {
+      type: COLUMN_RETRACTED,
+      actor: { kind: "agent", id: "claude-code" },
+      payload,
+      session: fixture.agent.session,
+    });
+  }
+
+  test("a retraction naming an event id the journal does not carry is a WARNING", async () => {
+    const fixture = await setup();
+    await sweptFeature(fixture);
+    const retraction = await retract(fixture, { event: "zzzzzzzz", reason: "wrong epic" });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.retraction-target-missing",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(retraction.id);
+    expect(findings[0]!.message).toContain("zzzzzzzz");
+    // It may still resolve: the event it names can arrive by a later merge.
+    expect(findings[0]!.fix).toContain("merge");
+  });
+
+  test("a retraction naming a NON-lifecycle event is a WARNING naming the type it found", async () => {
+    const fixture = await setup();
+    const { node } = await sweptFeature(fixture);
+    // The node's own creation act — a real event, and not a retractable fact.
+    const events = await Array.fromAsync(readJournal(fixture.layout));
+    const creation = events.find(
+      (event) =>
+        event.type === CORE_EVENT_TYPES.roadmapNodeCreated &&
+        JSON.stringify(event.payload).includes(node.id),
+    )!;
+    const retraction = await retract(fixture, { event: creation.id, reason: "mistake" });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.retraction-target-kind",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(retraction.id);
+    expect(findings[0]!.message).toContain(creation.id);
+    expect(findings[0]!.message).toContain(CORE_EVENT_TYPES.roadmapNodeCreated);
+  });
+
+  test("a retraction naming ANOTHER retraction is the same WARNING — retractions are not facts", async () => {
+    const fixture = await setup();
+    const { sweep } = await sweptFeature(fixture);
+    const first = await retract(fixture, { event: sweep.id, reason: "wrong epic" });
+    await retract(fixture, { event: first.id, reason: "changed my mind" });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.retraction-target-kind",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(first.id);
+    // The fix is the doctrine: re-log the fact, never un-retract the retraction.
+    expect(findings[0]!.fix).toContain("re-log");
+  });
+
+  test("a retraction with no readable `event`, or no reason, is MALFORMED", async () => {
+    const fixture = await setup();
+    const { sweep } = await sweptFeature(fixture);
+    const noTarget = await retract(fixture, { reason: "forgot the target" });
+    const blankTarget = await retract(fixture, { event: "   ", reason: "blank" });
+    const noReason = await retract(fixture, { event: sweep.id });
+    const blankReason = await retract(fixture, { event: sweep.id, reason: "  " });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.retraction-malformed",
+    );
+    expect(findings).toHaveLength(4);
+    expect(findings.every((finding) => finding.severity === "warning")).toBe(true);
+    const messages = findings.map((finding) => finding.message).join("\n");
+    for (const event of [noTarget, blankTarget, noReason, blankReason]) {
+      expect(messages).toContain(event.id);
+    }
+  });
+
+  test("a well-formed retraction of a real sweep reports NOTHING, and fails nothing", async () => {
+    const fixture = await setup();
+    const { sweep } = await sweptFeature(fixture);
+    await retract(fixture, { event: sweep.id, reason: "logged against the wrong epic" });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.retraction-target-missing")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.retraction-target-kind")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.retraction-malformed")).toEqual([]);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
   });
 });

@@ -1,11 +1,12 @@
 import { DECISION_TICKET_STATES, ROADMAP_HORIZONS } from "../schema/enums";
 import {
-  ARCHIVAL_RELEASE_PAYLOAD_KEYS,
   CORE_EVENT_TYPES,
   DEPLOY_COMPLETED_EVENT_TYPE,
   DEPLOY_ENVIRONMENT_PAYLOAD_KEY,
+  DEPLOY_REQUIRED_PAYLOAD_KEYS,
   QA_SWEEP_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
+  RELEASE_REQUIRED_PAYLOAD_KEYS,
   RELEASE_VERSION_PAYLOAD_KEY,
   RETRACTION_EVENT_PAYLOAD_KEY,
   RETRACTION_REASON_PAYLOAD_KEY,
@@ -494,6 +495,34 @@ function carriesPayload(payload: Record<string, unknown>, key: string): boolean 
 }
 
 /**
+ * Which of `keys` a payload carries no nonblank value for, in the order given —
+ * EMPTY means well-formed. The one place "what is this fact missing" is
+ * decided, so the stage word, the archival gate and `validate`'s findings
+ * cannot answer it three different ways.
+ */
+function missingPayloadKeys(payload: Record<string, unknown>, keys: readonly string[]): string[] {
+  return keys.filter((key) => !carriesPayload(payload, key));
+}
+
+/** A lifecycle fact whose payload cannot carry its job: the act, and what it lacks. */
+export interface IncompleteFact {
+  /** The event id — what a refusal or a finding names, since re-logging it is the fix. */
+  event: string;
+  /** The required keys it carries no nonblank value for, in the documented order. */
+  missing: string[];
+}
+
+/** The winning fact's gaps, or undefined when there is no winner and when there are none. */
+function incompleteFact(
+  event: JournalEvent | undefined,
+  keys: readonly string[],
+): IncompleteFact | undefined {
+  if (event === undefined) return undefined;
+  const missing = missingPayloadKeys(event.payload, keys);
+  return missing.length === 0 ? undefined : { event: event.id, missing };
+}
+
+/**
  * A payload value for a column: absent, null, or blank renders `?` — brief's
  * absent-payload-key convention, widened to blank for carriesPayload's reason,
  * and the render table spells both cases the same way. Shared with `standup`,
@@ -543,6 +572,14 @@ export interface RoadmapFeatureStatus {
    * including for a sweep that honestly found failures.
    */
   unreadableSweep?: string;
+  /**
+   * The winning covering release / deploy whose payload cannot carry its row —
+   * present exactly when that row silently declined to advance, so `validate`
+   * can name the act and the keys it lacks. The two siblings of
+   * `unreadableSweep`, one per row above it.
+   */
+  incompleteRelease?: IncompleteFact;
+  incompleteDeploy?: IncompleteFact;
 }
 
 /**
@@ -569,18 +606,30 @@ export interface RoadmapFeatureStatus {
  * recency is what keeps the stage stable — a deploy recorded after a release
  * must not regress the feature to `deployed`.
  *
- * The SWEEP row advances only on `failed === 0` exactly (A2, superseding the
- * earlier "a sweep ran" reading). A stage is what a reader scans a column of,
- * and `tested` beside a sweep that found four failures reads as a feature that
- * passed. A count that is missing, non-numeric or negative is not a pass
- * either: it is a summary nobody can read, and treating it as one would let a
- * workflow reach `tested` by logging nothing at all. Every one of those rows
- * falls through to the dev rollup, and `unreadableSweep` above is how
- * `validate` names the unreadable case rather than leaving it silent.
+ * EVERY row advances on a WELL-FORMED winner only, and on nothing else. A stage
+ * is what a reader scans a column of, so the word has to mean the same thing in
+ * every row: a fact that could carry it said so.
  *
- * The COLUMN is untouched by any of that — F2's render table is the contract,
- * so a feature legitimately reads `built  qa=tested <ts> (4 failed)`: the stage
- * says where the feature stands, the column says what the sweep found.
+ * - `released` — the winning release carries all of RELEASE_REQUIRED_PAYLOAD_KEYS,
+ *   nonblank. Deliberately the SAME predicate `nahel roadmap archive` gates on:
+ *   a view promising `released` where the verb refuses is a view that lies
+ *   about what the store has earned.
+ * - `deployed` — the winning deploy carries a nonblank `environment`.
+ * - `tested` — `failed === 0` exactly (A2, superseding the earlier "a sweep
+ *   ran" reading): `tested` beside a sweep that found four failures reads as a
+ *   feature that passed.
+ *
+ * A count or a key that is missing or blank is not a pass, a ship or a release
+ * — it is a summary nobody can read, and treating one as a fact would let a
+ * workflow reach the strongest word on the board by logging nothing at all.
+ * Every such row falls through to the one below it, down to the dev rollup, and
+ * `unreadableSweep` / `incompleteRelease` / `incompleteDeploy` above are how
+ * `validate` names what quietly did not happen.
+ *
+ * The COLUMNS are untouched by any of that — F2's render table is the contract,
+ * so a feature legitimately reads `built  qa=tested <ts> (4 failed)` or
+ * `built  release=released ? <ts>`: the column shows the fact the store holds,
+ * the stage says what that fact earned.
  */
 /**
  * The winning event of each column type over an already-computed coverage set:
@@ -632,11 +681,16 @@ export function featureStatus(
   if (sweep !== undefined) {
     qa = failed === 0 ? `tested ${sweep.ts}` : `tested ${sweep.ts} (${failed ?? "?"} failed)`;
   }
-  // First match wins, top-down — the precedence table read literally. The sweep
-  // row advances on a CLEAN sweep only (A2); every other count falls through.
+  // Every row advances on a WELL-FORMED winner only: the release's three keys,
+  // the deploy's environment, the sweep's clean count. A malformed winner is
+  // not a fact the word can rest on, so it falls through to the next row — and
+  // is named below, so `validate` can say what quietly did not happen.
+  const incompleteRelease = incompleteFact(released, RELEASE_REQUIRED_PAYLOAD_KEYS);
+  const incompleteDeploy = incompleteFact(deployed, DEPLOY_REQUIRED_PAYLOAD_KEYS);
+  // First match wins, top-down — the precedence table read literally.
   let stage: RoadmapStage;
-  if (released !== undefined) stage = "released";
-  else if (deployed !== undefined) stage = "deployed";
+  if (released !== undefined && incompleteRelease === undefined) stage = "released";
+  else if (deployed !== undefined && incompleteDeploy === undefined) stage = "deployed";
   else if (failed === 0) stage = "tested";
   else stage = rollup.status;
   return {
@@ -649,6 +703,8 @@ export function featureStatus(
     ...(sweep !== undefined && !(failed !== undefined && failed >= 0)
       ? { unreadableSweep: sweep.id }
       : {}),
+    ...(incompleteRelease === undefined ? {} : { incompleteRelease }),
+    ...(incompleteDeploy === undefined ? {} : { incompleteDeploy }),
     deploy:
       deployed === undefined
         ? NO_VALUE
@@ -667,7 +723,7 @@ export interface ArchivalRelease {
   /** The winning unretracted `release.announced` covering the node. */
   event: JournalEvent;
   /**
-   * The ARCHIVAL_RELEASE_PAYLOAD_KEYS it carries no nonblank value for, in that
+   * The RELEASE_REQUIRED_PAYLOAD_KEYS it carries no nonblank value for, in that
    * order. EMPTY means archival-qualified — the one predicate `nahel roadmap
    * archive` gates on and `validate` reports against.
    */
@@ -676,18 +732,24 @@ export interface ArchivalRelease {
 
 /**
  * Whether a feature node's release can carry an archival (F10, tightened by
- * A3), and undefined when no unretracted release covers it at all — which is
- * exactly when the derived stage is not `released`.
+ * A3), and undefined when no unretracted release covers it at all.
  *
- * ONE predicate, exported, because two surfaces have to agree on it: the verb
- * that refuses, and `roadmap.prd-unarchived`, which tells a human to run that
- * verb. A check firing where the verb refuses is a warning nobody can act on.
+ * ONE predicate, exported, because three surfaces have to agree on it: the verb
+ * that refuses, `roadmap.prd-unarchived` (which tells a human to run that verb,
+ * so a check firing where the verb refuses is a warning nobody can act on), and
+ * — since the final gate — the `released` STAGE WORD itself, which reads the
+ * same required keys through missingPayloadKeys above. `missing` empty is
+ * therefore exactly `stage === "released"`: the view can no longer promise a
+ * word the verb will not honour.
  *
- * The distinction it draws is deliberate. `stage released` is a VIEW of what
- * the store holds and stays permissive — a release carrying nothing still reads
- * `released` and still renders `released ? <ts>` (F9's ruling). Archival stamps
- * a document closed forever on a header that cites the release, so it demands
- * one a reader can follow back.
+ * What the archival gate does NOT govern is the render: the release COLUMN
+ * stays permissive and prints `released ? <ts>` for a release recording
+ * nothing, because a column shows the fact the store holds and the stage says
+ * what that fact earned.
+ *
+ * This returns the EVENT rather than just its gaps because the archive verb's
+ * refusal has to name the act to re-log; featureStatus keeps the lighter
+ * IncompleteFact shape for the same fact, both off the one key list.
  */
 export function archivalRelease(
   node: RoadmapNodeFrontmatter,
@@ -697,10 +759,7 @@ export function archivalRelease(
   const winners = columnWinners(epicCoverage(items, node.epic), events);
   const event = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
   if (event === undefined) return undefined;
-  return {
-    event,
-    missing: ARCHIVAL_RELEASE_PAYLOAD_KEYS.filter((key) => !carriesPayload(event.payload, key)),
-  };
+  return { event, missing: missingPayloadKeys(event.payload, RELEASE_REQUIRED_PAYLOAD_KEYS) };
 }
 
 /**

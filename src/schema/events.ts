@@ -309,31 +309,40 @@ export const DEPLOY_ENVIRONMENT_PAYLOAD_KEY = "environment";
 export const RELEASE_VERSION_PAYLOAD_KEY = "version";
 
 /**
- * The rest of a release's documented shape. Machinery reads these two as of
- * A3 — no view renders them, but `nahel roadmap archive` REFUSES without them
- * (see ARCHIVAL_RELEASE_PAYLOAD_KEYS), so they are named rather than left as
- * prose a workflow author could spell any way they liked.
+ * The rest of a release's documented shape. Machinery reads these two — no view
+ * renders them, but the stage word and `nahel roadmap archive` both require
+ * them (see RELEASE_REQUIRED_PAYLOAD_KEYS), so they are named rather than left
+ * as prose a workflow author could spell any way they liked.
  */
 export const RELEASE_CHANNEL_PAYLOAD_KEY = "channel";
 export const RELEASE_ANNOUNCEMENT_PAYLOAD_KEY = "announcement";
 
 /**
- * What an ARCHIVAL-QUALIFIED release carries (PR #26 follow-up A3), in the
- * order a refusal lists them.
+ * What a WELL-FORMED lifecycle fact carries, in the order a refusal or a
+ * finding lists the ones it lacks. Each must be present and NONBLANK: a
+ * recorded empty string tells a reader exactly as much as an omitted key.
  *
- * `stage released` and archival-qualified are deliberately different facts. The
- * stage is a VIEW of what the store holds, so it stays permissive: a release
- * carrying nothing still reads `released` and still renders `released ? <ts>`
- * (F9's ruling, unchanged). Archival is not a view — it stamps a document
- * closed FOREVER on a header that cites the release — so it demands a release a
- * reader can follow back: which version, on which channel, announced where.
- * Each must be present and NONBLANK; a recorded empty string tells a reader
- * exactly as much as an omitted key.
+ * ONE list per type, because more than one judgment rests on it. A release's
+ * three keys decide the `released` STAGE WORD *and* whether `nahel roadmap
+ * archive` will stamp a delta closed on that release — deliberately the same
+ * predicate, since a view promising `released` where the verb refuses is a view
+ * that lies about what the store has earned. A deploy's `environment` decides
+ * the `deployed` word the same way. (`ref` and `shipped` stay prose for people:
+ * nothing derives from them, so nothing demands them.)
+ *
+ * What this does NOT touch is the render table (F2/F9): the COLUMNS stay
+ * permissive and print what the store holds — `released ? <ts>`, `deployed ?
+ * <ts>` — because a column shows the fact and the stage says what it earned.
  */
-export const ARCHIVAL_RELEASE_PAYLOAD_KEYS: readonly string[] = [
+export const RELEASE_REQUIRED_PAYLOAD_KEYS: readonly string[] = [
   RELEASE_VERSION_PAYLOAD_KEY,
   RELEASE_CHANNEL_PAYLOAD_KEY,
   RELEASE_ANNOUNCEMENT_PAYLOAD_KEY,
+];
+
+/** The deploy's counterpart: where it went. */
+export const DEPLOY_REQUIRED_PAYLOAD_KEYS: readonly string[] = [
+  DEPLOY_ENVIRONMENT_PAYLOAD_KEY,
 ];
 
 /**

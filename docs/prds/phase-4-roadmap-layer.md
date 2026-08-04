@@ -641,8 +641,8 @@ release does not regress the feature to `deployed`.
 
 | condition (F2's association rule throughout) | stage |
 | --- | --- |
-| a covering `release.announced` exists | `released` |
-| else a covering `deploy.completed` exists | `deployed` |
+| a covering `release.announced` with a nonblank `version`, `channel` and `announcement` | `released` |
+| else a covering `deploy.completed` with a nonblank `environment` | `deployed` |
 | else a covering `qa.sweep-completed` whose payload `failed` is `0` exactly | `tested` |
 | else dev status is `built` | `built` |
 | else dev status is `in-flight` | `in-flight` |
@@ -652,19 +652,29 @@ release does not regress the feature to `deployed`.
 Nothing about the stage is hand-set; it is a pure function of recorded
 events and F2's dev rollup.
 
-**The QA row advances on a clean sweep only** (contract clarification, PR
-#26 review, superseding the earlier reading in which any covering sweep read
-`tested`). A `failed` count greater than zero, missing, non-numeric or
-negative all fall through to the dev-status rows: a stage is what a reader
-scans a column of, `tested` beside four failures reads as a feature that
-passed, and a count nobody can read is not a pass either — otherwise a
-workflow reaches `tested` by logging nothing at all. An unreadable count
-(absent, non-numeric, negative — **not** a legitimate count above zero) is a
-`validate` warning naming the sweep, because holding the feature back
-silently is the failure mode. F2's **render table is unchanged**: the QA
-column still prints `tested <ts> (N failed)` and `tested <ts> (? failed)`
-verbatim, so one line carries both where the feature stands and what the
-sweep found.
+**Every row advances on a well-formed fact only** (contract clarification, PR
+#26 review, superseding the earlier reading in which any covering event of a
+type read that type's word). A stage is what a reader scans a column of, so
+each word has to mean the same thing: a fact that could carry it said so.
+
+- `released` — the winning release carries a **nonblank `version`, `channel`
+  and `announcement`**. Deliberately the **same predicate** the archival gate
+  below demands, so a view can never promise a word `nahel roadmap archive`
+  refuses.
+- `deployed` — the winning deploy carries a **nonblank `environment`**.
+- `tested` — `failed` is `0` **exactly**; greater than zero, missing,
+  non-numeric and negative are none of them a pass.
+
+A fact missing any of that falls through to the row below, down to the
+dev-status rows — otherwise a workflow reaches the strongest word on the
+board by logging nothing at all. Each silent decline is a `validate` warning
+naming the **event and the keys it lacks** (`roadmap.sweep-failed-count`,
+`roadmap.release-incomplete`, `roadmap.deploy-incomplete`), reported over
+**every** node whether or not it carries a `prd`, because holding a feature
+back silently is the failure mode. F2's **render table is unchanged**: the
+columns still print `tested <ts> (N failed)`, `deployed ? <ts>` and
+`released ? <ts>` verbatim, so one line carries both the fact the store holds
+and what that fact earned.
 
 **Acceptance criteria:**
 - Both types are documented vocabulary with defined payload shapes, and are
@@ -684,16 +694,20 @@ sweep found.
 
 - A feature's PRD lives at `docs/prds/<name>.md` and is **live** — edited as
   the feature evolves — until the feature is **archival-qualified**.
-- **Stage `released` and archival-qualified are different facts** (contract
-  clarification, PR #26 review). The stage is a **view** of what the store
-  holds and stays permissive by design: any covering `release.announced` reads
-  `released`, and one recording nothing still renders `released ? <ts>` (F2's
-  render table, F9's precedence table — both unchanged). Archival is not a
-  view. It stamps a document closed **forever** on a header that **cites the
-  release**, so it demands a release a reader can follow back: the winning
-  unretracted `release.announced` must carry a **nonblank `version`,
-  `channel` and `announcement`**. Without all three the verb refuses, naming
-  the release event and every missing key, and the PRD stays live.
+- **Archival-qualified** means the winning unretracted `release.announced`
+  covering the feature carries a **nonblank `version`, `channel` and
+  `announcement`** — a release a reader can follow back, because archival
+  stamps a document closed **forever** on a header that **cites the release**.
+  Without all three the verb refuses, naming the release event and every
+  missing key, and the PRD stays live.
+- **This is the same predicate F9's `released` row uses** (contract
+  clarification, PR #26 review, superseding an interim reading in which the
+  stage stayed permissive while the verb did not). Stage `released` and
+  archival-qualified are therefore ONE fact, and a view can never promise a
+  word the verb refuses. What stays permissive is the **render**: F2's release
+  COLUMN still prints `released ? <ts>` for a release recording nothing,
+  because a column shows the fact the store holds and the stage says what that
+  fact earned.
 - On archival the PRD is **moved** to `docs/prds/archived/` with a stamped
   header — released date, epic/item link, the **journal-pointer line** (the id
   of the archival event), and the line that the **code and tests are the truth
@@ -742,12 +756,12 @@ sweep found.
   counting as missing. A **retracted** release is no release at all and earns
   the ordinary stage refusal instead.
 - `validate` and the verb read the **same eligibility predicate**, so the
-  report can never name a command that then refuses:
-  `roadmap.prd-unarchived` fires on exactly the nodes archival accepts, while
-  a feature at stage `released` on a release too thin to carry an archival
-  gets `roadmap.release-incomplete` — naming the event and the missing keys,
-  with a fix that is **re-logging the release**, never archiving. A `prd` path
-  pointing at a missing file warns as before.
+  report can never name a command that then refuses: `roadmap.prd-unarchived`
+  fires on exactly the nodes archival accepts. A release too thin to carry an
+  archival is reported by F9's `roadmap.release-incomplete` instead — over
+  **every** node, whether or not it carries a `prd`, naming the event and the
+  missing keys, with a fix that is **re-logging the release**, never
+  archiving. A `prd` path pointing at a missing file warns as before.
 - The product design doc referenced by the product node is updated in the
   same act (diffable), not archived.
 - **Crash-shape**: the process is killed at **every** boundary of the write

@@ -33,8 +33,8 @@ import {
   type WorkItemFrontmatter,
 } from "../schema/records";
 import {
-  ARCHIVAL_RELEASE_PAYLOAD_KEYS,
   CORE_EVENT_TYPES,
+  DEPLOY_COMPLETED_EVENT_TYPE,
   MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
   MIGRATION_EXCLUDED_PAYLOAD_KEY,
   MIGRATION_EXCLUSION_REASON_KEY,
@@ -766,12 +766,24 @@ function checkRoadmapRefs(state: ParsedState): Finding[] {
  * would report one corruption twice, in a way that reads as two separate
  * defects.
  *
- * `sweep-failed-count` (A2) is the one that is not about the epic: the stage
- * advances to `tested` only on `failed === 0` exactly, so a winning sweep whose
- * count is missing, non-numeric or negative holds the feature at its dev row —
- * SILENTLY, while the workflow that logged it believes it recorded a pass. A
- * count greater than zero is a sweep that found failures, recorded correctly,
- * and warns about nothing.
+ * THREE of them are not about the epic at all — the malformed-lifecycle family,
+ * one per row of the precedence table. Every row advances on a well-formed
+ * winner only, so a fact that cannot carry its row holds the feature back
+ * SILENTLY, while the workflow that logged it believes it recorded a pass or a
+ * ship:
+ *
+ * - `sweep-failed-count` (A2) — `failed` missing, non-numeric or negative. A
+ *   count greater than zero is a sweep that found failures, recorded correctly,
+ *   and warns about nothing.
+ * - `release-incomplete` / `deploy-incomplete` (final gate) — the winning
+ *   release or deploy carrying no nonblank value for a required key.
+ *
+ * All three report UNCONDITIONALLY, from the derivation, over every node.
+ * `release-incomplete` used to live in the PRD lifecycle check, which skips a
+ * node with no `prd` — so most nodes got silence about a thin release, and a
+ * thin deploy was never checked anywhere. Each names the EVENT and the keys it
+ * lacks, because re-logging that act is the fix; a retracted fact decides no
+ * column, so the derivation hands back nothing and none of them fires.
  */
 function checkRoadmapDerivation(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -788,6 +800,24 @@ function checkRoadmapDerivation(state: ParsedState): Finding[] {
           "`failed` count is not a usable number (absent, non-numeric, or negative) — the stage did not " +
           `advance to tested and reads ${status.stage}`,
         fix: "re-log the sweep with its real count (`nahel log qa.sweep-completed --item <id> --data failed=<n>`) and retract the unreadable one with `nahel log roadmap.column-retracted`",
+      });
+    }
+    // The sweep warning's two siblings, one per row above it. Same shape, same
+    // severity, same reason: the row silently declined to advance, and the
+    // workflow that logged the act believes it recorded a ship.
+    for (const [gaps, type, check] of [
+      [status.incompleteRelease, RELEASE_ANNOUNCED_EVENT_TYPE, "roadmap.release-incomplete"],
+      [status.incompleteDeploy, DEPLOY_COMPLETED_EVENT_TYPE, "roadmap.deploy-incomplete"],
+    ] as const) {
+      if (gaps === undefined) continue;
+      findings.push({
+        severity: "warning",
+        check,
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is covered by ${type} event ${gaps.event}, which ` +
+          `records no ${gaps.missing.join(", ")} — the stage did not advance on it and reads ${status.stage}`,
+        fix: `re-log the act in full (\`nahel log ${type} --item ${record.epic ?? "<epic>"} ${gaps.missing.map((key) => `--data ${key}=<${key}>`).join(" ")}\`), and retract the thin one with \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE}\` if it was wrong`,
       });
     }
     const epic = record.epic;
@@ -1333,22 +1363,22 @@ function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
  *   at neither location.
  * - `prd-unarchived`: the feature reached `released`, so its delta is closed,
  *   but the document is still sitting in the live directory.
- * - `release-incomplete` (A3): the stage reads `released`, but on a release too
- *   thin to carry an archival — no version, channel or announcement to cite.
  * - `closed-delta`: the reverse and the more serious of the two — a node that
  *   is NOT released pointing INTO the archive, which is someone continuing
  *   work against a delta that was closed. The fix is the doctrine: a new node
  *   with a new PRD, naming this one as its predecessor.
  *
- * Both derived facts come from the views, never from a field: featureStatus IS
- * the stage rule, so a node `closed-delta` calls released is exactly one the
- * roadmap renders as released, and archivalRelease IS the archival predicate,
- * so `prd-unarchived` fires on exactly the nodes `nahel roadmap archive`
- * ACCEPTS. That second one is why the two findings are separate: this check
- * tells a human to run that verb, and a warning naming a command that then
- * refuses is a warning nobody can act on. The unqualified node still gets a
- * line — silence would leave a delta looking closed with nothing saying why it
- * cannot be filed — but its fix is to re-log the release, never to archive.
+ * "Released" here is archivalRelease's predicate, never a field: it IS what
+ * `nahel roadmap archive` gates on, so `prd-unarchived` fires on exactly the
+ * nodes that verb ACCEPTS — this check tells a human to run it, and a warning
+ * naming a command that then refuses is a warning nobody can act on. Since the
+ * final gate that predicate is also the `released` stage word, so the two
+ * findings below and the rendered roadmap cannot disagree either.
+ *
+ * A node whose release is too THIN to carry an archival is not reported here.
+ * That is a fact about the release, not about the PRD, and
+ * checkRoadmapDerivation names it whether or not the node carries a `prd` at
+ * all — which is where most nodes live.
  */
 function checkPrdLifecycle(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -1366,31 +1396,23 @@ function checkPrdLifecycle(state: ParsedState): Finding[] {
         fix: "the PRD may arrive by a later merge — otherwise fix the reference with `nahel roadmap node update <ref> --prd <path>`, or, if an archival was interrupted, `nahel validate --repair` completes it",
       });
     }
-    const released = featureStatus(record, items, state.events).stage === "released";
+    // Archival qualification and the `released` stage word are ONE predicate
+    // since the final gate, so this reads either way round; asking
+    // archivalRelease is asking the verb's own gate, which is the honest one.
+    // A thin release is NOT reported here — it is not about the PRD, and
+    // checkRoadmapDerivation names it whether or not the node carries one.
     const release = archivalRelease(record, items, state.events);
-    if (release !== undefined && !isArchivedPrdPath(prd)) {
-      if (release.missing.length === 0) {
-        findings.push({
-          severity: "warning",
-          check: "roadmap.prd-unarchived",
-          path,
-          message:
-            `roadmap node ${record.id} (${record.name}) is released, but its PRD ${prd} is still live — ` +
-            "a released delta is closed, and its PRD belongs in the archive",
-          fix: `close it with \`nahel roadmap archive ${record.name}\` — the PRD moves with every reference to it, and the product design doc is updated in the same act`,
-        });
-      } else {
-        findings.push({
-          severity: "warning",
-          check: "roadmap.release-incomplete",
-          path,
-          message:
-            `roadmap node ${record.id} (${record.name}) reads stage released on event ${release.event.id}, ` +
-            `but that release records no ${release.missing.join(", ")} — its PRD ${prd} cannot be archived ` +
-            "on a release nobody can follow back, so the delta stays open",
-          fix: `re-log the release in full (\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item ${record.epic ?? "<epic>"} ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.map((key) => `--data ${key}=<${key}>`).join(" ")}\`), and retract the thin one with \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE}\` if it was wrong`,
-        });
-      }
+    const released = release !== undefined && release.missing.length === 0;
+    if (released && !isArchivedPrdPath(prd)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.prd-unarchived",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is released, but its PRD ${prd} is still live — ` +
+          "a released delta is closed, and its PRD belongs in the archive",
+        fix: `close it with \`nahel roadmap archive ${record.name}\` — the PRD moves with every reference to it, and the product design doc is updated in the same act`,
+      });
     }
     if (!released && isArchivedPrdPath(prd)) {
       findings.push({

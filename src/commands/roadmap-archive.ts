@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
 import {
   ARCHIVAL_RELEASE_PAYLOAD_KEY,
-  ARCHIVAL_RELEASE_PAYLOAD_KEYS,
+  RELEASE_REQUIRED_PAYLOAD_KEYS,
   CORE_EVENT_TYPES,
   RELEASE_ANNOUNCED_EVENT_TYPE,
 } from "../schema/events";
@@ -54,7 +54,7 @@ export const ARCHIVE_USAGE = `  nahel roadmap archive <ref>
     reference to the old path in the same act, and append the release to the
     product design doc — which is permanent and never archived.
     Refused unless the feature's stage is \`released\` AND the release that
-    earned it records a nonblank ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.join(", ")};
+    earned it records a nonblank ${RELEASE_REQUIRED_PAYLOAD_KEYS.join(", ")};
     refused again once the delta is closed. Further work is a NEW node with a
     new PRD, which may name this one as its \`--predecessor\`.`;
 
@@ -231,7 +231,7 @@ export async function runArchiveSubcommand(
     throw new UsageError(
       `roadmap node ${node.id} (${node.name}) stands at stage ${status.stage}, and a PRD is archived only ` +
         "once its feature is released — its delta is still open. Record the release with " +
-        `\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item <epic> ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.map(
+        `\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item <epic> ${RELEASE_REQUIRED_PAYLOAD_KEYS.map(
           (key) => `--data ${key}=<${key}>`,
         ).join(" ")}\` first.`,
     );
@@ -247,7 +247,7 @@ export async function runArchiveSubcommand(
         `event ${release.event.id}, but that release records no ${release.missing.join(", ")} — an ` +
         "archived PRD is stamped closed forever and its header cites the release, so the release has to be " +
         "one a reader can follow back. Re-log it in full " +
-        `(\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item ${node.epic ?? "<epic>"} ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.map(
+        `(\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item ${node.epic ?? "<epic>"} ${RELEASE_REQUIRED_PAYLOAD_KEYS.map(
           (key) => `--data ${key}=<${key}>`,
         ).join(" ")}\`), then run this command again.`,
     );

@@ -502,7 +502,7 @@ export function roadmapNodePath(layout: StoreLayout, id: string): string {
  * and every check — while the files stay in the store, in git, and readable by
  * a human asking what the failed attempt had charted.
  */
-export const FAILED_ROADMAP_DIR = "failed";
+const FAILED_ROADMAP_DIR = "failed";
 
 /** Path a superseded migration's node record is parked at. Both ids validated. */
 export function failedRoadmapNodePath(
@@ -564,6 +564,11 @@ export async function listRoadmapNodes(layout: StoreLayout): Promise<string[]> {
  * The scan listRoadmapNodes, listMaps and listTickets all are: the record ids
  * in one on-demand directory. Shared so the absence rule above is stated once
  * and cannot drift between the three directories that follow it.
+ *
+ * ONE LEVEL, `*.md` only — which is load-bearing, not incidental: a
+ * subdirectory is never a record, so parking a superseded migration's nodes
+ * under `nahel/roadmap/failed/<selection>/` (C3) takes them out of every list,
+ * view and check at once, without a single reader learning a new rule.
  */
 async function listRecordIds(dir: string): Promise<string[]> {
   const entries = await readdir(dir).catch((error) => {

@@ -1,5 +1,6 @@
 import { DECISION_TICKET_STATES, ROADMAP_HORIZONS } from "../schema/enums";
 import {
+  ARCHIVAL_RELEASE_PAYLOAD_KEYS,
   CORE_EVENT_TYPES,
   DEPLOY_COMPLETED_EVENT_TYPE,
   DEPLOY_ENVIRONMENT_PAYLOAD_KEY,
@@ -371,17 +372,27 @@ function retractedFacts(events: readonly JournalEvent[]): ReadonlySet<string> {
 }
 
 /**
+ * Whether a payload actually SAYS something under `key`: present, non-null, and
+ * not blank once trimmed. One rule, because the render's `?` and the archival
+ * gate's "missing key" (A3) are the same judgment — a recorded empty
+ * `announcement` tells a reader exactly as much as an omitted one, and two
+ * readings of "carries a value" could drift into a column printing `?` for a
+ * key the gate accepted.
+ */
+function carriesPayload(payload: Record<string, unknown>, key: string): boolean {
+  const value = payload[key];
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+/**
  * A payload value for a column: absent, null, or blank renders `?` — brief's
- * absent-payload-key convention, widened to blank because a recorded empty
- * `environment` tells a reader exactly as much as an omitted one, and the
- * render table spells both cases the same way. Shared with `standup`, which
- * renders the same lifecycle payloads and must spell their gaps the same way.
+ * absent-payload-key convention, widened to blank for carriesPayload's reason,
+ * and the render table spells both cases the same way. Shared with `standup`,
+ * which renders the same lifecycle payloads and must spell their gaps the same
+ * way.
  */
 export function payloadText(payload: Record<string, unknown>, key: string): string {
-  const value = payload[key];
-  if (value === undefined || value === null) return "?";
-  const text = String(value).trim();
-  return text === "" ? "?" : text;
+  return carriesPayload(payload, key) ? String(payload[key]).trim() : "?";
 }
 
 /**
@@ -462,18 +473,24 @@ export interface RoadmapFeatureStatus {
  * so a feature legitimately reads `built  qa=tested <ts> (4 failed)`: the stage
  * says where the feature stands, the column says what the sweep found.
  */
-export function featureStatus(
-  node: RoadmapNodeFrontmatter,
-  items: readonly WorkItemFrontmatter[],
+/**
+ * The winning event of each column type over an already-computed coverage set:
+ * the LAST surviving event of its type in the store's canonical total order
+ * (`ts` → `seq` → `id`, compareEvents), so the result does not depend on the
+ * order `events` arrives in.
+ *
+ * Retracted facts leave the computation entirely (A1), which is why the winner
+ * is the last SURVIVOR — retracting the latest sweep promotes the one before
+ * it, it does not empty the column.
+ *
+ * One function, because two callers ask the same question of the same journal:
+ * the columns above, and the archival gate below. A second walk written by hand
+ * is a second place the retraction rule could be forgotten.
+ */
+function columnWinners(
+  covered: ReadonlySet<string>,
   events: readonly JournalEvent[],
-): RoadmapFeatureStatus {
-  // One walk, shared by the rollup and the association below. A node with no
-  // epic yields the empty coverage, so the loop simply matches nothing.
-  const covered = epicCoverage(items, node.epic);
-  const rollup = devRollup(node.epic, items, covered);
-  // Retracted facts leave the computation entirely, so the winner below is the
-  // last SURVIVING event of its type — retracting the latest sweep promotes the
-  // one before it (A1), it does not empty the column.
+): Map<string, JournalEvent> {
   const retracted = retractedFacts(events);
   const winners = new Map<string, JournalEvent>();
   for (const event of events) {
@@ -485,6 +502,19 @@ export function featureStatus(
       winners.set(event.type, event);
     }
   }
+  return winners;
+}
+
+export function featureStatus(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): RoadmapFeatureStatus {
+  // One walk, shared by the rollup and the association below. A node with no
+  // epic yields the empty coverage, so the loop simply matches nothing.
+  const covered = epicCoverage(items, node.epic);
+  const rollup = devRollup(node.epic, items, covered);
+  const winners = columnWinners(covered, events);
   const sweep = winners.get(QA_SWEEP_EVENT_TYPE);
   const deployed = winners.get(DEPLOY_COMPLETED_EVENT_TYPE);
   const released = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
@@ -518,6 +548,49 @@ export function featureStatus(
       released === undefined
         ? NO_VALUE
         : `released ${payloadText(released.payload, RELEASE_VERSION_PAYLOAD_KEY)} ${released.ts}`,
+  };
+}
+
+/**
+ * The release a node's archival would rest on, and what it fails to carry (A3).
+ */
+export interface ArchivalRelease {
+  /** The winning unretracted `release.announced` covering the node. */
+  event: JournalEvent;
+  /**
+   * The ARCHIVAL_RELEASE_PAYLOAD_KEYS it carries no nonblank value for, in that
+   * order. EMPTY means archival-qualified — the one predicate `nahel roadmap
+   * archive` gates on and `validate` reports against.
+   */
+  missing: string[];
+}
+
+/**
+ * Whether a feature node's release can carry an archival (F10, tightened by
+ * A3), and undefined when no unretracted release covers it at all — which is
+ * exactly when the derived stage is not `released`.
+ *
+ * ONE predicate, exported, because two surfaces have to agree on it: the verb
+ * that refuses, and `roadmap.prd-unarchived`, which tells a human to run that
+ * verb. A check firing where the verb refuses is a warning nobody can act on.
+ *
+ * The distinction it draws is deliberate. `stage released` is a VIEW of what
+ * the store holds and stays permissive — a release carrying nothing still reads
+ * `released` and still renders `released ? <ts>` (F9's ruling). Archival stamps
+ * a document closed forever on a header that cites the release, so it demands
+ * one a reader can follow back.
+ */
+export function archivalRelease(
+  node: RoadmapNodeFrontmatter,
+  items: readonly WorkItemFrontmatter[],
+  events: readonly JournalEvent[],
+): ArchivalRelease | undefined {
+  const winners = columnWinners(epicCoverage(items, node.epic), events);
+  const event = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
+  if (event === undefined) return undefined;
+  return {
+    event,
+    missing: ARCHIVAL_RELEASE_PAYLOAD_KEYS.filter((key) => !carriesPayload(event.payload, key)),
   };
 }
 

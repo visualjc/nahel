@@ -1,7 +1,12 @@
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Env } from "../schema/env";
-import { CORE_EVENT_TYPES, RELEASE_ANNOUNCED_EVENT_TYPE } from "../schema/events";
+import {
+  ARCHIVAL_RELEASE_PAYLOAD_KEY,
+  ARCHIVAL_RELEASE_PAYLOAD_KEYS,
+  CORE_EVENT_TYPES,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
+} from "../schema/events";
 import { generateId } from "../schema/id";
 import {
   archivedPrdPath,
@@ -18,7 +23,7 @@ import {
   type StoreLayout,
 } from "../store/layout";
 import { closeStoreContext, mutate, type SequenceWrite } from "../store/mutate";
-import { featureStatus } from "../views/roadmap";
+import { archivalRelease, featureStatus } from "../views/roadmap";
 import { loadSnapshot } from "../views/snapshot";
 import { commandContext, UsageError } from "./item";
 import { columnEvents } from "./roadmap-ref";
@@ -48,9 +53,10 @@ export const ARCHIVE_USAGE = `  nahel roadmap archive <ref>
     the line that the code and tests are the truth now), move every stored
     reference to the old path in the same act, and append the release to the
     product design doc — which is permanent and never archived.
-    Refused unless the feature's stage is \`released\`; refused again once the
-    delta is closed. Further work is a NEW node with a new PRD, which may name
-    this one as its \`--predecessor\`.`;
+    Refused unless the feature's stage is \`released\` AND the release that
+    earned it records a nonblank ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.join(", ")};
+    refused again once the delta is closed. Further work is a NEW node with a
+    new PRD, which may name this one as its \`--predecessor\`.`;
 
 /** The stamp's first line — how an already-archived document is recognized. */
 const STAMP_OPENER = "> **Archived — the delta this PRD stated is closed.**";
@@ -215,16 +221,35 @@ export async function runArchiveSubcommand(
     );
   }
 
-  // The precondition is the DERIVED stage (F9), never a field: released means
-  // a `release.announced` covers the epic, and nothing else says so.
+  // The precondition is DERIVED (F9), never a field: released means an
+  // unretracted `release.announced` covers the epic, and nothing else says so.
   const { items } = await loadSnapshot(ctx.layout);
   const events = await columnEvents(ctx.layout);
   const status = featureStatus(node, items, events);
-  if (status.stage !== "released") {
+  const release = archivalRelease(node, items, events);
+  if (release === undefined) {
     throw new UsageError(
       `roadmap node ${node.id} (${node.name}) stands at stage ${status.stage}, and a PRD is archived only ` +
         "once its feature is released — its delta is still open. Record the release with " +
-        `\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item <epic> --data version=<v>\` first.`,
+        `\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item <epic> ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.map(
+          (key) => `--data ${key}=<${key}>`,
+        ).join(" ")}\` first.`,
+    );
+  }
+  // Stage released is not archival-qualified (A3). The view stays permissive —
+  // it shows what the store holds — but this act stamps the document closed
+  // forever on a header that CITES the release, so the release has to be one a
+  // reader can follow back. The refusal names the event, because the fix is to
+  // re-log that release and nothing in the store points at it otherwise.
+  if (release.missing.length > 0) {
+    throw new UsageError(
+      `roadmap node ${node.id} (${node.name}) reads stage released on ${RELEASE_ANNOUNCED_EVENT_TYPE} ` +
+        `event ${release.event.id}, but that release records no ${release.missing.join(", ")} — an ` +
+        "archived PRD is stamped closed forever and its header cites the release, so the release has to be " +
+        "one a reader can follow back. Re-log it in full " +
+        `(\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item ${node.epic ?? "<epic>"} ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.map(
+          (key) => `--data ${key}=<${key}>`,
+        ).join(" ")}\`), then run this command again.`,
     );
   }
 
@@ -302,6 +327,10 @@ export async function runArchiveSubcommand(
     eventType: CORE_EVENT_TYPES.prdArchived,
     eventId,
     writes,
+    // The other end of the stamped header's journal pointer: the header names
+    // this event, and this event names the release that justified it, so a
+    // reader can walk between them without re-deriving a coverage walk.
+    extraPayload: { [ARCHIVAL_RELEASE_PAYLOAD_KEY]: release.event.id },
   });
   await closeStoreContext(ctx);
   const moved = writes.filter((write) => write.target !== "document").length;

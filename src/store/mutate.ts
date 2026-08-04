@@ -197,7 +197,20 @@ export type Mutation =
    * resolution event id (F7's acceptance criterion), which cannot be read back
    * from an event that does not exist yet.
    */
-  | { target: "sequence"; eventType: string; eventId: string; writes: SequenceWrite[] };
+  | {
+      target: "sequence";
+      eventType: string;
+      eventId: string;
+      writes: SequenceWrite[];
+      /**
+       * Extra fields merged into the event payload alongside the sequence
+       * itself — the `item` mutation's precedent, and how `roadmap.prd-archived`
+       * records the release event its archival rests on (F10 / A3). The reserved
+       * replay keys always win over extras, so a caller cannot make a sequence
+       * unreplayable by naming one.
+       */
+      extraPayload?: Record<string, unknown>;
+    };
 
 /**
  * One step inside a sequence mutation (see Mutation's `sequence`) — a record
@@ -445,8 +458,15 @@ function mutationEventFields(
   }
   if (mutation.target === "sequence") {
     // One event, every record — see Mutation's `sequence`. The list is the
-    // apply order, and replay reads it as one pending write per entry.
-    return { payload: { target: "sequence", records: writes.map(writePayload) } };
+    // apply order, and replay reads it as one pending write per entry; the
+    // reserved keys are spread last so an extra can never displace them.
+    return {
+      payload: {
+        ...mutation.extraPayload,
+        target: "sequence",
+        records: writes.map(writePayload),
+      },
+    };
   }
   // Observations, roadmap nodes, maps and tickets carry no item/run refs — an
   // observation's link is its `sources`, a node's is its own `epic` field, and

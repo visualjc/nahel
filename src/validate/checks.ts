@@ -33,9 +33,11 @@ import {
   type WorkItemFrontmatter,
 } from "../schema/records";
 import {
+  ARCHIVAL_RELEASE_PAYLOAD_KEYS,
   CORE_EVENT_TYPES,
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
+  RELEASE_ANNOUNCED_EVENT_TYPE,
   RETRACTION_REASON_PAYLOAD_KEY,
   ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 } from "../schema/events";
@@ -50,6 +52,7 @@ import {
 } from "../store/journal";
 import { eventDocuments } from "../store/mutate";
 import {
+  archivalRelease,
   featureDevStatus,
   featureStatus,
   retractedEventId,
@@ -909,14 +912,22 @@ function checkRoadmapAdrRefs(state: ParsedState): Finding[] {
  *   at neither location.
  * - `prd-unarchived`: the feature reached `released`, so its delta is closed,
  *   but the document is still sitting in the live directory.
+ * - `release-incomplete` (A3): the stage reads `released`, but on a release too
+ *   thin to carry an archival — no version, channel or announcement to cite.
  * - `closed-delta`: the reverse and the more serious of the two — a node that
  *   is NOT released pointing INTO the archive, which is someone continuing
  *   work against a delta that was closed. The fix is the doctrine: a new node
  *   with a new PRD, naming this one as its predecessor.
  *
- * The stage comes from F9's derivation, never from a field: featureStatus IS
- * the rule, so a node these checks call released is exactly one the roadmap
- * renders as released.
+ * Both derived facts come from the views, never from a field: featureStatus IS
+ * the stage rule, so a node `closed-delta` calls released is exactly one the
+ * roadmap renders as released, and archivalRelease IS the archival predicate,
+ * so `prd-unarchived` fires on exactly the nodes `nahel roadmap archive`
+ * ACCEPTS. That second one is why the two findings are separate: this check
+ * tells a human to run that verb, and a warning naming a command that then
+ * refuses is a warning nobody can act on. The unqualified node still gets a
+ * line — silence would leave a delta looking closed with nothing saying why it
+ * cannot be filed — but its fix is to re-log the release, never to archive.
  */
 function checkPrdLifecycle(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -935,16 +946,30 @@ function checkPrdLifecycle(state: ParsedState): Finding[] {
       });
     }
     const released = featureStatus(record, items, state.events).stage === "released";
-    if (released && !isArchivedPrdPath(prd)) {
-      findings.push({
-        severity: "warning",
-        check: "roadmap.prd-unarchived",
-        path,
-        message:
-          `roadmap node ${record.id} (${record.name}) is released, but its PRD ${prd} is still live — ` +
-          "a released delta is closed, and its PRD belongs in the archive",
-        fix: `close it with \`nahel roadmap archive ${record.name}\` — the PRD moves with every reference to it, and the product design doc is updated in the same act`,
-      });
+    const release = archivalRelease(record, items, state.events);
+    if (release !== undefined && !isArchivedPrdPath(prd)) {
+      if (release.missing.length === 0) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.prd-unarchived",
+          path,
+          message:
+            `roadmap node ${record.id} (${record.name}) is released, but its PRD ${prd} is still live — ` +
+            "a released delta is closed, and its PRD belongs in the archive",
+          fix: `close it with \`nahel roadmap archive ${record.name}\` — the PRD moves with every reference to it, and the product design doc is updated in the same act`,
+        });
+      } else {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.release-incomplete",
+          path,
+          message:
+            `roadmap node ${record.id} (${record.name}) reads stage released on event ${release.event.id}, ` +
+            `but that release records no ${release.missing.join(", ")} — its PRD ${prd} cannot be archived ` +
+            "on a release nobody can follow back, so the delta stays open",
+          fix: `re-log the release in full (\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item ${record.epic ?? "<epic>"} ${ARCHIVAL_RELEASE_PAYLOAD_KEYS.map((key) => `--data ${key}=<${key}>`).join(" ")}\`), and retract the thin one with \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE}\` if it was wrong`,
+        });
+      }
     }
     if (!released && isArchivedPrdPath(prd)) {
       findings.push({

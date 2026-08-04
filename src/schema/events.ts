@@ -215,16 +215,53 @@ export const RETRACTION_REASON_PAYLOAD_KEY = "reason";
 
 /**
  * The one payload key of each lifecycle type that a VIEW renders (F9's shapes,
- * F2's render table): a deploy's `environment` and a release's `version`. The
- * rest of each documented shape — a deploy's `ref` and `shipped`, a release's
- * `channel` and `announcement` — is recorded and read by people, so no constant
- * claims otherwise. These two are named here, beside the types, because the
- * renderer and the glossary that teaches the vocabulary must not drift: a key
- * renamed in code with the docs left behind teaches workflow authors to record
- * a fact no column will ever show.
+ * F2's render table): a deploy's `environment` and a release's `version`. Named
+ * here, beside the types, because the renderer and the glossary that teaches
+ * the vocabulary must not drift: a key renamed in code with the docs left
+ * behind teaches workflow authors to record a fact no column will ever show.
+ *
+ * A deploy's `ref` and `shipped` are recorded and read by people, so no
+ * constant claims otherwise.
  */
 export const DEPLOY_ENVIRONMENT_PAYLOAD_KEY = "environment";
 export const RELEASE_VERSION_PAYLOAD_KEY = "version";
+
+/**
+ * The rest of a release's documented shape. Machinery reads these two as of
+ * A3 — no view renders them, but `nahel roadmap archive` REFUSES without them
+ * (see ARCHIVAL_RELEASE_PAYLOAD_KEYS), so they are named rather than left as
+ * prose a workflow author could spell any way they liked.
+ */
+export const RELEASE_CHANNEL_PAYLOAD_KEY = "channel";
+export const RELEASE_ANNOUNCEMENT_PAYLOAD_KEY = "announcement";
+
+/**
+ * What an ARCHIVAL-QUALIFIED release carries (PR #26 follow-up A3), in the
+ * order a refusal lists them.
+ *
+ * `stage released` and archival-qualified are deliberately different facts. The
+ * stage is a VIEW of what the store holds, so it stays permissive: a release
+ * carrying nothing still reads `released` and still renders `released ? <ts>`
+ * (F9's ruling, unchanged). Archival is not a view — it stamps a document
+ * closed FOREVER on a header that cites the release — so it demands a release a
+ * reader can follow back: which version, on which channel, announced where.
+ * Each must be present and NONBLANK; a recorded empty string tells a reader
+ * exactly as much as an omitted key.
+ */
+export const ARCHIVAL_RELEASE_PAYLOAD_KEYS: readonly string[] = [
+  RELEASE_VERSION_PAYLOAD_KEY,
+  RELEASE_CHANNEL_PAYLOAD_KEY,
+  RELEASE_ANNOUNCEMENT_PAYLOAD_KEY,
+];
+
+/**
+ * The `roadmap.prd-archived` payload key naming the release the archival rests
+ * on (A3). The stamped header already carries the archival event's id as its
+ * journal pointer; this is the other end of the same thread, so a reader
+ * landing on the archival act can reach the release that justified it without
+ * re-deriving a coverage walk over the whole journal.
+ */
+export const ARCHIVAL_RELEASE_PAYLOAD_KEY = "release";
 
 /**
  * The prototype lane's acts (Phase 2 F5). Two of them are read back by

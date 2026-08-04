@@ -42,8 +42,11 @@ Before any `nahel` command: if you are an agent, set
 3. Answer it with the surface its **type** names:
 
    - `research` — read the code, the journal, the docs, the web when
-     available. Cite what you found in the decision, and journal sources with
-     `nahel log note --data summary="<source>"` as you go.
+     available. Journal each source as you go, and **keep the event id it
+     prints** — step 4 hands those ids to the resolution:
+
+           nahel log note --data summary="<what this source said>"
+           # ✅ logged note — event <event-id> (seq n) → session-…
    - `prototype` — run `nahel/workflows/prototype-lane.md`. The variants are
      throwaway; what comes back is the answer, not the code.
    - `grilling` — interview the human with the pinned `grilling` skill (its
@@ -60,7 +63,8 @@ Before any `nahel` command: if you are an agent, set
 
        nahel roadmap ticket resolve <ticket-id> \
          --decision "<the decision, in one line>" \
-         --rationale "<why — as many lines and paragraphs as it takes>"
+         --rationale "<why — as many lines and paragraphs as it takes>" \
+         --source <event-id-from-step-3> --source <another>
 
    One command does three things: it journals the decision, flips the ticket,
    and distills an **observation** so `nahel recall <terms>` finds the decision
@@ -75,6 +79,15 @@ Before any `nahel` command: if you are an agent, set
    verbatim in the observation — paragraphs kept — so it survives step 6's
    distill, and it never becomes a map row. Pass it blank and you are refused;
    omit it when there is genuinely nothing to add.
+
+   `--source` closes the loop step 3 opened: pass every note id you collected,
+   repeating the flag. They land in the observation's **provenance** as
+   structured refs, so `nahel recall` reaches the decision and the decision
+   reaches the research — which prose in a body cannot do, and which the body
+   could not keep anyway once step 6 empties it. A `--source` must name an
+   event this store already recorded: a typo is refused rather than written,
+   because an observation citing an event nobody journaled is a `nahel
+   validate` error.
 
    If the question is not going to be answered, close it instead — and say
    WHICH of the two reasons it is, because they are different facts and only

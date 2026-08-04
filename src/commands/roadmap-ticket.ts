@@ -15,6 +15,7 @@ import {
   type StoreLayout,
   type TicketRecord,
 } from "../store/layout";
+import { missingEventIds } from "../store/journal";
 import { closeStoreContext, mutate, type StoreContext } from "../store/mutate";
 import { renderTicket } from "../views/roadmap";
 import { commandContext, requireValid, UsageError } from "./item";
@@ -66,6 +67,7 @@ export const TICKET_USAGE = `  nahel roadmap ticket new --map <ref> --type <t> -
     Hand it back to the frontier. Permitted to any actor, always.
 
   nahel roadmap ticket resolve <ref> --decision <one-liner> [--rationale <prose>]
+                              [--source <event-id>]...
     Record the decision: journals it and distills an observation citing the
     resolution event — so \`nahel recall\` finds it. The map's Decisions so far
     index is derived from this ticket; no map record is written.
@@ -73,6 +75,10 @@ export const TICKET_USAGE = `  nahel roadmap ticket new --map <ref> --type <t> -
       --rationale: WHY, in as many lines as it takes. Stored verbatim in the
         observation body (paragraphs kept), never as a map row — the one place
         the reasoning survives \`distill\`.
+      --source: a journal event the decision rests on — the research you
+        logged while answering (repeatable). Recorded in the observation's
+        provenance beside the resolution event, so the link outlives the
+        ticket body. Must name an event this store already recorded.
 
   nahel roadmap ticket close <ref> --reason <why> (--out-of-scope | --invalidated-by <ref>)
     Rule the question away, stating WHICH disposition it is. Under either one
@@ -348,6 +354,12 @@ function observationBlock(label: string, text: string): string[] {
  * map, whose index is one row per decision, and rather than on the ticket,
  * whose body is the thing distill empties.
  *
+ * `sources` is the resolution event followed by whatever `--source` cited — the
+ * research the decision rests on, as STRUCTURED refs rather than prose. Passing
+ * them here is what keeps them: the note ids an agent journals while answering
+ * the question are otherwise reachable only through the ticket body, which
+ * `distill` is about to empty.
+ *
  * The name is derived from the ticket id rather than from the decision prose:
  * a slug is a schema-hardened field, and no slugification of free text is
  * total. Search reaches the words through the body, which recall scores too.
@@ -358,7 +370,7 @@ function decisionObservation(
   question: string,
   decision: string,
   rationale: string | undefined,
-  eventId: string,
+  sources: readonly string[],
   now: string,
   id: string,
 ): { frontmatter: ObservationFrontmatter; body: string } {
@@ -375,7 +387,7 @@ function decisionObservation(
       name: `decision-${ticket.id}`,
       created: now,
       tags: ["decision", ticket.type],
-      sources: [eventId],
+      sources: [...sources],
     },
     body: `${lines.join("\n")}\n`,
   };
@@ -456,15 +468,49 @@ function optionalRationale(value: unknown): string | undefined {
   return value.trim();
 }
 
-/** `resolve <ref> --decision <one-liner> [--rationale <prose>]`. */
+/**
+ * The `--source` event ids a resolution cites BESIDE its own: the notes an
+ * agent journaled while answering the question (`work-map.md` step 3). Without
+ * them the research is reachable only through the ticket body, which `distill`
+ * empties — the decision would survive with nothing under it.
+ *
+ * Deduped in argv order, the shape `nahel observe` gives the same field: citing
+ * one note twice is one provenance link, not two.
+ *
+ * Only the SHAPE is judged here. Existence is checked against the journal
+ * before the write (see ticketResolve), because `sources` is the observation
+ * layer's field and that layer VERIFIES provenance rather than recording refs
+ * that may arrive later: `nahel observe` refuses an unknown source outright,
+ * and `validate`'s refs.observation-sources is an error, not a warning. A
+ * resolution must not write an observation `observe` would have refused.
+ */
+function parseSourceRefs(values: string[] | undefined): string[] {
+  const sources = [...new Set(values ?? [])];
+  for (const source of sources) {
+    if (!ID_PATTERN.test(source)) {
+      throw new UsageError(
+        `--source ${JSON.stringify(source)} is not an id — it names the journal event a research ` +
+          "note was recorded as (`nahel log note --data summary=…` prints the id it wrote)",
+      );
+    }
+  }
+  return sources;
+}
+
+/** `resolve <ref> --decision <one-liner> [--rationale <prose>] [--source <event-id>]...`. */
 function parseResolveArgs(args: string[]): {
   ref: string;
   decision: string;
   rationale: string | undefined;
+  sources: string[];
 } {
   const { values, positionals } = parseArgs({
     args,
-    options: { decision: { type: "string" }, rationale: { type: "string" } },
+    options: {
+      decision: { type: "string" },
+      rationale: { type: "string" },
+      source: { type: "string", multiple: true },
+    },
     allowPositionals: true,
   });
   return {
@@ -475,6 +521,7 @@ function parseResolveArgs(args: string[]): {
       "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, distilled into an observation, and indexed on the map from this ticket)",
     ),
     rationale: optionalRationale(values.rationale),
+    sources: parseSourceRefs(values.source),
   };
 }
 
@@ -552,7 +599,8 @@ function parseCloseArgs(args: string[]): {
 /**
  * `resolve`: the decision, the ticket and the observation under ONE write-ahead
  * event (F7). The event id is minted first because the observation's `sources`
- * must cite the very event carrying it.
+ * must cite the very event carrying it — and any `--source` ids beside it, so
+ * the research the decision rests on outlives the ticket body.
  *
  * The MAP is not written. Its Decisions so far index is composed at read time
  * from its tickets, so a resolution touches only the two records it owns — and
@@ -565,11 +613,23 @@ async function ticketResolve(
   cwd: string,
   actorOverride?: string,
 ): Promise<number> {
-  const { ref, decision, rationale } = parseResolveArgs(args);
+  const { ref, decision, rationale, sources } = parseResolveArgs(args);
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "resolve");
   const map = await readMap(ctx.layout, current.frontmatter.map);
+  // Cited provenance is verified before anything is written, exactly as `nahel
+  // observe` verifies it (missingEventIds is the one walk both share): an
+  // observation citing an event this store never recorded is a `validate`
+  // ERROR, so writing one would make every such resolution a finding.
+  const absent = await missingEventIds(ctx.layout, sources);
+  if (absent.length > 0) {
+    throw new UsageError(
+      `--source event(s) not found in the journal: ${absent.join(", ")} — a source names an event ` +
+        "this store already recorded (`nahel log note --data summary=…` prints the id it wrote); " +
+        "observation provenance must cite real journal events",
+    );
+  }
 
   const eventId = generateId(ctx.env);
   const now = ctx.env.now();
@@ -588,7 +648,9 @@ async function ticketResolve(
     current.body.trim(),
     decision,
     rationale,
-    eventId,
+    // The resolution first — the act this observation is distilled FROM — then
+    // the research it rests on, in the order the agent cited it.
+    [...new Set([eventId, ...sources])],
     now,
     generateId(ctx.env),
   );

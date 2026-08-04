@@ -328,6 +328,32 @@ export async function* readJournal(layout: StoreLayout): AsyncGenerator<JournalE
   yield* mergeSegments(paths);
 }
 
+/**
+ * Which of `ids` no journal event carries — the provenance check every writer
+ * of an observation makes before citing a source. Shared, because both writers
+ * ask it: `nahel observe`, and F7's `resolve --source`. An observation's
+ * `sources` are VERIFIED rather than merely id-shaped (see `validate`'s
+ * refs.observation-sources, an error), so this is the one reading of "a source
+ * exists" and there is no second copy of the walk to drift from it.
+ *
+ * Streams, and stops the moment every id is accounted for, so a long journal is
+ * never fully loaded to check a handful of refs. The archive is read too —
+ * event ids are stable across rotation (ADR-0012), so provenance survives it.
+ * Sorted, so the refusal it feeds names the same ids in the same order twice.
+ */
+export async function missingEventIds(
+  layout: StoreLayout,
+  ids: Iterable<string>,
+): Promise<string[]> {
+  const missing = new Set(ids);
+  if (missing.size === 0) return [];
+  for await (const event of readJournal(layout)) {
+    missing.delete(event.id);
+    if (missing.size === 0) break;
+  }
+  return [...missing].sort();
+}
+
 /** One malformed segment line: unparseable JSON or an invalid event shape. */
 export interface SegmentLineError {
   line: number;

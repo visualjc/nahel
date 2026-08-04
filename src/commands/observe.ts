@@ -7,7 +7,7 @@ import {
   workItemFrontmatterSchema,
   type ObservationFrontmatter,
 } from "../schema/records";
-import { readJournal } from "../store/journal";
+import { missingEventIds } from "../store/journal";
 import { itemExists } from "../store/layout";
 import { closeStoreContext, mutate } from "../store/mutate";
 import { commandContext, execute, requireValid, UsageError, type Command } from "./item";
@@ -113,16 +113,13 @@ async function runObserve(
   }
 
   // Provenance is verified against the real journal (active + archived —
-  // event ids are stable across rotation, ADR-0012). Stream until every
-  // cited id is found; anything left over does not exist.
-  const missing = new Set(input.sources);
-  for await (const event of readJournal(ctx.layout)) {
-    missing.delete(event.id);
-    if (missing.size === 0) break;
-  }
-  if (missing.size > 0) {
+  // event ids are stable across rotation, ADR-0012); anything left over does
+  // not exist. The same walk F7's `resolve --source` makes, so the two writers
+  // of an observation cannot disagree about what a real source is.
+  const missing = await missingEventIds(ctx.layout, input.sources);
+  if (missing.length > 0) {
     throw new UsageError(
-      `source event(s) not found in the journal: ${[...missing].sort().join(", ")} — ` +
+      `source event(s) not found in the journal: ${missing.join(", ")} — ` +
         "observation provenance must cite real journal events",
     );
   }

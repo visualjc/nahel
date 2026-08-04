@@ -415,6 +415,14 @@ export interface RoadmapFeatureStatus {
   release: string;
   /** The three columns and the rollup, collapsed to one word by precedence. */
   stage: RoadmapStage;
+  /**
+   * The id of the winning covering sweep whose `failed` count is not a usable
+   * number — absent, non-numeric, or negative (A2). Present exactly when the QA
+   * row of the precedence table could not be judged, so `validate` names the
+   * sweep the stage silently declined to advance on. Undefined otherwise,
+   * including for a sweep that honestly found failures.
+   */
+  unreadableSweep?: string;
 }
 
 /**
@@ -439,9 +447,20 @@ export interface RoadmapFeatureStatus {
  * The `stage` collapses all of it to one word by PRECEDENCE, first match wins:
  * release, then deploy, then sweep, then the dev rollup. Precedence rather than
  * recency is what keeps the stage stable — a deploy recorded after a release
- * must not regress the feature to `deployed`. A covering sweep lifts the stage
- * to `tested` whatever the sweep FAILED: the word says a sweep ran over this
- * feature, and the QA column is where the outcome is read.
+ * must not regress the feature to `deployed`.
+ *
+ * The SWEEP row advances only on `failed === 0` exactly (A2, superseding the
+ * earlier "a sweep ran" reading). A stage is what a reader scans a column of,
+ * and `tested` beside a sweep that found four failures reads as a feature that
+ * passed. A count that is missing, non-numeric or negative is not a pass
+ * either: it is a summary nobody can read, and treating it as one would let a
+ * workflow reach `tested` by logging nothing at all. Every one of those rows
+ * falls through to the dev rollup, and `unreadableSweep` above is how
+ * `validate` names the unreadable case rather than leaving it silent.
+ *
+ * The COLUMN is untouched by any of that — F2's render table is the contract,
+ * so a feature legitimately reads `built  qa=tested <ts> (4 failed)`: the stage
+ * says where the feature stands, the column says what the sweep found.
  */
 export function featureStatus(
   node: RoadmapNodeFrontmatter,
@@ -469,22 +488,28 @@ export function featureStatus(
   const sweep = winners.get(QA_SWEEP_EVENT_TYPE);
   const deployed = winners.get(DEPLOY_COMPLETED_EVENT_TYPE);
   const released = winners.get(RELEASE_ANNOUNCED_EVENT_TYPE);
+  const failed = sweep === undefined ? undefined : failedCount(sweep.payload);
   let qa = NO_VALUE;
   if (sweep !== undefined) {
-    const failed = failedCount(sweep.payload);
     qa = failed === 0 ? `tested ${sweep.ts}` : `tested ${sweep.ts} (${failed ?? "?"} failed)`;
   }
-  // First match wins, top-down — the precedence table read literally.
+  // First match wins, top-down — the precedence table read literally. The sweep
+  // row advances on a CLEAN sweep only (A2); every other count falls through.
   let stage: RoadmapStage;
   if (released !== undefined) stage = "released";
   else if (deployed !== undefined) stage = "deployed";
-  else if (sweep !== undefined) stage = "tested";
+  else if (failed === 0) stage = "tested";
   else stage = rollup.status;
   return {
     dev: rollup.status,
     anomaly: rollup.anomaly,
     qa,
     stage,
+    // Absent, non-numeric, or negative: a count that judges nothing. A sweep
+    // that honestly found failures is not one of them.
+    ...(sweep !== undefined && !(failed !== undefined && failed >= 0)
+      ? { unreadableSweep: sweep.id }
+      : {}),
     deploy:
       deployed === undefined
         ? NO_VALUE

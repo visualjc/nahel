@@ -742,21 +742,43 @@ function checkRoadmapRefs(state: ParsedState): Finding[] {
 }
 
 /**
- * The two dev-status rows that are also findings (Phase 4 F2). The rule is not
- * restated here — featureDevStatus IS the rule, and this check reports the
- * anomaly it already derives, so a warning can never fire on a store whose
- * status renders clean (or stay silent on one that does not).
+ * The derivation rows that are also findings (Phase 4 F2, extended by the PR
+ * #26 review). The rules are not restated here — featureDevStatus and
+ * featureStatus ARE the rules, and this check reports what they already derive,
+ * so a warning can never fire on a store whose status renders clean (or stay
+ * silent on one that does not).
  *
- * Both are WARNINGS: the rollup still derives a status either way, and neither
- * shape was refused at write time. `epic-missing` is reported only when NO item
- * file exists for the id — an epic whose record is on disk but unparseable is
- * already a `schema.item` error, and calling it missing as well would report
- * one corruption twice, in a way that reads as two separate defects.
+ * All are WARNINGS: the derivation still produces a status either way, and
+ * none of the shapes was refused at write time. `epic-missing` is reported only
+ * when NO item file exists for the id — an epic whose record is on disk but
+ * unparseable is already a `schema.item` error, and calling it missing as well
+ * would report one corruption twice, in a way that reads as two separate
+ * defects.
+ *
+ * `sweep-failed-count` (A2) is the one that is not about the epic: the stage
+ * advances to `tested` only on `failed === 0` exactly, so a winning sweep whose
+ * count is missing, non-numeric or negative holds the feature at its dev row —
+ * SILENTLY, while the workflow that logged it believes it recorded a pass. A
+ * count greater than zero is a sweep that found failures, recorded correctly,
+ * and warns about nothing.
  */
 function checkRoadmapDerivation(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
   const items = [...state.items.values()].map((entry) => entry.record);
   for (const { record, path } of state.roadmapNodes.values()) {
+    const status = featureStatus(record, items, state.events);
+    if (status.unreadableSweep !== undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.sweep-failed-count",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) is covered by sweep ${status.unreadableSweep}, whose ` +
+          "`failed` count is not a usable number (absent, non-numeric, or negative) — the stage did not " +
+          `advance to tested and reads ${status.stage}`,
+        fix: "re-log the sweep with its real count (`nahel log qa.sweep-completed --item <id> --data failed=<n>`) and retract the unreadable one with `nahel log roadmap.column-retracted`",
+      });
+    }
     const epic = record.epic;
     if (epic === undefined) continue;
     const { anomaly } = featureDevStatus(record, items);

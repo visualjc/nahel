@@ -562,7 +562,7 @@ release does not regress the feature to `deployed`.
 | --- | --- |
 | a covering `release.announced` exists | `released` |
 | else a covering `deploy.completed` exists | `deployed` |
-| else a covering `qa.sweep-completed` exists | `tested` |
+| else a covering `qa.sweep-completed` whose payload `failed` is `0` exactly | `tested` |
 | else dev status is `built` | `built` |
 | else dev status is `in-flight` | `in-flight` |
 | else dev status is `planned` | `planned` |
@@ -570,6 +570,20 @@ release does not regress the feature to `deployed`.
 
 Nothing about the stage is hand-set; it is a pure function of recorded
 events and F2's dev rollup.
+
+**The QA row advances on a clean sweep only** (contract clarification, PR
+#26 review, superseding the earlier reading in which any covering sweep read
+`tested`). A `failed` count greater than zero, missing, non-numeric or
+negative all fall through to the dev-status rows: a stage is what a reader
+scans a column of, `tested` beside four failures reads as a feature that
+passed, and a count nobody can read is not a pass either — otherwise a
+workflow reaches `tested` by logging nothing at all. An unreadable count
+(absent, non-numeric, negative — **not** a legitimate count above zero) is a
+`validate` warning naming the sweep, because holding the feature back
+silently is the failure mode. F2's **render table is unchanged**: the QA
+column still prints `tested <ts> (N failed)` and `tested <ts> (? failed)`
+verbatim, so one line carries both where the feature stands and what the
+sweep found.
 
 **Acceptance criteria:**
 - Both types are documented vocabulary with defined payload shapes, and are

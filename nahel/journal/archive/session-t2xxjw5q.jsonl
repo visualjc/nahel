@@ -1,0 +1,2 @@
+{"id":"1p1vfara","ts":"2026-08-04T05:55:23Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"wsyxm6bp","payload":{"target":"item","record":{"id":"wsyxm6bp","name":"test-suite-load-flakiness","type":"chore","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-04T05:55:23Z","updated":"2026-08-04T05:55:23Z"},"body":""}}
+{"id":"59nhx8yz","ts":"2026-08-04T05:55:23Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

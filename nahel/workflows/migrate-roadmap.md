@@ -1,6 +1,6 @@
 ---
 name: migrate-roadmap
-description: Adopt a store's existing backlog into the roadmap layer — journal the selected set, then create the nodes it names
+description: Adopt a store's existing work into the roadmap layer — journal the selected set, then create the nodes it names
 args: "<product-node-slug>"
 ---
 
@@ -8,7 +8,7 @@ args: "<product-node-slug>"
 
 Load and follow this workflow **once per store**, to give a store that has
 work items but no roadmap its first one. Nothing here invents intent: the
-roadmap layer starts by adopting the intent the backlog is already carrying.
+roadmap layer starts by adopting the intent the store is already carrying.
 After this runs, new intent is charted one node at a time with the ordinary
 `roadmap node` verb — there is never a second migration.
 
@@ -17,12 +17,12 @@ Before any `nahel` command: if you are an agent, set
 
 Three rules hold throughout.
 
-**Coverage, not a count.** *Every* roadmap-shaped backlog item in the store at
+**Coverage, not a count.** *Every* roadmap-shaped item in the store at
 migration time gets a node. There is no target number: a migration that
 produced "about eight nodes" has counted, not covered.
 
 **The selection is a judgment, and the CLI never judges** (HC1) — it derives
-and renders. Deciding which backlog items are roadmap-shaped is the
+and renders. Deciding which items are roadmap-shaped is the
 **migrating agent's** call, which is exactly why step 3 writes the whole call
 down before step 5 acts on it.
 
@@ -34,13 +34,37 @@ nothing is ever written back onto the item; never hand-edit anything under
 
        nahel status
 
-   Every line is `<name>  <type>  <status>  lane=<lane>  id=<id>`. Your
-   candidate set is every item at status `backlog`, read off that output.
+   Every line is `<name>  <type>  <status>  lane=<lane>  id=<id>`, and the
+   tree is rendered by depth: the **least-indented** lines are the
+   **top-level** items — the ones with **no parent**.
+
+   Your candidate set is every top-level item whose status is not `dropped`:
+   `backlog`, `in-progress`, `blocked`, `in-review`, **and `done`**.
+
+   Two halves of that line, and both are deliberate. **Top-level** is the
+   candidate boundary because a child item is a piece of work *under* the
+   feature that earns the node — the parent is what the roadmap carries. And
+   **`done` is in** because the roadmap's job is built / in-flight / planned,
+   not planned alone: a product whose features have shipped would otherwise
+   migrate to an empty roadmap and come out historyless. A done feature's node
+   needs nothing extra to say so — its columns **derive** `built` from the
+   epic it names, by the childless-epic rule or by its children's rollup.
+   Only `dropped` is out: abandoned intent is not intent the roadmap carries.
 
    Do **not** start from `docs/roadmap.md`, from a PRD's list, or from a
    previous session's notes. Those are a **snapshot** of the day they were
    written, and the gap between such a list and the store is the whole reason
    this step names a command instead of a document.
+
+   **What shipped before this store existed is not migration's business.**
+   Migration adopts the intent the *store* is carrying, and a capability
+   delivered before there was a store to record it carries no work item at
+   all. A node charted for one would name no epic, so every column it renders
+   would derive `planned` while the node claimed shipped history —
+   **false history**, written by the act that exists to make history
+   auditable. The honest answer is to leave it out and say so: bringing pre-store
+   capabilities in is a **historical import**, designed separately, and it
+   waits for that design rather than for a judgment call here.
 
 2. Judge each candidate. **Roadmap-shaped** means the item states *product
    intent*: a capability of the product someone outside the codebase would
@@ -53,14 +77,12 @@ nothing is ever written back onto the item; never hand-edit anything under
    - a `feature` item stating a capability nobody has built yet — **include**,
      including the deliberately-future ones. A node whose horizon is `later`
      is still coverage; leaving it out because it is far off is a count.
+   - a `done` `feature` item — **include**: the capability is built and the
+     roadmap still carries it. Its horizon is `now`, and its columns say
+     `built` on their own.
    - a `bug` item — **exclude**: a defect in shipped behaviour is work, not
      roadmap intent, however large it is.
    - a `chore` — **exclude**, same reason.
-   - a `feature`-typed item parented under an existing epic — **exclude**: it
-     is a piece of work under that feature, and the parent is what earns a
-     node.
-   - an item not at `backlog` — **exclude**: migration covers the backlog, and
-     an item already delivered or dropped is not intent waiting to be placed.
 
    Every candidate you excluded that a reasonable reviewer could have included
    is a **near-miss**, and it needs a **one-line reason**. The test is simple:

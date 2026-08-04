@@ -368,10 +368,33 @@ control is **visibility**:
 
 The layer is proven by adopting the state that already exists, in **both
 live stores**. The migration rule is **coverage, not a count**: *every
-roadmap-shaped backlog item in both stores at migration time* gets a node,
+roadmap-shaped item in both stores at migration time* gets a node,
 enumerated at build time from the stores themselves. (The grill note's "8
 headline items" was a scribe miscount, corrected by Jim — journal event
-`wf87dkyx`.) As recorded today that is:
+`wf87dkyx`.)
+
+**The candidate line** (revised by Jim in the PR #26 review, follow-up C1 —
+the original text drew it at status `backlog`): a candidate is a
+**top-level** item — one with **no parent** — at any status but `dropped`,
+which puts `backlog`, `in-progress`, `blocked`, `in-review` **and `done`**
+in scope. Done features are candidates because the roadmap's job is
+built / in-flight / planned rather than planned alone: excluding them
+migrates a delivered product to an empty roadmap and leaves it historyless
+(speed-count, where the shipped work *is* the product, is the case that
+proves it). A done feature's node needs no extra field to say so — its
+columns derive `built` from the epic it names, by the childless-epic rule or
+by its children's rollup. Only `dropped` is out: abandoned intent is not
+intent the roadmap carries. The judgment rules are unchanged — roadmap-shaped
+versus work-shaped, near-misses need reasons.
+
+**Pre-store history is explicitly out of scope.** A capability that shipped
+before the store existed carries no work item, so a node charted for it would
+name no epic and would render `planned` while claiming shipped history —
+false history, written by the one act whose purpose is an auditable record.
+Bringing such capabilities in is a **historical import**, designed
+separately; migration does not attempt it.
+
+As recorded today the sets are:
 
 - **nahel** — the roadmap-headline backlog items recorded today
   (`detached-state-repo` `aqz2bvav`, `architecture-docs-wiki` `x41wnrap`,
@@ -414,8 +437,8 @@ whatever nodes happen to exist afterwards.
   back to an id in it — the set and the result match exactly, with no
   orphans and nothing invented.
 - After migration, `nahel roadmap` in each store shows every roadmap-shaped
-  backlog item recorded at migration time, enumerated from the store rather
-  than from this document.
+  candidate recorded at migration time — top-level, any status but `dropped`
+  — enumerated from the store rather than from this document.
 - Each migration act is journaled naming the node and the item it covers.
 - `git diff` over `nahel/items/` across the whole migration is **empty** in
   both stores — a single modified item record fails this criterion (F1's

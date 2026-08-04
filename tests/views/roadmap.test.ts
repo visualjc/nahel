@@ -81,10 +81,20 @@ describe("featureDevStatus — the F2 truth table, row by row", () => {
     expect(featureDevStatus(node, [])).toEqual({ status: "unknown", anomaly: "epic-missing" });
   });
 
-  test("epic exists with zero children → planned, and no all-dropped warning (none existed)", () => {
+  /**
+   * CHANGED by the PR #26 review (follow-up B), superseding the earlier row
+   * that read a CHILDLESS epic as `planned` whatever the epic itself said. A
+   * `direct`-lane epic never grows children, so the old row reported a feature
+   * whose only work item was `in-progress` as `planned` — and reported it as
+   * `planned` still when that item was `done`. With no descendants the epic IS
+   * the work, so its own status is the rollup. `backlog` still reads `planned`;
+   * the row's answer is unchanged here, its REASON is not.
+   */
+  test("epic exists with zero children → the epic's own status, and backlog reads planned", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const { epic, items } = epicWith(env, []);
     const node = makeNode(env, { epic: epic.id });
+    expect(epic.status).toBe("backlog");
 
     expect(featureDevStatus(node, items)).toEqual({ status: "planned" });
   });
@@ -202,6 +212,16 @@ describe("featureDevStatus — the rollup reads the whole subtree under the epic
     expect(featureDevStatus(node, items)).toEqual({ status: "built" });
   });
 
+  test("and the other way round: a done epic over a backlog child is in-flight, not built", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done", "backlog"]);
+    const node = makeNode(env, { epic: epic.id });
+
+    expect(
+      featureDevStatus(node, items.map((item) => (item.id === epic.id ? { ...item, status: "done" as const } : item))),
+    ).toEqual({ status: "in-flight" });
+  });
+
   test("an item outside the epic's subtree never joins the rollup", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const { epic, items } = epicWith(env, ["done"]);
@@ -209,6 +229,78 @@ describe("featureDevStatus — the rollup reads the whole subtree under the epic
     const stranger = makeFrontmatter(env, { name: "solo-chore", status: "backlog" });
 
     expect(featureDevStatus(node, [...items, stranger])).toEqual({ status: "built" });
+  });
+});
+
+/**
+ * The childless epic (PR #26 follow-up B). A `direct`-lane epic never grows
+ * children, so an epic with no descendants is not "an epic with no work" — it
+ * IS the work, and reading it as `planned` forever reported a feature under
+ * active development as unstarted, and a finished one as unstarted too.
+ *
+ * With no descendants the epic's OWN status is the rollup. The moment one
+ * descendant exists the existing rollup is authoritative again and the root is
+ * excluded, because then the epic really is a container: including it would let
+ * a `done` epic override the backlog work still open underneath it.
+ */
+describe("featureDevStatus — a childless epic is itself the work (B)", () => {
+  /** The rollup for an epic at `status` with no descendants at all. */
+  function childless(status: WorkItemFrontmatter["status"]) {
+    const env = seededEnv({ tickSeconds: 1 });
+    const epic = makeFrontmatter(env, { name: "solo-epic", type: "feature", status });
+    const node = makeNode(env, { epic: epic.id });
+    return featureDevStatus(node, [epic]);
+  }
+
+  test("backlog → planned", () => {
+    expect(childless("backlog")).toEqual({ status: "planned" });
+  });
+
+  test("in-progress, blocked and in-review → in-flight: started work, however it is going", () => {
+    expect(childless("in-progress")).toEqual({ status: "in-flight" });
+    expect(childless("blocked")).toEqual({ status: "in-flight" });
+    expect(childless("in-review")).toEqual({ status: "in-flight" });
+  });
+
+  test("done → built: the whole of the work under this feature is finished", () => {
+    expect(childless("done")).toEqual({ status: "built" });
+  });
+
+  test("dropped → planned, flagged epic-dropped: the feature's only work was abandoned", () => {
+    expect(childless("dropped")).toEqual({ status: "planned", anomaly: "epic-dropped" });
+  });
+
+  test("ONE descendant hands the rollup back: a done epic over a backlog child is planned", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const epic = makeFrontmatter(env, { name: "solo-epic", type: "feature", status: "done" });
+    const child = makeFrontmatter(env, { name: "leaf", status: "backlog", parent: epic.id });
+    const node = makeNode(env, { epic: epic.id });
+
+    // Not `built`: the container being marked done says nothing about the work
+    // still open underneath it.
+    expect(featureDevStatus(node, [epic, child])).toEqual({ status: "planned" });
+  });
+
+  test("and a done epic over an all-dropped subtree stays planned + all-dropped, never built", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const epic = makeFrontmatter(env, { name: "solo-epic", type: "feature", status: "done" });
+    const child = makeFrontmatter(env, { name: "leaf", status: "dropped", parent: epic.id });
+    const node = makeNode(env, { epic: epic.id });
+
+    expect(featureDevStatus(node, [epic, child])).toEqual({
+      status: "planned",
+      anomaly: "all-dropped",
+    });
+  });
+
+  test("the stage follows: a childless in-progress epic reads in-flight, not planned", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const epic = makeFrontmatter(env, { name: "solo-epic", type: "feature", status: "in-progress" });
+    const node = makeNode(env, { epic: epic.id });
+
+    const status = featureStatus(node, [epic], []);
+    expect(status.dev).toBe("in-flight");
+    expect(status.stage).toBe("in-flight");
   });
 });
 

@@ -937,3 +937,60 @@ describe("validate — stage released vs archival-qualified (A3)", () => {
     expect(findingsFor(findings, "roadmap.release-incomplete")).toEqual([]);
   });
 });
+
+/**
+ * The childless-epic warning (PR #26 follow-up B), the third member of the
+ * epic-anomaly family. With no descendants the epic IS the feature's work, so
+ * a DROPPED one means the feature's only work was abandoned — the same fact
+ * `epic-all-dropped` reports about a subtree, one level up. Both derive
+ * `planned` all the same; both are advisory.
+ */
+describe("validate — a dropped childless epic (B)", () => {
+  /** A feature node over an epic at `status`, with no work under it at all. */
+  async function childless(fixture: ValidateFixture, status: "dropped" | "backlog" | "done") {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, {
+      name: "solo-epic",
+      type: "feature",
+      lane: "direct",
+      status,
+    });
+    const node = await createNode(fixture, {
+      name: "solo-feature",
+      parent: product.id,
+      epic: epic.id,
+    });
+    return { node, epic };
+  }
+
+  test("a dropped childless epic is a WARNING naming the node and the epic", async () => {
+    const fixture = await setup();
+    const { node, epic } = await childless(fixture, "dropped");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.epic-dropped");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(`${node.id}.md`);
+    expect(findings[0]!.message).toContain("solo-feature");
+    expect(findings[0]!.message).toContain(epic.id);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a backlog or done childless epic warns about nothing", async () => {
+    for (const status of ["backlog", "done"] as const) {
+      const fixture = await setup();
+      await childless(fixture, status);
+      const findings = await validateStore(fixture.layout);
+      expect(findingsFor(findings, "roadmap.epic-dropped")).toEqual([]);
+      expect(findingsFor(findings, "roadmap.epic-all-dropped")).toEqual([]);
+    }
+  });
+
+  test("a dropped epic WITH a live child is not it — the subtree is what is rolled up", async () => {
+    const fixture = await setup();
+    const { epic } = await childless(fixture, "dropped");
+    await createItem(fixture, { name: "live-work", status: "in-progress", parent: epic.id });
+
+    expect(findingsFor(await validateStore(fixture.layout), "roadmap.epic-dropped")).toEqual([]);
+  });
+});

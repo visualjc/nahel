@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CORE_EVENT_TYPES,
+  DEPLOY_COMPLETED_EVENT_TYPE,
   QA_SWEEP_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
 } from "../../src/schema/events";
@@ -1018,5 +1019,131 @@ describe("validate — a dropped childless epic (B)", () => {
     await createItem(fixture, { name: "live-work", status: "in-progress", parent: epic.id });
 
     expect(findingsFor(await validateStore(fixture.layout), "roadmap.epic-dropped")).toEqual([]);
+  });
+});
+
+/**
+ * Malformed lifecycle payloads, flagged UNCONDITIONALLY (final gate). A thin
+ * release used to be reported only through the PRD lifecycle, so a node with no
+ * `prd` recorded — most nodes, most of the time — got silence: the stage
+ * quietly declined to advance and nothing said why. The deploy payload was
+ * never checked at all.
+ *
+ * Both now report from the derivation, beside the sweep-count warning they are
+ * siblings of: same shape, same severity, same reason. Each names the event and
+ * the keys it lacks, because the fix is to re-log THAT act.
+ */
+describe("validate — malformed lifecycle payloads (final gate)", () => {
+  /** A feature node over an epic with one done leaf, and NO `prd` anywhere. */
+  async function prdlessFeature(fixture: ValidateFixture) {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "shipped-epic", type: "plan", lane: "full" });
+    await createItem(fixture, { name: "leaf-work", status: "done", parent: epic.id });
+    const node = await createNode(fixture, {
+      name: "detached-state-repo",
+      parent: product.id,
+      epic: epic.id,
+    });
+    return { node, epic };
+  }
+
+  /** Log one lifecycle fact over the epic. */
+  async function fact(
+    fixture: ValidateFixture,
+    epic: string,
+    type: string,
+    payload: Record<string, unknown>,
+  ): Promise<JournalEvent> {
+    return appendEvent(fixture.layout, fixture.env, {
+      type,
+      actor: { kind: "agent", id: "claude-code" },
+      item: epic,
+      payload,
+      session: fixture.agent.session,
+    });
+  }
+
+  test("a thin release on a node with NO prd is still a warning", async () => {
+    const fixture = await setup();
+    const { node, epic } = await prdlessFeature(fixture);
+    const announced = await fact(fixture, epic.id, RELEASE_ANNOUNCED_EVENT_TYPE, { version: "0.3.0" });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.release-incomplete",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(`${node.id}.md`);
+    expect(findings[0]!.message).toContain(announced.id);
+    expect(findings[0]!.message).toContain("channel");
+    expect(findings[0]!.message).toContain("announcement");
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a deploy with no environment is the deploy analog, naming the key it lacks", async () => {
+    const fixture = await setup();
+    const { node, epic } = await prdlessFeature(fixture);
+    const deployed = await fact(fixture, epic.id, DEPLOY_COMPLETED_EVENT_TYPE, { ref: "3ba7a70" });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.deploy-incomplete",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(`${node.id}.md`);
+    expect(findings[0]!.message).toContain(deployed.id);
+    expect(findings[0]!.message).toContain("environment");
+    // The fix is to re-log the act, never to touch a record.
+    expect(findings[0]!.fix).toContain(DEPLOY_COMPLETED_EVENT_TYPE);
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a blank environment is a missing one", async () => {
+    const fixture = await setup();
+    const { epic } = await prdlessFeature(fixture);
+    await fact(fixture, epic.id, DEPLOY_COMPLETED_EVENT_TYPE, { environment: "   " });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "roadmap.deploy-incomplete"),
+    ).toHaveLength(1);
+  });
+
+  test("well-formed facts warn about nothing at all", async () => {
+    const fixture = await setup();
+    const { epic } = await prdlessFeature(fixture);
+    await fact(fixture, epic.id, DEPLOY_COMPLETED_EVENT_TYPE, {
+      environment: "production",
+      ref: "3ba7a70",
+    });
+    await fact(fixture, epic.id, RELEASE_ANNOUNCED_EVENT_TYPE, {
+      version: "0.3.0",
+      channel: "github",
+      announcement: "https://example.invalid/v0.3.0",
+    });
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.release-incomplete")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.deploy-incomplete")).toEqual([]);
+  });
+
+  test("a RETRACTED malformed fact warns about nothing — it decides no column", async () => {
+    const fixture = await setup();
+    const { epic } = await prdlessFeature(fixture);
+    const deployed = await fact(fixture, epic.id, DEPLOY_COMPLETED_EVENT_TYPE, {});
+    const announced = await fact(fixture, epic.id, RELEASE_ANNOUNCED_EVENT_TYPE, {});
+    for (const withdrawn of [deployed, announced]) {
+      await appendEvent(fixture.layout, fixture.env, {
+        type: "roadmap.column-retracted",
+        actor: { kind: "agent", id: "claude-code" },
+        payload: { event: withdrawn.id, reason: "logged against the wrong epic" },
+        session: fixture.agent.session,
+      });
+    }
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "roadmap.release-incomplete")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.deploy-incomplete")).toEqual([]);
   });
 });

@@ -979,3 +979,66 @@ describe("collectStandupWindow — the journal streamed, never held", () => {
     expect(deep.baseline.size).toBe(1);
   });
 });
+
+/**
+ * The group headers read the same stage machinery `nahel roadmap` does (final
+ * gate), so the tightened release and deploy rows have to reach them: a header
+ * calling a feature `released` on a release recording nothing would be the
+ * strongest word on the page, earned by nothing, in the surface a human skims
+ * fastest.
+ */
+describe("renderStandup — the header follows the well-formed-fact rule", () => {
+  test("a thin release leaves the header at the rollup while its act still shows", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    const release = logged(
+      env,
+      RELEASE_ANNOUNCED_EVENT_TYPE,
+      fixture.epic.id,
+      { version: "0.3.0" },
+      "2026-07-30T09:00:00Z",
+    );
+
+    const out = renderStandup({
+      since: "2026-07-26T09:15:00Z",
+      nodes: [fixture.node],
+      items: fixture.items,
+      runs: [],
+      baseline: new Map(),
+      events: [fixture.birth, release],
+    });
+
+    expect(out).toContain(
+      `detached-state-repo  feature  built  id=${fixture.node.frontmatter.id}`,
+    );
+    expect(out).not.toContain("feature  released");
+    expect(out).toContain(`shipped  released 0.3.0  act=${release.id}`);
+  });
+
+  test("a deploy with no environment leaves the header at the rollup too", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    const deploy = logged(
+      env,
+      DEPLOY_COMPLETED_EVENT_TYPE,
+      fixture.epic.id,
+      { ref: "3ba7a70" },
+      "2026-07-30T09:00:00Z",
+    );
+
+    const out = renderStandup({
+      since: "2026-07-26T09:15:00Z",
+      nodes: [fixture.node],
+      items: fixture.items,
+      runs: [],
+      baseline: new Map(),
+      events: [fixture.birth, deploy],
+    });
+
+    expect(out).toContain(
+      `detached-state-repo  feature  built  id=${fixture.node.frontmatter.id}`,
+    );
+    expect(out).not.toContain("feature  deployed");
+    expect(out).toContain(`shipped  deployed ?  act=${deploy.id}`);
+  });
+});

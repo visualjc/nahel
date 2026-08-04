@@ -728,7 +728,16 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
         item: epic.id,
         type,
         ts: `2026-07-1${index + 1}T12:00:00Z`,
-        payload: { failed: 0, environment: "prod", version: "0.3.0" },
+        // WELL-FORMED throughout (final gate): the precedence table is about
+        // which row wins, so every fact here has to be one that can win its
+        // row. The rows' own well-formedness rule has its own describe below.
+        payload: {
+          failed: 0,
+          environment: "prod",
+          version: "0.3.0",
+          channel: "github",
+          announcement: "https://example.invalid/v0.3.0",
+        },
       }),
     );
     return featureStatus(node, items, events).stage;
@@ -776,7 +785,12 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
       item: epic.id,
       type: RELEASE_ANNOUNCED_EVENT_TYPE,
       ts: "2026-07-16T12:00:00Z",
-      payload: { version: "0.3.0" },
+      // Well-formed, so the row it wins is the one under test (final gate).
+      payload: {
+        version: "0.3.0",
+        channel: "github",
+        announcement: "https://example.invalid/v0.3.0",
+      },
     });
     const laterDeploy = makeEvent({
       id: "aaaaaaa2",
@@ -954,6 +968,138 @@ describe("featureStatus — the stage advances on a CLEAN sweep only (A2)", () =
     const status = featureStatus(node, items, events);
     expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
     expect(status.stage).toBe("tested");
+  });
+});
+
+/**
+ * The release and deploy rows, finishing what A2 started (final gate). A2 made
+ * the SWEEP row demand a well-formed fact and left the two rows above it
+ * advancing on mere existence, so `nahel log release.announced --item <epic>`
+ * with an empty payload still read `released` — the strongest word on the
+ * board, earned by recording nothing.
+ *
+ * Every stage word now means the same thing: A WELL-FORMED FACT SAID SO.
+ * `released` needs the same nonblank `version`, `channel` and `announcement`
+ * the archival gate demands — one predicate, one home, so the word and the verb
+ * cannot drift — and `deployed` needs a nonblank `environment`. A malformed
+ * winner leaves the stage at the next row down.
+ *
+ * The COLUMNS are untouched throughout: F2's render table is the contract, so a
+ * thin release still renders `released ? <ts>` and a thin deploy
+ * `deployed ? <ts>`. The column shows what the store holds; the stage says what
+ * it earned.
+ */
+describe("featureStatus — the stage advances on a WELL-FORMED fact only", () => {
+  const FULL_RELEASE = {
+    version: "0.3.0",
+    channel: "github",
+    announcement: "https://example.invalid/v0.3.0",
+  };
+
+  /** A feature over an epic with one done child (dev `built`), plus `events`. */
+  function stageOf(build: (epic: string) => readonly JournalEvent[]) {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    return featureStatus(node, items, build(epic.id));
+  }
+
+  /** One covering release with the payload given. */
+  function release(item: string, payload: Record<string, unknown>): JournalEvent {
+    return makeEvent({ id: "aaaaaaa2", item, type: RELEASE_ANNOUNCED_EVENT_TYPE, payload });
+  }
+
+  /** One covering deploy with the payload given. */
+  function deploy(item: string, payload: Record<string, unknown>): JournalEvent {
+    return makeEvent({ id: "aaaaaaa1", item, type: DEPLOY_COMPLETED_EVENT_TYPE, payload });
+  }
+
+  test("a well-formed release still reads released — the row that earns the word", () => {
+    const status = stageOf((epic) => [release(epic, FULL_RELEASE)]);
+    expect(status.stage).toBe("released");
+    expect(status.release).toBe("released 0.3.0 2026-07-16T12:00:00Z");
+  });
+
+  test("a release missing channel and announcement falls to the row below", () => {
+    const status = stageOf((epic) => [
+      deploy(epic, { environment: "prod" }),
+      release(epic, { version: "0.3.0" }),
+    ]);
+
+    expect(status.stage).toBe("deployed");
+    // The COLUMN still says exactly what the store holds.
+    expect(status.release).toBe("released 0.3.0 2026-07-16T12:00:00Z");
+  });
+
+  test("with nothing below it, a thin release falls all the way to the dev rollup", () => {
+    const status = stageOf((epic) => [release(epic, { version: "0.3.0" })]);
+    expect(status.stage).toBe("built");
+  });
+
+  test("a release recording NOTHING renders `released ? <ts>` and earns no word at all", () => {
+    const status = stageOf((epic) => [release(epic, {})]);
+    expect(status.release).toBe("released ? 2026-07-16T12:00:00Z");
+    expect(status.stage).toBe("built");
+  });
+
+  test("blank keys are missing keys — the archival gate's rule, one predicate", () => {
+    const status = stageOf((epic) => [
+      release(epic, { version: "0.3.0", channel: "   ", announcement: "" }),
+    ]);
+    expect(status.stage).toBe("built");
+  });
+
+  test("a well-formed deploy still reads deployed", () => {
+    const status = stageOf((epic) => [deploy(epic, { environment: "prod" })]);
+    expect(status.stage).toBe("deployed");
+    expect(status.deploy).toBe("deployed prod 2026-07-16T12:00:00Z");
+  });
+
+  test("a deploy with no environment falls to the sweep row below it", () => {
+    const status = stageOf((epic) => [
+      makeEvent({ id: "aaaaaaa0", item: epic, payload: { failed: 0 } }),
+      deploy(epic, { ref: "3ba7a70" }),
+    ]);
+
+    expect(status.stage).toBe("tested");
+    expect(status.deploy).toBe("deployed ? 2026-07-16T12:00:00Z");
+  });
+
+  test("a blank environment is no environment, and with nothing below it reaches the rollup", () => {
+    const status = stageOf((epic) => [deploy(epic, { environment: "  " })]);
+    expect(status.stage).toBe("built");
+    expect(status.deploy).toBe("deployed ? 2026-07-16T12:00:00Z");
+  });
+
+  test("both malformed: the stage reads the rollup, and both columns still speak", () => {
+    const status = stageOf((epic) => [deploy(epic, {}), release(epic, {})]);
+
+    expect(status.stage).toBe("built");
+    expect(status.deploy).toBe("deployed ? 2026-07-16T12:00:00Z");
+    expect(status.release).toBe("released ? 2026-07-16T12:00:00Z");
+  });
+
+  test("the malformed facts are named for `validate`, with the keys they lack", () => {
+    const status = stageOf((epic) => [
+      deploy(epic, { ref: "3ba7a70" }),
+      release(epic, { version: "0.3.0" }),
+    ]);
+
+    expect(status.incompleteRelease).toEqual({
+      event: "aaaaaaa2",
+      missing: ["channel", "announcement"],
+    });
+    expect(status.incompleteDeploy).toEqual({ event: "aaaaaaa1", missing: ["environment"] });
+  });
+
+  test("well-formed facts name nothing — a clean store carries no gaps", () => {
+    const status = stageOf((epic) => [
+      deploy(epic, { environment: "prod" }),
+      release(epic, FULL_RELEASE),
+    ]);
+
+    expect(status.incompleteRelease).toBeUndefined();
+    expect(status.incompleteDeploy).toBeUndefined();
   });
 });
 

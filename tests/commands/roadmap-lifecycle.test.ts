@@ -507,6 +507,22 @@ describe("the vocabulary the two types are recorded under (F9)", () => {
     expect(defined).toContain("exactly");
     expect(defined).not.toContain("still reads `tested`");
   });
+
+  /**
+   * Every stage word means the same thing now (final gate): a WELL-FORMED fact
+   * said so. The glossary is where a workflow author learns what earns each
+   * word, so it has to name the keys the two upper rows demand — and stop
+   * teaching that a release recording nothing reads `released`.
+   */
+  test("the glossary states the well-formed rule for the release and deploy rows too", async () => {
+    const defined = await entry("Stage");
+    expect(defined).toContain("well-formed");
+    for (const key of ["`version`", "`channel`", "`announcement`", "`environment`"]) {
+      expect(defined).toContain(key);
+    }
+    // The columns stay permissive, and the entry has to say which is which.
+    expect(defined).toContain("`released ? <ts>`");
+  });
 });
 
 /**

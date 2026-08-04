@@ -1200,11 +1200,22 @@ describe("the archival gate: a release a reader can follow back (A3)", () => {
     expect(said).toContain("announcement");
   });
 
-  test("the stage stays permissive: the view still reads released while the verb refuses", async () => {
+  /**
+   * CHANGED by the final gate, which finished what A2 started: the COLUMN is
+   * what stays permissive, not the stage word. A2 left the release row
+   * advancing on mere existence, so a thin release read `released` — the
+   * strongest word on the board, earned by recording nothing. The word and the
+   * verb now share ONE predicate, so what the view says and what archival
+   * accepts can no longer disagree.
+   */
+  test("the COLUMN stays permissive; the stage word no longer does", async () => {
     const fixture = await released({ release: ["version=0.3.0"] });
 
     const zoom = (await ok(fixture.env, fixture.root, [fixture.nodeName])).join("\n");
-    expect(zoom).toContain("released");
+    // What the store holds, rendered verbatim…
+    expect(zoom).toContain("release=released 0.3.0");
+    // …under a stage word the release did not earn.
+    expect(zoom).toContain("status: built");
     await refusal(fixture);
   });
 

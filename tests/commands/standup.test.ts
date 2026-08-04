@@ -89,8 +89,13 @@ async function newItem(env: Env, root: string, args: string[]): Promise<string> 
   return id!;
 }
 
-/** Record an open-extension event through `nahel log`; its type warning is expected. */
-async function log(env: Env, root: string, args: string[]): Promise<void> {
+/**
+ * Record an open-extension event through `nahel log`; its type warning is
+ * expected. Returns the event's id, read off the command's own success line —
+ * which is how a workflow author gets it too, and what a retraction has to name.
+ */
+async function log(env: Env, root: string, args: string[]): Promise<string> {
+  const before = logs.length;
   expect(
     await logCommand.run(args, {
       env,
@@ -100,6 +105,9 @@ async function log(env: Env, root: string, args: string[]): Promise<void> {
     }),
   ).toBe(0);
   errs = [];
+  const id = /event ([a-z0-9]+) /.exec(logs.slice(before).join("\n"))?.[1];
+  expect(id).toMatch(ID_PATTERN);
+  return id!;
 }
 
 /** Every file under a directory, path → bytes — the store's exact state. */
@@ -317,6 +325,7 @@ describe("nahel standup — documented vocabulary", () => {
       "closed",
       "tested",
       "shipped",
+      "retracted",
     ]) {
       expect(defined).toContain(`\`${verb}\``);
     }
@@ -343,9 +352,35 @@ describe("nahel standup — documented vocabulary", () => {
       "failed=0",
     ]);
 
+    // `retracted` needs a lifecycle fact to withdraw: the release below is
+    // announced and then taken back, and both acts stay in the window.
+    const release = await log(env, root, [
+      "release.announced",
+      "--item",
+      child,
+      "--data",
+      "version=0.3.0",
+    ]);
+    await log(env, root, [
+      "roadmap.column-retracted",
+      "--data",
+      `event=${release}`,
+      "--data",
+      "reason=announced against the wrong epic",
+    ]);
+
     const out = await standup(env, root, ["--since", "7d"]);
     const defined = await entry("Standup");
-    for (const verb of ["opened", "moved", "blocked", "parked", "closed", "tested", "shipped"]) {
+    for (const verb of [
+      "opened",
+      "moved",
+      "blocked",
+      "parked",
+      "closed",
+      "tested",
+      "shipped",
+      "retracted",
+    ]) {
       expect(out).toContain(`  ${verb}  `);
       expect(defined).toContain(`\`${verb}\``);
     }

@@ -572,15 +572,24 @@ describe("renderStandup — determinism", () => {
 });
 
 /**
- * Retraction (PR #26 follow-up A1). A standup's group header carries the node's
- * derived stage — the SAME derivation `nahel roadmap` renders — so a retracted
- * lifecycle fact has to reach this view, or the header would claim a stage the
- * roadmap no longer shows.
+ * Retraction (PR #26 follow-up A1, corrected by the codex review). A standup's
+ * group header carries the node's derived stage — the SAME derivation `nahel
+ * roadmap` renders — so a retracted lifecycle fact has to reach this view, or
+ * the header would claim a stage the roadmap no longer shows.
  *
- * The act LINES are deliberately untouched: the journal is append-only and a
- * standup reports what happened, naming each act by id. The release was
- * announced; that it was later withdrawn is a fact about the derivation, and
- * the header is where the derivation speaks.
+ * A retraction is also MOVEMENT in its own right. Treating it as derivation-only
+ * left two lies in the window: a window whose only act was a retraction reported
+ * "no movement", and a release retracted in the SAME window rendered `shipped
+ * released 0.3.0` under a header reading `built`, with nothing on the page
+ * reconciling them.
+ *
+ * So both lines print. The original act line is untouched — the journal is
+ * append-only and a standup reports what happened, naming each act by id — and
+ * a `retracted` line follows it, grouped under the WITHDRAWN fact's item (the
+ * retraction carries no item ref of its own; the event-id edge is what ties it
+ * there), naming what was withdrawn and by which act. A retraction that
+ * withdraws nothing — an unknown target, a non-lifecycle target, an incomplete
+ * payload — prints nothing, exactly as it derives nothing.
  */
 describe("renderStandup — a retracted lifecycle fact", () => {
   const COLUMN_RETRACTED = "roadmap.column-retracted";
@@ -632,5 +641,125 @@ describe("renderStandup — a retracted lifecycle fact", () => {
     expect(out).not.toContain("feature  released");
     // The act itself is still reported — nothing is erased from the journal.
     expect(out).toContain(`shipped  released 0.3.0  act=${release.id}`);
+    // …and the withdrawal is reported too, so the page is not a release line
+    // under a header that silently disagrees with it.
+    expect(out).toContain(
+      `    2026-07-31T10:00:00Z  retracted  shipped released 0.3.0 (act ${release.id})  act=${retraction.id}`,
+    );
+    // Both under the item the WITHDRAWN fact named, in journal order.
+    expect(out.indexOf(`act=${release.id}`)).toBeLessThan(out.indexOf(`act=${retraction.id}`));
+  });
+
+  test("a retraction-only window is MOVEMENT, not silence", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    // The release is older than the window; only its withdrawal happened here.
+    const release = logged(
+      env,
+      RELEASE_ANNOUNCED_EVENT_TYPE,
+      fixture.epic.id,
+      { version: "0.3.0" },
+      "2026-07-20T09:00:00Z",
+    );
+    const retraction = logged(
+      env,
+      COLUMN_RETRACTED,
+      undefined,
+      { event: release.id, reason: "announced against the wrong epic" },
+      "2026-07-30T10:00:00Z",
+    );
+
+    const out = renderStandup({
+      since: "2026-07-26T09:15:00Z",
+      nodes: [fixture.node],
+      items: fixture.items,
+      runs: [],
+      events: [fixture.birth, release, retraction],
+    });
+
+    expect(out).not.toContain("no movement in this window");
+    expect(out).toContain(
+      `detached-state-repo  feature  built  id=${fixture.node.frontmatter.id}`,
+    );
+    expect(out).toContain(`  ${fixture.epic.name}  id=${fixture.epic.id}`);
+    expect(out).toContain(
+      `    2026-07-30T10:00:00Z  retracted  shipped released 0.3.0 (act ${release.id})  act=${retraction.id}`,
+    );
+    // The older release is NOT re-reported: it did not happen in this window.
+    expect(out).not.toContain(`shipped  released 0.3.0  act=${release.id}`);
+  });
+
+  test("a withdrawn sweep and deploy read back in the words their own lines used", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    const sweep = logged(env, QA_SWEEP_EVENT_TYPE, fixture.child.id, { failed: 2 }, "2026-07-30T08:00:00Z");
+    const deploy = logged(
+      env,
+      DEPLOY_COMPLETED_EVENT_TYPE,
+      fixture.child.id,
+      { environment: "staging" },
+      "2026-07-30T08:30:00Z",
+    );
+    const events = [fixture.birth, sweep, deploy];
+    for (const withdrawn of [sweep, deploy]) {
+      events.push(
+        logged(
+          env,
+          COLUMN_RETRACTED,
+          undefined,
+          { event: withdrawn.id, reason: "summarised from the wrong run" },
+          "2026-07-30T09:00:00Z",
+        ),
+      );
+    }
+
+    const out = renderStandup({
+      since: "2026-07-26T09:15:00Z",
+      nodes: [fixture.node],
+      items: fixture.items,
+      runs: [],
+      events,
+    });
+
+    expect(out).toContain(`retracted  tested 2 failed (act ${sweep.id})`);
+    expect(out).toContain(`retracted  shipped deployed staging (act ${deploy.id})`);
+  });
+
+  test("a retraction that withdraws NOTHING prints nothing — it derives nothing either", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const fixture = charted(env, "done");
+    const release = logged(
+      env,
+      RELEASE_ANNOUNCED_EVENT_TYPE,
+      fixture.epic.id,
+      { version: "0.3.0" },
+      "2026-07-20T09:00:00Z",
+    );
+    const inert = [
+      // an id no event carries
+      { event: "zzzzzzzz", reason: "wrong epic" },
+      // a target that is not a lifecycle fact — the child's own creation act
+      { event: fixture.birth.id, reason: "wrong epic" },
+      // complete target, no reason at all
+      { event: release.id },
+      // complete target, blank reason
+      { event: release.id, reason: "   " },
+    ];
+
+    for (const payload of inert) {
+      const out = renderStandup({
+        since: "2026-07-26T09:15:00Z",
+        nodes: [fixture.node],
+        items: fixture.items,
+        runs: [],
+        events: [
+          fixture.birth,
+          release,
+          logged(env, COLUMN_RETRACTED, undefined, payload, "2026-07-30T10:00:00Z"),
+        ],
+      });
+      expect(out).toContain("no movement in this window");
+      expect(out).not.toContain("retracted");
+    }
   });
 });

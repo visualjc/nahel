@@ -742,6 +742,32 @@ describe("validate — retracted lifecycle facts (A1)", () => {
     }
   });
 
+  /**
+   * A malformed retraction withdraws NOTHING, so there is nothing further to
+   * say about the event it named (codex review of A1): reporting the target as
+   * well would read as two separate defects and imply the retraction otherwise
+   * worked. One retraction, one finding.
+   */
+  test("a malformed retraction is reported ONCE, whatever it names", async () => {
+    const fixture = await setup();
+    const { node } = await sweptFeature(fixture);
+    const journal = await Array.fromAsync(readJournal(fixture.layout));
+    const creation = journal.find(
+      (event) =>
+        event.type === CORE_EVENT_TYPES.roadmapNodeCreated &&
+        JSON.stringify(event.payload).includes(node.id),
+    )!;
+    // No reason AND a target that could never be retracted anyway.
+    const retraction = await retract(fixture, { event: creation.id });
+
+    const findings = await validateStore(fixture.layout);
+    const malformed = findingsFor(findings, "roadmap.retraction-malformed");
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0]!.message).toContain(retraction.id);
+    expect(findingsFor(findings, "roadmap.retraction-target-kind")).toEqual([]);
+    expect(findingsFor(findings, "roadmap.retraction-target-missing")).toEqual([]);
+  });
+
   test("a well-formed retraction of a real sweep reports NOTHING, and fails nothing", async () => {
     const fixture = await setup();
     const { sweep } = await sweptFeature(fixture);

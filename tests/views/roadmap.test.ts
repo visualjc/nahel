@@ -1098,6 +1098,38 @@ describe("featureStatus — retracted lifecycle facts", () => {
     expect(status.qa).toBe("—");
   });
 
+  /**
+   * A retraction is COMPLETE or it is nothing (codex review of A1). The reason
+   * is not decoration: a withdrawal nobody can account for is worse than the
+   * fact it withdraws, and `validate` already calls a reason-less one MALFORMED
+   * and says it changes nothing. If the derivation withdrew the fact anyway,
+   * the store would render one thing while the report claimed another — the
+   * exact disagreement every derived surface here exists to prevent.
+   */
+  test("a retraction with no reason withdraws nothing — derivation and validate agree", () => {
+    const status = statusOf((epic) => [
+      makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+      makeEvent({ id: "aaaaaaa3", type: COLUMN_RETRACTED, payload: { event: "aaaaaaa1" } }),
+    ]);
+
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+    expect(status.stage).toBe("tested");
+  });
+
+  test("a BLANK reason is no reason — and neither is a non-string one", () => {
+    for (const reason of ["", "   ", 7, null]) {
+      const status = statusOf((epic) => [
+        makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),
+        makeEvent({
+          id: "aaaaaaa3",
+          type: COLUMN_RETRACTED,
+          payload: { event: "aaaaaaa1", reason },
+        }),
+      ]);
+      expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
+    }
+  });
+
   test("a retraction whose payload names no event is ignored, not read as a wildcard", () => {
     const status = statusOf((epic) => [
       makeEvent({ id: "aaaaaaa1", item: epic, payload: { failed: 0 } }),

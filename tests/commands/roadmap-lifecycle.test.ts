@@ -570,6 +570,25 @@ describe("a lifecycle fact retracted through the REAL logging path (A1)", () => 
     expect(after).toContain("detached-state-repo  released");
   });
 
+  /**
+   * A retraction is COMPLETE or it is nothing (codex review of A1): `validate`
+   * calls a reason-less one malformed and says it changes nothing, so the
+   * derivation has to leave the column exactly where it was. Driven through the
+   * real store, because a disagreement between the two would only ever show up
+   * with both surfaces reading the same journal.
+   */
+  test("a reason-less retraction changes no column — the report and the view agree", async () => {
+    const { root, layout, env } = await setup();
+    const { epic } = await feature(env, root);
+    await log(env, root, releaseArgs(epic));
+    const release = await idOf(layout, RELEASE_ANNOUNCED_EVENT_TYPE);
+    await log(env, root, [COLUMN_RETRACTED, "--data", `event=${release}`]);
+
+    const after = await view(env, root);
+    expect(after).toContain("released 0.3.0");
+    expect(after).toContain("detached-state-repo  released");
+  });
+
   test("the glossary defines the type, its payload, and the no-un-retraction rule", async () => {
     const glossary = await Bun.file(join(import.meta.dir, "../../CONTEXT.md")).text();
     const defined = glossary.split("\n").find((each) => each.startsWith("- **Retraction** —"));

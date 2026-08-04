@@ -803,6 +803,17 @@ function checkRoadmapDerivation(state: ParsedState): Finding[] {
         fix: "drop the node's intent too, or plan new work under the epic with `nahel item new` — this is advisory, nothing was refused",
       });
     }
+    // The same fact one level up: an epic with no work UNDER it is the work,
+    // so a dropped one is a feature whose only work item was abandoned.
+    if (anomaly === "epic-dropped") {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.epic-dropped",
+        path,
+        message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, which has no work under it and was itself dropped — its dev status reads planned over no live work`,
+        fix: "drop the node's intent too, or plan new work under the epic with `nahel item new` — this is advisory, nothing was refused",
+      });
+    }
   }
   return findings;
 }

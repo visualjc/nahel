@@ -210,12 +210,14 @@ export function renderTicket(record: TicketRecord, map: MapRecord | null): strin
 export type RoadmapDevStatus = "planned" | "in-flight" | "built" | "unknown";
 
 /**
- * The two truth-table rows that are ALSO `validate` warnings: a node naming an
- * epic no item record carries, and an epic whose every child was dropped. Both
- * derive a status all the same — the warning is advisory, and the rollup stays
- * total (F2: every case has a stated outcome).
+ * The truth-table rows that are ALSO `validate` warnings: a node naming an epic
+ * no item record carries, an epic whose every descendant was dropped, and — one
+ * level up, the same fact about an epic that IS the work — a childless epic
+ * that was itself dropped (B). Each derives a status all the same: the warning
+ * is advisory, and the rollup stays total (F2: every case has a stated
+ * outcome).
  */
-export type RoadmapEpicAnomaly = "epic-missing" | "all-dropped";
+export type RoadmapEpicAnomaly = "epic-missing" | "all-dropped" | "epic-dropped";
 
 /** A dev-status derivation: the status, plus the anomaly `validate` reports. */
 export interface RoadmapDevRollup {
@@ -230,21 +232,31 @@ export interface RoadmapDevRollup {
  * | epic state | dev status |
  * | no epic id on the node | `planned` |
  * | epic id with no item record | `unknown` + `epic-missing` |
- * | zero children after excluding `dropped` | `planned` (+ `all-dropped` when children existed) |
- * | every non-dropped child `done` | `built` |
- * | every non-dropped child `backlog` | `planned` |
+ * | epic with NO descendants at all | the epic's OWN status (see below) |
+ * | descendants, all `dropped` | `planned` + `all-dropped` |
+ * | every non-dropped descendant `done` | `built` |
+ * | every non-dropped descendant `backlog` | `planned` |
  * | anything else | `in-flight` |
  *
  * The rollup covers the epic's whole SUBTREE, not just its direct children:
  * work nests (an epic's task can own its own children), and the same coverage
  * rule the event association uses below — snapshot.ts's epicCoverage, over the
  * descendantIds walk claims and `progress --item` also use — is the only one
- * under which "flipping a leaf
- * work item to done changes the feature's status" (F2's first acceptance
- * criterion) holds. The epic item's OWN status is excluded: it is the
- * container, not work under itself.
+ * under which "flipping a leaf work item to done changes the feature's status"
+ * (F2's first acceptance criterion) holds.
  *
- * `dropped` children are excluded entirely (dropped work is not work), and
+ * The epic item's own status is read in EXACTLY ONE case (PR #26 review,
+ * follow-up B): when the epic has no descendants at all. Then it is not a
+ * container, it is the work — a `direct`-lane epic never grows children — and
+ * the earlier reading rendered such a feature `planned` while it was being
+ * built, and `planned` still once it was done. `backlog` → `planned`,
+ * `in-progress`/`blocked`/`in-review` → `in-flight`, `done` → `built`,
+ * `dropped` → `planned` + `epic-dropped`. The moment ONE descendant exists the
+ * root is excluded again, because then it IS the container: a `done` epic must
+ * never override the backlog work still open underneath it, and must never
+ * override the all-dropped row.
+ *
+ * `dropped` descendants are excluded entirely (dropped work is not work), and
  * `blocked` / `in-review` fall into the catch-all row as started work —
  * blocking is advisory (F8), never a roadmap state of its own.
  */
@@ -267,17 +279,29 @@ function devRollup(
   covered: ReadonlySet<string>,
 ): RoadmapDevRollup {
   if (epic === undefined) return { status: "planned" };
-  if (!items.some((item) => item.id === epic)) {
-    return { status: "unknown", anomaly: "epic-missing" };
-  }
+  const root = items.find((item) => item.id === epic);
+  if (root === undefined) return { status: "unknown", anomaly: "epic-missing" };
   const children = items.filter((item) => item.id !== epic && covered.has(item.id));
+  // No descendants: the epic is the work, not a container over it (B).
+  if (children.length === 0) return childlessRollup(root.status);
   const live = children.filter((item) => item.status !== "dropped");
-  if (live.length === 0) {
-    if (children.length === 0) return { status: "planned" };
-    return { status: "planned", anomaly: "all-dropped" };
-  }
+  if (live.length === 0) return { status: "planned", anomaly: "all-dropped" };
   if (live.every((item) => item.status === "done")) return { status: "built" };
   if (live.every((item) => item.status === "backlog")) return { status: "planned" };
+  return { status: "in-flight" };
+}
+
+/**
+ * A childless epic's own status, as the feature's rollup (B) — total over the
+ * six work-item statuses, in the same vocabulary the subtree rows use:
+ * `dropped` is not work, so it reads `planned` like an all-dropped subtree and
+ * earns the anomaly for the same reason; `blocked` and `in-review` are started
+ * work, never states of their own.
+ */
+function childlessRollup(status: WorkItemFrontmatter["status"]): RoadmapDevRollup {
+  if (status === "done") return { status: "built" };
+  if (status === "dropped") return { status: "planned", anomaly: "epic-dropped" };
+  if (status === "backlog") return { status: "planned" };
   return { status: "in-flight" };
 }
 

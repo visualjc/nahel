@@ -150,10 +150,22 @@ node-level status (blocking is advisory — F8 — not a roadmap state):
 | --- | --- |
 | no epic id recorded on the node | `planned` |
 | epic id recorded but no such item record | `unknown` + `validate` warning |
-| epic exists, zero children after excluding `dropped` | `planned` + `validate` warning when children existed and all were dropped |
-| every non-dropped child `done` | `built` |
-| every non-dropped child `backlog` | `planned` |
+| epic exists with **no descendants at all** | the epic item's OWN status: `backlog` → `planned`; `in-progress`/`blocked`/`in-review` → `in-flight`; `done` → `built`; `dropped` → `planned` + `validate` warning |
+| epic has descendants, every one `dropped` | `planned` + `validate` warning |
+| every non-dropped descendant `done` | `built` |
+| every non-dropped descendant `backlog` | `planned` |
 | anything else (any mix, any `in-progress`/`blocked`/`in-review`) | `in-flight` |
+
+**The childless-epic row is a contract clarification** (PR #26 review,
+superseding the earlier row "epic exists, zero children after excluding
+`dropped` → `planned`"). A `direct`-lane epic never grows children, so that
+row rendered a feature whose only work item was `in-progress` as `planned`,
+and rendered it `planned` still once the item was `done`. With no descendants
+the epic is not a container over the work — it **is** the work, and its own
+status is the rollup. The moment **one** descendant exists the subtree rows
+are authoritative again and the epic item's own status is excluded: a `done`
+epic must not override backlog work still open underneath it, and must not
+override the all-dropped row.
 
 **Product status** — the count distribution of its feature children's dev
 statuses, including `unknown` ("3 built · 2 in-flight · 6 planned · 1
@@ -200,9 +212,12 @@ filled by judgment.
   journal and from file mtimes/git status.
 - Each row of the dev-status table is exercised by its own case, including:
   no epic id → `planned`; dangling epic id → `unknown` plus the named
-  `validate` warning; empty epic → `planned`; all-dropped epic → `planned`
-  plus warning; a `blocked`-only epic and an `in-review`-only epic each →
-  `in-flight`; done+backlog mix → `in-flight`.
+  `validate` warning; a childless epic at each of its six own statuses
+  (`backlog` → `planned`, `in-progress`/`blocked`/`in-review` → `in-flight`,
+  `done` → `built`, `dropped` → `planned` plus warning); all-dropped epic →
+  `planned` plus warning; a `blocked`-only epic and an `in-review`-only epic
+  each → `in-flight`; done+backlog mix → `in-flight`. A `done` epic with a
+  live descendant does NOT read `built` — the root never overrides a subtree.
 - A product node renders the full distribution including any `unknown`
   count; with no feature children it renders `no features`.
 - A `qa.sweep-completed` whose `item` is the feature's epic changes only

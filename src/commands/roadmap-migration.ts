@@ -20,7 +20,12 @@ import {
   roadmapNodePath,
   type StoreLayout,
 } from "../store/layout";
-import { closeStoreContext, mutate, type SequenceWrite } from "../store/mutate";
+import {
+  closeStoreContext,
+  mutate,
+  pendingRoadmapNodes,
+  type SequenceWrite,
+} from "../store/mutate";
 import { commandContext, UsageError } from "./item";
 
 /**
@@ -62,6 +67,27 @@ import { commandContext, UsageError } from "./item";
  * operator knows no record will move. Without it the refusal stands, because
  * the same state is reached by a finished pre-attribution migration, and
  * "supersede" read as "undo" would retire a good one's authority by reflex.
+ *
+ * **The store must be CONVERGED before anything is retired.** A retirement is
+ * computed from the journal (which nodes the attempt is attributed) and the
+ * disk (which records exist, and what still links to them) at once, so while a
+ * roadmap-node write is still pending those two answers describe different
+ * stores — and a node in neither answer is invisible to this verb by design.
+ * That is a real hole, not a hypothetical: a product node whose creation event
+ * journaled and whose record write died is unattributed AND absent, so a
+ * retirement sails past it, the retry charts a replacement product, and a later
+ * `validate --repair` materializes the first one on top. Two live product
+ * nodes, and nothing fails, because more than one product node is schema-legal.
+ *
+ * The answer is a PRECONDITION rather than a sweep for ghosts: refuse while
+ * `pendingRoadmapNodes` finds anything, and say to repair first. After repair
+ * the materialized record is visible to the operator and to step 4's
+ * create-or-reuse, so the semantics that already exist compose correctly and
+ * this verb needs no machinery for records nobody has written yet.
+ *
+ * The precondition is about divergence that PRE-DATES the supersession. The
+ * supersession's OWN crash windows are a separate thing, covered by its own
+ * write-ahead sequence and unchanged by any of this.
  */
 
 export const MIGRATION_USAGE = `  nahel roadmap migration supersede <selection-event-id> --reason <why>
@@ -235,6 +261,23 @@ async function supersede(
 
   const ctx = await commandContext(cwd, env, actorOverride);
   const attempt = await resolveAttempt(ctx.layout, positionals[0]!);
+  // CONVERGENCE FIRST, on both paths — see the note above the module. Checked
+  // before the acknowledgement, because which acknowledgement is owed is itself
+  // a reading of state this store has not finished writing.
+  const pending = await pendingRoadmapNodes(ctx.layout);
+  if (pending.length > 0) {
+    throw new UsageError(
+      `this store carries journal-ahead roadmap state: ${pending.length} roadmap node record(s) ` +
+        "are behind the events that record them — " +
+        pending
+          .map(({ id, eventId, eventType }) => `${id} (${eventType} ${eventId})`)
+          .join("; ") +
+        ". Retiring an attempt now would scope the retirement to a store that does not exist yet, " +
+        "and repair would materialize those records afterwards, over whatever a retry had charted " +
+        "in the meantime. Run `nahel validate --repair`, then run this command again — the " +
+        "materialized records are then visible to you and to the retry's create-or-reuse step alike",
+    );
+  }
   // The acknowledgement and the store have to agree, both ways. An attempt with
   // no attributed record is retired only when the caller SAID so, because the
   // same state is what a finished pre-attribution migration looks like and

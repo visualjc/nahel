@@ -779,6 +779,29 @@ function eventWrites(event: JournalEvent): PendingWrite[] {
  * candidate, identical on every machine.
  */
 export async function replayPending(layout: StoreLayout): Promise<RepairedRecord[]> {
+  const repaired: RepairedRecord[] = [];
+  for (const { target, id, pending } of await pendingRecords(layout)) {
+    await RECORD_KINDS[target].write(layout, pending.record, pending.body);
+    repaired.push({ target, id, eventId: pending.event.id });
+  }
+  return repaired;
+}
+
+/** One record the journal is ahead of, with the write that would materialize it. */
+interface PendingRecord {
+  target: RecordTarget;
+  id: string;
+  pending: PendingWrite;
+}
+
+/**
+ * DETECTION half of replayPending: every record whose disk state matches none
+ * of its latest mutation events, in the deterministic repair order. Split out
+ * so a caller can ask "is anything pending?" without repairing — and so the
+ * answer is computed by the code that does the repairing rather than by a
+ * second implementation that could drift from it.
+ */
+async function pendingRecords(layout: StoreLayout): Promise<PendingRecord[]> {
   // Keyed by target and id: two record kinds may legitimately share an id
   // space, and the sequence writes of one event span several kinds.
   const finalists = new Map<string, PendingWrite[]>();
@@ -807,7 +830,7 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
   }
   for (const key of retired) finalists.delete(key);
 
-  const repaired: RepairedRecord[] = [];
+  const out: PendingRecord[] = [];
   for (const target of REPLAY_ORDER) {
     const kind = RECORD_KINDS[target];
     const keys = [...finalists.keys()]
@@ -828,14 +851,47 @@ export async function replayPending(layout: StoreLayout): Promise<RepairedRecord
       const inSync =
         current !== undefined &&
         candidates.some((candidate) => sameRecord(kind, current!, candidate));
-      if (!inSync) {
-        const pending = candidates[candidates.length - 1]!;
-        await kind.write(layout, pending.record, pending.body);
-        repaired.push({ target, id, eventId: pending.event.id });
-      }
+      if (!inSync) out.push({ target, id, pending: candidates[candidates.length - 1]! });
     }
   }
-  return repaired;
+  return out;
+}
+
+/**
+ * Every ROADMAP NODE record the journal is ahead of — the convergence question
+ * `nahel roadmap migration supersede` asks before it retires anything (the XP
+ * repro on PR #26).
+ *
+ * Why this scope, deliberately. A supersession decides what to retire by
+ * reading the journal (which nodes an attempt is attributed) and the disk
+ * (which records exist, and what still links to them). A roadmap-node record
+ * that has not been materialized yet is in NEITHER answer, so a retirement
+ * computed over it is scoped to a store that does not exist yet — and repair,
+ * running later, makes the missing record appear after the retry has already
+ * charted its replacement. The scope is by RECORD KIND rather than by event
+ * type, which is what makes it complete: `roadmap.node-created`,
+ * `roadmap.node-updated` and the roadmap-node writes inside a
+ * `roadmap.prd-archived` sequence all reach the same records, and all three
+ * can make a node appear, or re-link one, after the fact.
+ *
+ * DOCUMENT steps are deliberately OUT of scope, including a prior
+ * supersession's own half-applied moves. A document step never creates a node
+ * and never re-links one: it moves a file that some event already accounts for.
+ * A half-applied earlier supersession leaves records the retirement rule
+ * already excludes from replay, so it cannot resurrect anything — and blocking
+ * recovery on it would refuse the one act that fixes the store, for a state
+ * that cannot mis-scope the retirement.
+ */
+export async function pendingRoadmapNodes(
+  layout: StoreLayout,
+): Promise<{ id: string; eventId: string; eventType: string }[]> {
+  return (await pendingRecords(layout))
+    .filter(({ target }) => target === "roadmap-node")
+    .map(({ id, pending }) => ({
+      id,
+      eventId: pending.event.id,
+      eventType: pending.event.type,
+    }));
 }
 
 /** True when the record on disk already carries what the event records. */

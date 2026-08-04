@@ -235,7 +235,27 @@ nothing is ever written back onto the item; never hand-edit anything under
    same-second tie, and a same-second tie **fails the migration** — it
    cannot be repaired by an explanatory note.
 
-   A failed migration is **retired, not reverted**:
+   A failed migration is **retired, not reverted**. **Converge the store
+   first** — every retirement below starts here:
+
+       nahel validate --repair
+
+   A migration that failed was very likely interrupted, and an interrupted
+   write leaves the journal ahead of the records. `supersede` refuses while any
+   roadmap node record is still behind the event that records it, and names
+   what is pending. The reason: a retirement is computed from the journal and
+   the disk *together* — which nodes the attempt is attributed, and what exists
+   and still links to them — so a record nobody has materialized yet is in
+   neither answer. Retiring around it scopes the act to a store that does not
+   exist yet, and the repair you run afterwards would materialize that record
+   on top of whatever the retry had charted in the meantime. Repair first and
+   it is simply there: visible to you, and to step 4's create-or-reuse.
+
+   (This is about divergence the store was *already* carrying. The
+   supersession's own steps are write-ahead like every other act, so an
+   interruption *inside* one is healed by the same `nahel validate --repair`.)
+
+   Then retire the attempt:
 
        nahel roadmap migration supersede <selection-event-id> --reason "<what went wrong>"
 
@@ -253,8 +273,9 @@ nothing is ever written back onto the item; never hand-edit anything under
    is now.
 
    **An attempt interrupted before its first feature node** is retired the same
-   way, with one extra word:
+   way — repair first, exactly as above — with one extra word:
 
+       nahel validate --repair
        nahel roadmap migration supersede <selection-event-id> \
          --reason "<what went wrong>" --nothing-to-move
 
@@ -271,7 +292,10 @@ nothing is ever written back onto the item; never hand-edit anything under
 
    The product node, if step 4 got that far, **stays**. It is the store's, not
    the attempt's, so the retry reuses it at step 4 rather than creating a
-   second.
+   second. That is exactly why the repair comes first: a product node whose
+   creation was interrupted is a node the retirement cannot see and the retry
+   would duplicate — repaired, it is just the product node the store already
+   has.
 
 7. Prove the direction, then leave the store clean:
 

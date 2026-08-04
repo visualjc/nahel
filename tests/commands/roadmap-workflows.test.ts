@@ -396,6 +396,22 @@ describe("migrate-roadmap.md — the backlog a store already carries becomes its
     expect(body).toContain("authority");
   });
 
+  test("recovery converges the store BEFORE it retires anything (XP repro)", async () => {
+    const { body } = await shippedWorkflow("migrate-roadmap.md");
+    // A failed migration was probably interrupted, so the repair comes first: a
+    // retirement computed while a node record is still journal-ahead is scoped
+    // to a store that does not exist yet.
+    expect(body).toContain("nahel validate --repair");
+    expect(body).toContain("journal ahead of the records");
+    // The instruction must precede the retirement it guards.
+    const convergeAt = body.indexOf("Converge the store");
+    expect(convergeAt).toBeGreaterThan(-1);
+    expect(convergeAt).toBeLessThan(body.indexOf("nahel roadmap migration supersede <"));
+    // And the distinction that keeps it from reading as a contradiction of the
+    // verb's own write-ahead guarantee: this is PRE-EXISTING divergence.
+    expect(body).toContain("interruption *inside* one");
+  });
+
   test("step 4 is create-or-REUSE: the product node belongs to the store, not the attempt", async () => {
     const { body } = await shippedWorkflow("migrate-roadmap.md");
     expect(body).toContain("reuse");

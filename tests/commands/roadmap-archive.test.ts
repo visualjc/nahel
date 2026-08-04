@@ -1137,14 +1137,17 @@ describe("the collision's recovery actually converges (F10)", () => {
 });
 
 /**
- * The archival gate (PR #26 follow-up A3). `stage released` and
- * ARCHIVAL-QUALIFIED are now deliberately different facts. The stage stays
- * permissive — F9's ruling, unchanged: a `release.announced` carrying nothing
- * at all still reads `released` and still renders `released ? <ts>`, because a
- * VIEW must show what the store holds. Archival is not a view: it stamps a
- * document closed forever, on a header that cites the release, so it demands a
+ * The archival gate (A3, as the final gate settled it). Archival stamps a
+ * document closed forever on a header that cites the release, so it demands a
  * release a reader can follow back — nonblank `version`, `channel` and
  * `announcement`, all three.
+ *
+ * A3 made that a stricter bar than the stage word and left `stage released`
+ * permissive; the final gate closed the gap, so the three keys now decide BOTH
+ * and a feature this verb refuses does not read `released` either. What stays
+ * permissive is the RENDER: the release column still prints `released ? <ts>`
+ * for a release recording nothing, because a column shows the fact the store
+ * holds and the stage says what that fact earned.
  *
  * The refusal names the release event and every key it lacks, because the fix
  * is to re-log THAT release, and a refusal that named neither would send

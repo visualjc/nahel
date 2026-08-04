@@ -236,17 +236,19 @@ export async function runArchiveSubcommand(
         ).join(" ")}\` first.`,
     );
   }
-  // Stage released is not archival-qualified (A3). The view stays permissive —
-  // it shows what the store holds — but this act stamps the document closed
-  // forever on a header that CITES the release, so the release has to be one a
-  // reader can follow back. The refusal names the event, because the fix is to
-  // re-log that release and nothing in the store points at it otherwise.
+  // A release covers the node but cannot carry an archival. This act stamps the
+  // document closed FOREVER on a header that CITES the release, so the release
+  // has to be one a reader can follow back — and since the final gate the same
+  // three keys decide the `released` stage word, so a feature refused here does
+  // not read `released` either and the refusal must not claim that it does. It
+  // names the event, because re-logging that release is the fix and nothing
+  // else in the store points at it.
   if (release.missing.length > 0) {
     throw new UsageError(
-      `roadmap node ${node.id} (${node.name}) reads stage released on ${RELEASE_ANNOUNCED_EVENT_TYPE} ` +
+      `roadmap node ${node.id} (${node.name}) is covered by ${RELEASE_ANNOUNCED_EVENT_TYPE} ` +
         `event ${release.event.id}, but that release records no ${release.missing.join(", ")} — an ` +
         "archived PRD is stamped closed forever and its header cites the release, so the release has to be " +
-        "one a reader can follow back. Re-log it in full " +
+        "one a reader can follow back (until it is, the feature does not read released either). Re-log it in full " +
         `(\`nahel log ${RELEASE_ANNOUNCED_EVENT_TYPE} --item ${node.epic ?? "<epic>"} ${RELEASE_REQUIRED_PAYLOAD_KEYS.map(
           (key) => `--data ${key}=<${key}>`,
         ).join(" ")}\`), then run this command again.`,

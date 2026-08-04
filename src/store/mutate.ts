@@ -174,6 +174,13 @@ export type Mutation =
       eventType: string;
       frontmatter: RoadmapNodeFrontmatter;
       body: string;
+      /**
+       * Extra event-payload fields, the `item` mutation's precedent: how a
+       * migration-created node carries `migration=<selection-event-id>` (C2)
+       * without that act's provenance becoming a field on the intent record.
+       * The reserved replay keys always win over extras.
+       */
+      extraPayload?: Record<string, unknown>;
     }
   /**
    * Map and decision-ticket writes (`nahel roadmap map` / `ticket`, Phase 4
@@ -471,7 +478,12 @@ function mutationEventFields(
   // Observations, roadmap nodes, maps and tickets carry no item/run refs — an
   // observation's link is its `sources`, a node's is its own `epic` field, and
   // a map or ticket hangs off the intent layer entirely.
-  return { payload: writePayload(writes[0]!) };
+  return {
+    payload: {
+      ...(mutation.target === "roadmap-node" ? mutation.extraPayload : {}),
+      ...writePayload(writes[0]!),
+    },
+  };
 }
 
 /**

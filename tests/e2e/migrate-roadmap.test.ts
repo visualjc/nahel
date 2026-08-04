@@ -112,11 +112,14 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       const changelog = item("feature", "changelog-and-product-updates", "epic-lite");
       // Deliberately future — coverage, so it gets a node on the `later` horizon.
       const mindmap = item("feature", "roadmap-mindmap-visualization", "full");
+      // Already delivered, and a candidate all the same (C1): the roadmap
+      // carries built capability, and this node's column derives `built` from
+      // the done epic without anything being written to say so.
+      const soft17 = item("feature", "dealer-soft-17-setting", "epic-lite");
+      ok(nahel(root, "item", "update", soft17, "--status", "done"), "item update (delivered)");
 
       // Near-misses: each one is arguable, so each one earns a journaled reason.
       const rotationBug = item("bug", "journal-rotation-drops-a-segment", "direct");
-      const soft17 = item("feature", "dealer-soft-17-setting", "epic-lite");
-      ok(nahel(root, "item", "update", soft17, "--status", "done"), "item update (delivered)");
       const flakyTest = item("feature", "retry-the-flaky-rotation-test", "direct",
         "--parent", detached);
 
@@ -138,18 +141,17 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       expect(enumerated).toContain("feature  done");
 
       // ── step 3: the selected set, BEFORE any node exists ──────────────────
-      const included = [detached, changelog, mindmap];
+      const included = [detached, changelog, mindmap, soft17];
       const excluded = [
         { id: rotationBug, reason: "a defect in shipped behaviour — work, not roadmap intent" },
-        { id: soft17, reason: "already delivered — migration covers the backlog, not what shipped" },
         { id: flakyTest, reason: `a task under ${detached}'s epic, not a feature of the product` },
       ];
-      ok(
+      const selectionId = ok(
         nahel(root, "log", MIGRATION_SELECTED,
           "--data", `included=${JSON.stringify(included)}`,
           "--data", `excluded=${JSON.stringify(excluded)}`),
         "log roadmap.migration-selected",
-      );
+      ).stdout.match(/event ([0-9a-z]+) \(seq/)![1]!;
       // The doc's step 3, obeyed: WAIT until the clock has left the selection's
       // second before creating the first node. Journal timestamps are
       // second-precision and every invocation writes its own segment, so acts
@@ -167,10 +169,14 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       ).stdout.trim();
 
       // ── step 5: one feature node per INCLUDED id, and no other ────────────
+      // Each one carries `--migration`, naming the selection it was created
+      // for (C2): the FEATURE nodes only — the product node covers no item, so
+      // attributing it would claim coverage it cannot deliver.
       const feature = (slug: string, horizon: string, epic: string, intent: string): string =>
         ok(
           nahel(root, "roadmap", "node", "new", "feature", slug, "--horizon", horizon,
-            "--parent", product, "--epic", epic, "--intent", intent),
+            "--parent", product, "--epic", epic, "--intent", intent,
+            "--migration", selectionId),
           `roadmap node new (${slug})`,
         ).stdout.trim();
       feature("detached-state-repo", "now", detached,
@@ -179,6 +185,8 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
         "What changed, rendered for the people who use the product rather than build it.");
       feature("roadmap-mindmap-visualization", "later", mindmap,
         "The tree as a picture — deliberately after the tree is worth looking at.");
+      feature("dealer-soft-17-setting", "now", soft17,
+        "The dealer's soft-17 behaviour, configurable rather than assumed.");
 
       // ── AC 1: the set is the FIRST migration event, and it is complete ────
       const timeline = ok(nahel(root, "progress"), "progress").stdout.split("\n");
@@ -186,7 +194,7 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       expect(selections).toHaveLength(1);
       const selectionAt = timeline.indexOf(selections[0]!);
       const nodeLines = timeline.filter((line) => line.includes(NODE_CREATED));
-      expect(nodeLines).toHaveLength(4); // one product + three features
+      expect(nodeLines).toHaveLength(5); // one product + four features
       const selectionTs = tsOf(selections[0]!);
       for (const line of nodeLines) {
         // The QUICK LOOK (step 6's first half): the set sits above every node
@@ -224,6 +232,7 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
         ["detached-state-repo", detached],
         ["changelog-and-product-updates", changelog],
         ["roadmap-mindmap-visualization", mindmap],
+        ["dealer-soft-17-setting", soft17],
       ] as const) {
         const shown = ok(nahel(root, "roadmap", "node", "show", slug), `node show ${slug}`).stdout;
         expect(shown).toContain(`epic=${epic}`);
@@ -243,15 +252,21 @@ describe("E2E migration — a store's backlog becomes its first roadmap (F6)", (
       // ── AC 3: `nahel roadmap` shows every migrated item, and only those ───
       const roadmap = ok(nahel(root, "roadmap"), "roadmap").stdout;
       expect(roadmap).toContain("nahel  product");
-      expect(roadmap).toContain("now (1):");
+      expect(roadmap).toContain("now (2):");
       expect(roadmap).toContain("next (1):");
       expect(roadmap).toContain("later (1):");
       for (const slug of ["detached-state-repo", "changelog-and-product-updates",
-        "roadmap-mindmap-visualization"]) {
+        "roadmap-mindmap-visualization", "dealer-soft-17-setting"]) {
         expect(roadmap).toContain(slug);
       }
+      // C1's whole point, rendered: the delivered feature migrated WITH its
+      // history. Nothing was written to say `built` — the column derives it
+      // from the done epic (the childless-epic rule), which is why a done
+      // candidate needs no special handling in the workflow.
+      const soft17Row = roadmap.split("\n").find((line) => line.includes("dealer-soft-17-setting"));
+      expect(soft17Row).toContain("built");
       // No near-miss became a node behind the set's back.
-      for (const name of ["journal-rotation-drops-a-segment", "dealer-soft-17-setting",
+      for (const name of ["journal-rotation-drops-a-segment",
         "retry-the-flaky-rotation-test", "bump-bun-to-1-2"]) {
         expect(roadmap).not.toContain(name);
       }

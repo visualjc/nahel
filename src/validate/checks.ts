@@ -35,6 +35,13 @@ import {
 import {
   ARCHIVAL_RELEASE_PAYLOAD_KEYS,
   CORE_EVENT_TYPES,
+  MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
+  MIGRATION_EXCLUDED_PAYLOAD_KEY,
+  MIGRATION_EXCLUSION_REASON_KEY,
+  MIGRATION_INCLUDED_PAYLOAD_KEY,
+  MIGRATION_SELECTED_EVENT_TYPE,
+  MIGRATION_SELECTION_PAYLOAD_KEY,
+  MIGRATION_SUPERSEDED_EVENT_TYPE,
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
@@ -882,6 +889,277 @@ function checkRoadmapRetractions(state: ParsedState): Finding[] {
         fix: "a mis-retraction is corrected by re-logging the original fact, never by retracting the retraction — there is no un-retraction",
       });
     }
+  }
+  return findings;
+}
+
+/** The check id every migration-audit finding carries. */
+const MIGRATION_AUDIT_CHECK = "roadmap.migration-audit";
+
+/** The fix a defect in an already-journaled selection earns: the journal is append-only. */
+const SUPERSEDE_FIX =
+  "the journal is append-only, so the attempt is retired rather than edited: " +
+  "`nahel roadmap migration supersede <selection-event-id> --reason <why>`, then re-run the migration";
+
+/** The selected set one `roadmap.migration-selected` payload declares. */
+interface SelectedSet {
+  /** Every id that gets a node, de-duplicated (a set is a set). */
+  included: Set<string>;
+  /** Every near-miss id ruled out. */
+  excluded: Set<string>;
+  /** Findings about the payload's own shape — clause (a). */
+  findings: Finding[];
+  /** False when the payload carries no usable `included` list: coverage cannot run. */
+  usable: boolean;
+}
+
+/**
+ * Clause (a): read the selected set out of one selection payload, reporting
+ * what makes it unreadable as a call. The rules are the ones a reviewer would
+ * apply — a set is a set (no id twice), a call does not contradict itself (no
+ * id both included and excluded), and a near-miss without a reason is exactly
+ * the silent omission the workflow's near-miss rule exists to prevent.
+ *
+ * An id on BOTH lists is reported once and then treated as included: the
+ * contradiction is the defect, and reporting the same id again as "a node
+ * covers an excluded id" would bill one mistake twice.
+ */
+function selectedSet(event: JournalEvent): SelectedSet {
+  const findings: Finding[] = [];
+  const included = new Set<string>();
+  const excluded = new Set<string>();
+  const raw = event.payload[MIGRATION_INCLUDED_PAYLOAD_KEY];
+  if (!Array.isArray(raw) || raw.some((id) => typeof id !== "string")) {
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `migration selection ${event.id} carries no \`${MIGRATION_INCLUDED_PAYLOAD_KEY}\` list of ` +
+        "work-item ids — the set it declared cannot be read, so nothing can be audited against it",
+      fix: SUPERSEDE_FIX,
+    });
+    return { included, excluded, findings, usable: false };
+  }
+  for (const id of raw as string[]) {
+    if (included.has(id)) {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `migration selection ${event.id} lists ${id} more than once — the selected set is a set, ` +
+          "and a duplicate reads as two nodes owed for one item",
+        fix: SUPERSEDE_FIX,
+      });
+      continue;
+    }
+    included.add(id);
+  }
+  const rawExcluded = event.payload[MIGRATION_EXCLUDED_PAYLOAD_KEY];
+  for (const entry of Array.isArray(rawExcluded) ? rawExcluded : []) {
+    if (entry === null || typeof entry !== "object") continue;
+    const near = entry as Record<string, unknown>;
+    const id = near["id"];
+    if (typeof id !== "string") continue;
+    const reason = near[MIGRATION_EXCLUSION_REASON_KEY];
+    if (typeof reason !== "string" || reason.trim() === "") {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `migration selection ${event.id} excludes ${id} with no \`${MIGRATION_EXCLUSION_REASON_KEY}\` — ` +
+          "a near-miss a reviewer cannot argue with is the silent omission the reason exists to prevent",
+        fix: SUPERSEDE_FIX,
+      });
+    }
+    if (included.has(id)) {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `migration selection ${event.id} lists ${id} as both included and excluded — the call ` +
+          "contradicts itself, and nothing downstream can say whether that item was meant to get a node",
+        fix: SUPERSEDE_FIX,
+      });
+      continue;
+    }
+    excluded.add(id);
+  }
+  return { included, excluded, findings, usable: true };
+}
+
+/**
+ * The migration audit (PR #26 follow-up C2): the join between the selected set
+ * a migration journaled FIRST and the nodes it then created. Nothing else in
+ * the store makes that comparison — a reviewer had to hold two lists side by
+ * side — which is exactly the audit a once-per-store, unrepeatable act needs.
+ *
+ * It runs only where a `roadmap.migration-selected` event exists: a store that
+ * never migrated has nothing to audit and earns no finding. Within such a
+ * store, four rules:
+ *
+ * - (a) the selection payload must be readable as a call — see selectedSet;
+ * - (b) for the ACTIVE attempt, every included id has exactly ONE attributed
+ *   feature node whose `epic` matches, no attributed node covers an excluded
+ *   or unlisted id, and every attributed node's creation event is STRICTLY
+ *   later than the selection (a same-second tie breaks on random event id, so
+ *   it proves nothing — the workflow fails a migration on exactly this);
+ * - (c) UNATTRIBUTED nodes are ignored entirely. Ordinary charting after a
+ *   migration is not the migration's business, and attribution rather than a
+ *   time window is what tells the two apart;
+ * - (d) two active selections are one error and the coverage half SUSPENDS:
+ *   with two attempts live, which one owes a node for a given id is precisely
+ *   what nobody can say, and reporting both attempts' gaps would invent an
+ *   answer.
+ *
+ * Violations are errors, because the audit exists to make a migration
+ * trustworthy and a warning nobody has to clear is not a guarantee.
+ *
+ * **The legacy rule** (the compatibility clause, deliberate): an active
+ * selection with ZERO attributed nodes gets clauses (a) and (d) and one
+ * ADVISORY WARNING — never errors. Two real states produce it and neither is a
+ * broken migration: an attempt that PREDATES attribution (this repo's own live
+ * migration, whose nodes were created before `--migration` existed), and an
+ * attempt whose nodes have not been created yet (the workflow journals the set
+ * FIRST, so the gap between step 3 and step 5 is the normal shape of a
+ * migration in progress). Read literally, "ignore unattributed nodes" would
+ * report every included id of a correct, finished legacy migration as
+ * uncovered and turn it permanently red — and re-migrating to satisfy a
+ * checker would write exactly the false history C1 rules out.
+ */
+function checkMigrationAudit(state: ParsedState): Finding[] {
+  const selections = state.events.filter((event) => event.type === MIGRATION_SELECTED_EVENT_TYPE);
+  if (selections.length === 0) return [];
+  const retired = new Set(
+    state.events
+      .filter((event) => event.type === MIGRATION_SUPERSEDED_EVENT_TYPE)
+      .map((event) => event.payload[MIGRATION_SELECTION_PAYLOAD_KEY])
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const active = selections.filter((event) => !retired.has(event.id));
+  if (active.length > 1) {
+    return [
+      {
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `this store carries ${active.length} active migration selections ` +
+          `(${active.map((event) => event.id).join(", ")}) — a store migrates ONCE, and with two ` +
+          "attempts live nothing can say which one owes a node for which item, so the coverage " +
+          "audit is suspended until exactly one is active",
+        fix: "retire the attempt that failed: `nahel roadmap migration supersede <selection-event-id> --reason <why>`",
+      },
+    ];
+  }
+  // Every attempt superseded: the migration was retired, and the journal holds
+  // both the attempt and its retirement. There is no active call to audit, and
+  // reporting one would invent an authority the store does not carry.
+  if (active.length === 0) return [];
+
+  const selection = active[0]!;
+  const set = selectedSet(selection);
+  const findings = set.findings;
+  if (!set.usable) return findings;
+
+  const attributed = state.events.filter(
+    (event) =>
+      event.type === CORE_EVENT_TYPES.roadmapNodeCreated &&
+      event.payload[MIGRATION_ATTRIBUTION_PAYLOAD_KEY] === selection.id,
+  );
+  if (attributed.length === 0) {
+    findings.push({
+      severity: "warning",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `migration selection ${selection.id} has no attributed node — no ` +
+        `\`${CORE_EVENT_TYPES.roadmapNodeCreated}\` event carries ` +
+        `\`${MIGRATION_ATTRIBUTION_PAYLOAD_KEY}=${selection.id}\`, so its coverage cannot be ` +
+        "audited. Either its nodes have not been created yet, or the attempt predates attribution " +
+        "(a legacy migration — history, not a defect)",
+      fix: `nodes created from here on carry it: \`nahel roadmap node new feature <name> ... --migration ${selection.id}\`. A finished legacy migration needs no repair and is never re-run to satisfy a checker.`,
+    });
+    return findings;
+  }
+
+  const selectionAt = epochSeconds(selection.ts);
+  /** Attributed nodes as the store holds them NOW, keyed by the epic each covers. */
+  const covering = new Map<string, string[]>();
+  for (const event of attributed) {
+    const mutation = mutationRecords(event)[0];
+    if (mutation === undefined || "invalid" in mutation) continue;
+    const nodeId = mutation.record.id;
+    // The node as the store holds it NOW, not as it was created: one re-pointed
+    // at another epic afterwards covers what it points at today, and one whose
+    // record is gone covers nothing (journal.divergence owns the absence).
+    const node = state.roadmapNodes.get(nodeId)?.record;
+    if (node === undefined) continue;
+    const at = epochSeconds(event.ts);
+    if (at !== undefined && selectionAt !== undefined && at <= selectionAt) {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `node ${nodeId} was created in the same second as (or before) migration selection ` +
+          `${selection.id} — ${event.ts} against ${selection.ts} — so the selection cannot be shown ` +
+          "to have preceded it: a same-second tie breaks on random event id and renders in the right order about half the time",
+        fix: "the ordering IS the audit trail and a tie cannot be repaired by a note — retire the attempt and re-run it, waiting past the selection's second (`nahel roadmap migration supersede <selection-event-id> --reason <why>`)",
+      });
+    }
+    if (node.kind !== "feature") {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `node ${nodeId} is attributed to migration ${selection.id} and is a ${node.kind} node — ` +
+          "migration attributes the FEATURE nodes it creates for the selected ids, and the product " +
+          "node it also creates covers no item and carries no attribution",
+        fix: SUPERSEDE_FIX,
+      });
+      continue;
+    }
+    if (node.epic === undefined) {
+      findings.push({
+        severity: "error",
+        check: MIGRATION_AUDIT_CHECK,
+        message:
+          `node ${nodeId} is attributed to migration ${selection.id} and names no \`epic\` — it ` +
+          "covers no item, so it accounts for nothing in the selected set",
+        fix: `point it at the item it covers: \`nahel roadmap node update ${nodeId} --epic <item-id>\``,
+      });
+      continue;
+    }
+    covering.set(node.epic, [...(covering.get(node.epic) ?? []), nodeId]);
+  }
+
+  for (const [epic, nodes] of [...covering].sort()) {
+    if (set.included.has(epic)) continue;
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        `node ${nodes.join(", ")} is attributed to migration ${selection.id} and covers ${epic}, ` +
+        (set.excluded.has(epic)
+          ? "which that selection excluded as a near-miss — the migration acted against its own call"
+          : "which that selection never listed — the migration invented coverage its call does not account for"),
+      fix: "retire the attempt and re-run it, or — if the node is ordinary charting rather than migration work — re-create it without --migration",
+    });
+  }
+  for (const id of [...set.included].sort()) {
+    const nodes = covering.get(id) ?? [];
+    if (nodes.length === 1) continue;
+    findings.push({
+      severity: "error",
+      check: MIGRATION_AUDIT_CHECK,
+      message:
+        nodes.length === 0
+          ? `migration selection ${selection.id} included ${id}, and no node attributed to it ` +
+            "covers that item — the set declared coverage the migration did not deliver"
+          : `migration selection ${selection.id} included ${id}, and ${nodes.length} attributed ` +
+            `nodes cover it (${nodes.join(", ")}) — one selected item earns one node`,
+      fix:
+        nodes.length === 0
+          ? `chart the missing node: \`nahel roadmap node new feature <name> --horizon <h> --intent <text> --epic ${id} --migration ${selection.id}\``
+          : SUPERSEDE_FIX,
+    });
   }
   return findings;
 }
@@ -2758,6 +3036,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkRoadmapRefs(state),
     ...checkRoadmapDerivation(state),
     ...checkRoadmapRetractions(state),
+    ...checkMigrationAudit(state),
     ...checkRoadmapAdrRefs(state),
     ...checkPrdLifecycle(state),
     ...checkRoadmapShape(state),

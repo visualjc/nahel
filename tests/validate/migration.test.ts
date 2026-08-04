@@ -95,7 +95,7 @@ async function createNode(
 }
 
 async function findings(fixture: ValidateFixture) {
-  return findingsFor(await validateStore(fixture.root), CHECK);
+  return findingsFor(await validateStore(fixture.layout), CHECK);
 }
 
 /** A migration that covered exactly what it declared: two ids, two nodes. */
@@ -219,9 +219,13 @@ describe("coverage: the declared set and the attributed nodes must match exactly
       event.id,
     );
     const found = await findings(fixture);
-    expect(found).toHaveLength(1);
-    expect(found[0]!.message).toContain(wrongKind.id);
-    expect(found[0]!.message).toContain("product");
+    // Two facts again: the node is the wrong kind, and — because a product
+    // node covers no item — the included id is left with no node at all.
+    expect(found).toHaveLength(2);
+    const messages = found.map((finding) => finding.message).join("\n");
+    expect(messages).toContain(wrongKind.id);
+    expect(messages).toContain("product");
+    expect(messages).toContain(covered.id);
   });
 });
 
@@ -232,7 +236,11 @@ describe("the ordering the migration rests on is audited, not assumed (C2)", () 
     // random event id, so it renders correctly about half the time).
     const fixture = await setupFixture(dirs);
     await signConstitution(fixture);
-    const frozen = { ...fixture, env: { ...fixture.env, now: () => "2026-07-16T12:00:00Z" } };
+    // The store context carries its OWN env — the one every journal event's ts
+    // comes from — so freezing the fixture's alone would leave the events
+    // ticking a second apart and prove nothing.
+    const env = { ...fixture.env, now: () => "2026-07-16T12:00:00Z" };
+    const frozen = { ...fixture, env, agent: { ...fixture.agent, env } };
     const covered = await createItem(frozen, { name: "one" });
     const event = await selection(frozen, [covered.id]);
     const node = await createNode(frozen, { epic: covered.id, name: "one" }, event.id);
@@ -363,7 +371,7 @@ describe("a migration that predates attribution is history, not a failure (C2)",
     const covered = await createItem(fixture, { name: "one" });
     await selection(fixture, [covered.id]);
     await createNode(fixture, { epic: covered.id, name: "one" });
-    const errors = (await validateStore(fixture.root)).filter(
+    const errors = (await validateStore(fixture.layout)).filter(
       (finding) => finding.severity === "error",
     );
     expect(errors).toEqual([]);

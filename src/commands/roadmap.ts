@@ -1,14 +1,19 @@
 import { parseArgs } from "node:util";
 import { ROADMAP_HORIZONS, ROADMAP_NODE_KINDS } from "../schema/enums";
 import type { Env } from "../schema/env";
-import { CORE_EVENT_TYPES, ROADMAP_ACKED_EVENT_TYPE } from "../schema/events";
+import {
+  CORE_EVENT_TYPES,
+  MIGRATION_ATTRIBUTION_PAYLOAD_KEY,
+  MIGRATION_SELECTED_EVENT_TYPE,
+  ROADMAP_ACKED_EVENT_TYPE,
+} from "../schema/events";
 import { generateId, ID_PATTERN } from "../schema/id";
 import {
   roadmapNodeFrontmatterSchema,
   type RoadmapNodeFrontmatter,
   type WorkItemFrontmatter,
 } from "../schema/records";
-import { appendEvent } from "../store/journal";
+import { appendEvent, readJournal } from "../store/journal";
 import {
   itemExists,
   openStore,
@@ -82,7 +87,7 @@ const USAGE = `usage:
   nahel roadmap node new <kind> <name> --horizon <h> --intent <text>
                          [--parent <ref>] [--design-doc <path>] [--adr <path>]...
                          [--prd <path>] [--epic <item-id>] [--predecessor <ref>]
-                         [--feature <ref>]...
+                         [--feature <ref>]... [--migration <selection-event-id>]
     Create a roadmap node and print its generated id.
       kind: ${ROADMAP_NODE_KINDS.join(" | ")}
       name: a slug, unique per store — every view addresses nodes by it
@@ -95,6 +100,10 @@ const USAGE = `usage:
       --epic: feature — the epic WORK ITEM this node covers (node -> item)
       --predecessor: feature — the released node this one continues
       --feature: initiative — a feature node linked sideways (repeatable)
+      --migration: the \`${MIGRATION_SELECTED_EVENT_TYPE}\` event this node was
+        created FOR — passed only by \`nahel/workflows/migrate-roadmap.md\`, and
+        what \`nahel validate\` joins the selected set to its nodes by. Ordinary
+        charting omits it.
 
   nahel roadmap node update <ref> [--name <slug>] [--horizon <h>] [--intent <text>]
                             [--parent <ref>] [--design-doc <path>] [--adr <path>]...
@@ -210,6 +219,37 @@ async function requireFreeName(
   }
 }
 
+/**
+ * Resolve `--migration`: the id must name a `roadmap.migration-selected` event
+ * in this store's journal. Checked at the write seam rather than left to
+ * `validate`, because an attribution nobody can follow back is worse than none
+ * — the audit would read the node as belonging to an attempt that does not
+ * exist, and the migration it really belongs to would look uncovered.
+ */
+async function requireSelectionEvent(layout: StoreLayout, id: string): Promise<string> {
+  if (!ID_PATTERN.test(id)) {
+    throw new UsageError(
+      `--migration ${JSON.stringify(id)} is not an event id — pass the id ` +
+        `\`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}\` printed`,
+    );
+  }
+  for await (const event of readJournal(layout)) {
+    if (event.id === id) {
+      if (event.type === MIGRATION_SELECTED_EVENT_TYPE) return id;
+      throw new UsageError(
+        `--migration ${id} names a ${event.type} event, not a ${MIGRATION_SELECTED_EVENT_TYPE} — ` +
+          "attribution points at the selected set a migration journaled first " +
+          "(`nahel/workflows/migrate-roadmap.md`, step 3)",
+      );
+    }
+  }
+  throw new UsageError(
+    `--migration ${id} names no event in this store's journal — pass the id ` +
+      `\`nahel log ${MIGRATION_SELECTED_EVENT_TYPE}\` printed (an attribution nobody can follow ` +
+      "back is worse than none)",
+  );
+}
+
 async function nodeNew(
   args: string[],
   env: Env,
@@ -218,7 +258,9 @@ async function nodeNew(
 ): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
-    options: { ...LINK_OPTIONS },
+    // Creation-only: attribution is a fact about the ACT that made the node,
+    // so there is no `node update --migration` to re-attribute one afterwards.
+    options: { ...LINK_OPTIONS, migration: { type: "string" } },
     allowPositionals: true,
   });
   if (positionals.length !== 2) {
@@ -261,6 +303,10 @@ async function nodeNew(
   for (const ref of values.feature ?? []) {
     features.push(await resolveNodeRef(ctx.layout, ref, "--feature"));
   }
+  const migration =
+    values.migration === undefined
+      ? undefined
+      : await requireSelectionEvent(ctx.layout, values.migration);
 
   const created = env.now();
   const frontmatter: RoadmapNodeFrontmatter = {
@@ -283,6 +329,12 @@ async function nodeNew(
     eventType: CORE_EVENT_TYPES.roadmapNodeCreated,
     frontmatter,
     body,
+    // The attribution rides the creation EVENT, never the record: the node
+    // states what the product is meant to do, and it would state exactly that
+    // had a human charted it by hand.
+    ...(migration === undefined
+      ? {}
+      : { extraPayload: { [MIGRATION_ATTRIBUTION_PAYLOAD_KEY]: migration } }),
   });
   await closeStoreContext(ctx);
   console.log(frontmatter.id);

@@ -110,7 +110,9 @@ nothing is ever written back onto the item; never hand-edit anything under
    wrong, and that is what the journal will show.
 
    `nahel log` prints the id of the event it wrote — that line is your
-   confirmation the set landed.
+   confirmation the set landed. **Keep that id**: every feature node you create
+   in step 5 names it, and it is what `nahel validate` joins the set to its
+   nodes by.
 
    **Do not batch this step and the node creations into one script** — and do
    not trust composition to take long enough either: two ordinary invocations
@@ -135,19 +137,30 @@ nothing is ever written back onto the item; never hand-edit anything under
    nahel's own store, `docs/roadmap.md`). Product design docs are updated in
    place forever; unlike a PRD, none is ever archived.
 
+   The product node takes **no `--migration`**: it covers no work item, so
+   attributing it to the selected set would claim coverage it cannot deliver.
+
 5. Create one feature node per **included** id — every id in the set, and no
    id the set does not name:
 
        nahel roadmap node new feature <slug> --horizon <now|next|later> \
          --parent <product-node-slug> --epic <item-id> \
+         --migration <selection-event-id> \
          --intent "<the roadmap-level statement of this feature>"
 
    `--epic` records the item this node covers. The reference is **one-way**
    and canonical — it lives on the node, and no work-item record is written at
    all. Reuse the item's own name as the slug where it already reads as one,
    so a reader can trace node and item without a lookup. The horizon is a
-   judgment like the selection: `now` for what is being worked, `later` for
-   the deliberately-future ones you still covered.
+   judgment like the selection: `now` for what is being worked (and for what
+   is already built), `later` for the deliberately-future ones you still
+   covered.
+
+   `--migration` names the step 3 event this node is being created FOR — the
+   **attribution**, and the whole reason step 6 can be a command instead of two
+   lists read side by side. Pass it on every feature node of this migration and
+   on nothing else: ordinary charting, later, omits it, and that omission is
+   exactly what keeps a node charted next month out of this migration's audit.
 
 6. Check the coverage in both directions — either one alone passes a broken
    migration:
@@ -159,6 +172,21 @@ nothing is ever written back onto the item; never hand-edit anything under
    trace back), and every node must name an included id — **no orphan** node,
    and **nothing invented** that the logged set never selected. If the two
    disagree, the nodes are what you fix; the set is already journaled.
+
+   Because step 5 attributed every node, the same comparison is also a command:
+
+       nahel validate
+
+   The `roadmap.migration-audit` check joins the selected set to the nodes
+   attributed to it and reports both directions as **errors** — an included id
+   with no node, a node covering an id the set excluded or never listed, two
+   nodes for one id, and a node whose creation did not strictly follow the
+   selection. It ignores unattributed nodes entirely. One shape is a
+   **warning** rather than an error: a selection with no attributed node at
+   all, which is either a migration mid-flight (you are between step 3 and
+   step 5) or one made before attribution existed. A finished migration of
+   that older shape is history, not a defect, and is never re-run to satisfy
+   the checker.
 
    Then accept — or fail — the migration on the one comparison step 3 named:
 

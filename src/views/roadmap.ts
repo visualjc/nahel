@@ -6,6 +6,8 @@ import {
   QA_SWEEP_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
   RELEASE_VERSION_PAYLOAD_KEY,
+  RETRACTION_EVENT_PAYLOAD_KEY,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 } from "../schema/events";
 import type {
   JournalEvent,
@@ -317,12 +319,56 @@ export function renderProductStatus(statuses: readonly RoadmapDevStatus[]): stri
 /** The column value for a fact the store does not carry (F2's no-event rows). */
 const NO_VALUE = "—";
 
-/** The three event types the columns read; anything else is not a column fact. */
-const COLUMN_EVENT_TYPES: ReadonlySet<string> = new Set([
+/**
+ * The three lifecycle facts the columns read — and, exactly, the events a
+ * retraction may name. Anything else is not a column fact: a retraction
+ * pointing at an item mutation, at another retraction, or at an id no event
+ * carries names nothing this derivation reads, so it changes nothing (and
+ * `validate` says so).
+ */
+export const ROADMAP_COLUMN_FACT_TYPES: ReadonlySet<string> = new Set([
   QA_SWEEP_EVENT_TYPE,
   DEPLOY_COMPLETED_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
 ]);
+
+/**
+ * The event id one retraction withdraws, or undefined when its payload names
+ * none readably (absent, non-string, or blank). Events are data — the rule
+ * every journal reader here follows — and a retraction that names nothing is
+ * never read as naming EVERYTHING.
+ *
+ * Shared with `validate`, so the check reports exactly the target the
+ * derivation acted on rather than a second reading of the same payload.
+ */
+export function retractedEventId(event: JournalEvent): string | undefined {
+  const value = event.payload[RETRACTION_EVENT_PAYLOAD_KEY];
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  return id === "" ? undefined : id;
+}
+
+/**
+ * Every event id withdrawn by a retraction in `events` (A1). A SET, which is
+ * what makes retraction idempotent — two retractions of the same fact are one
+ * — and what makes the retraction's own timestamp irrelevant: membership is
+ * decided by id alone, so a retraction that arrives before the fact it names,
+ * or after it by a year, does the same thing.
+ *
+ * Ids no event carries and ids naming something other than a lifecycle fact
+ * are collected here too and simply never match anything the winners loop
+ * considers — the "derivation ignores it" half of the invalid-retraction rule,
+ * which needs no branch because the loop only ever looks at column facts.
+ */
+function retractedFacts(events: readonly JournalEvent[]): ReadonlySet<string> {
+  const retracted = new Set<string>();
+  for (const event of events) {
+    if (event.type !== ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
+    const target = retractedEventId(event);
+    if (target !== undefined) retracted.add(target);
+  }
+  return retracted;
+}
 
 /**
  * A payload value for a column: absent, null, or blank renders `?` — brief's
@@ -406,10 +452,15 @@ export function featureStatus(
   // epic yields the empty coverage, so the loop simply matches nothing.
   const covered = epicCoverage(items, node.epic);
   const rollup = devRollup(node.epic, items, covered);
+  // Retracted facts leave the computation entirely, so the winner below is the
+  // last SURVIVING event of its type — retracting the latest sweep promotes the
+  // one before it (A1), it does not empty the column.
+  const retracted = retractedFacts(events);
   const winners = new Map<string, JournalEvent>();
   for (const event of events) {
     if (event.item === undefined || !covered.has(event.item)) continue;
-    if (!COLUMN_EVENT_TYPES.has(event.type)) continue;
+    if (!ROADMAP_COLUMN_FACT_TYPES.has(event.type)) continue;
+    if (retracted.has(event.id)) continue;
     const current = winners.get(event.type);
     if (current === undefined || compareEvents(current, event) < 0) {
       winners.set(event.type, event);
@@ -446,13 +497,21 @@ export function featureStatus(
 }
 
 /**
- * True for the three event types the derived columns read (F2). Exported so the
- * command can KEEP only these while streaming the journal: the views take their
- * events as an array, and a store whose journal outgrows memory must still
- * render the roadmap. Anything else is not a column fact and is dropped.
+ * True for every event the derived columns READ (F2): the three lifecycle facts
+ * and the retractions that withdraw them (A1). Exported so the command can KEEP
+ * only these while streaming the journal: the views take their events as an
+ * array, and a store whose journal outgrows memory must still render the
+ * roadmap. Anything else is not a column fact and is dropped.
+ *
+ * A retraction that this filter dropped would be a retraction the derivation
+ * never saw — the column would keep printing the fact its own store already
+ * withdrew — so the two sets have to move together.
  */
 export function isRoadmapColumnEvent(event: JournalEvent): boolean {
-  return COLUMN_EVENT_TYPES.has(event.type);
+  return (
+    ROADMAP_COLUMN_FACT_TYPES.has(event.type) ||
+    event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE
+  );
 }
 
 /** One feature node beside its derivation — featureStatus called once, per feature. */

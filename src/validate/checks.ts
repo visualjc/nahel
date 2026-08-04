@@ -36,6 +36,8 @@ import {
   CORE_EVENT_TYPES,
   MUTATION_EVENT_TYPES,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
+  RETRACTION_REASON_PAYLOAD_KEY,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 } from "../schema/events";
 import { epochSeconds } from "../schema/time";
 import type { HotState } from "../store/hotstate";
@@ -47,7 +49,12 @@ import {
   type SegmentScan,
 } from "../store/journal";
 import { eventDocuments } from "../store/mutate";
-import { featureDevStatus, featureStatus } from "../views/roadmap";
+import {
+  featureDevStatus,
+  featureStatus,
+  retractedEventId,
+  ROADMAP_COLUMN_FACT_TYPES,
+} from "../views/roadmap";
 
 /**
  * `nahel validate`'s check library (PRD F8): pure functions over the raw
@@ -769,6 +776,72 @@ function checkRoadmapDerivation(state: ParsedState): Finding[] {
         path,
         message: `roadmap node ${record.id} (${record.name}) covers epic ${epic}, whose every work item was dropped — its dev status reads planned over no live work`,
         fix: "drop the node's intent too, or plan new work under the epic with `nahel item new` — this is advisory, nothing was refused",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Lifecycle-fact retractions (PR #26 follow-up A1). A retraction is an ordinary
+ * logged event, so nothing about it can be refused at write time — which is
+ * precisely why it is read back here. Three shapes are reported, all WARNINGS:
+ * the derivation IGNORES an invalid retraction, so the store still renders; it
+ * just renders as though the retraction had not been written, and a correction
+ * that silently did nothing is the worst way for one to fail.
+ *
+ * - `roadmap.retraction-malformed` — the payload names no event id readably, or
+ *   carries no reason. A withdrawal nobody can account for is worse than the
+ *   fact it withdraws, and one naming nothing is never read as naming
+ *   everything.
+ * - `roadmap.retraction-target-missing` — the id names no event in this store.
+ *   Like every dangling ref in the layer it may resolve by a later merge
+ *   (ADR-0012), so it is advisory and the fix says so.
+ * - `roadmap.retraction-target-kind` — the target exists and is not one of the
+ *   three lifecycle facts (an item mutation, another retraction, anything at
+ *   all). There is no un-retraction: the fix is the doctrine, RE-LOG the
+ *   original fact, which is a new event with a new id that nothing retracts.
+ *
+ * The target id is read through the derivation's own reader, so the check
+ * reports exactly the event the columns acted on.
+ */
+function checkRoadmapRetractions(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  const byId = new Map(state.events.map((event) => [event.id, event]));
+  for (const event of state.events) {
+    if (event.type !== ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
+    const target = retractedEventId(event);
+    const reason = event.payload[RETRACTION_REASON_PAYLOAD_KEY];
+    const stated = typeof reason === "string" && reason.trim() !== "";
+    if (target === undefined || !stated) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.retraction-malformed",
+        message:
+          `retraction ${event.id} carries no ${target === undefined ? "`event` id" : "`reason`"} — ` +
+          "a retraction withdraws ONE named lifecycle fact and says why",
+        fix: `re-log it in full: \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE} --data event=<event-id> --data reason="<why>"\` (this one changes nothing)`,
+      });
+      if (target === undefined) continue;
+    }
+    const found = byId.get(target);
+    if (found === undefined) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.retraction-target-missing",
+        message: `retraction ${event.id} names event ${target}, which this store's journal does not carry — it withdraws nothing`,
+        fix: "the event may arrive by a later merge — otherwise re-log the retraction naming the right event id",
+      });
+      continue;
+    }
+    if (!ROADMAP_COLUMN_FACT_TYPES.has(found.type)) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.retraction-target-kind",
+        message:
+          `retraction ${event.id} names event ${found.id}, whose type is ${found.type} — only a ` +
+          `${[...ROADMAP_COLUMN_FACT_TYPES].join(", ")} can be retracted, so it withdraws nothing`,
+        fix: "a mis-retraction is corrected by re-logging the original fact, never by retracting the retraction — there is no un-retraction",
       });
     }
   }
@@ -2624,6 +2697,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkRefs(state),
     ...checkRoadmapRefs(state),
     ...checkRoadmapDerivation(state),
+    ...checkRoadmapRetractions(state),
     ...checkRoadmapAdrRefs(state),
     ...checkPrdLifecycle(state),
     ...checkRoadmapShape(state),

@@ -293,9 +293,14 @@ function awaitingRoadmapLine(awaiting: AwaitingRoadmapReview): string {
   const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`;
   const named = awaiting.nodes.map((node) => node.name).join(", ");
   const rest = awaiting.more === 0 ? "" : `, +${awaiting.more} more — nahel roadmap`;
+  const total = awaiting.nodes.length + awaiting.more;
+  // A change that touched no node — a retracted lifecycle fact (A1) — carries
+  // no node clause: `on 0 nodes — ` would be a list header over nothing. The
+  // act is still counted, and the verb that shows what moved is still named.
+  const where = total === 0 ? " — nahel roadmap" : ` on ${count(total, "node")} — ${named}${rest}`;
   return (
     `roadmap changes since your last touch (${awaiting.since}): ` +
-    `${count(awaiting.changes, "agent act")} on ${count(awaiting.nodes.length + awaiting.more, "node")} — ${named}${rest}`
+    `${count(awaiting.changes, "agent act")}${where}`
   );
 }
 

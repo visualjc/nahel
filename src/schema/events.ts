@@ -182,6 +182,38 @@ export const DEPLOY_COMPLETED_EVENT_TYPE = "deploy.completed";
 export const RELEASE_ANNOUNCED_EVENT_TYPE = "release.announced";
 
 /**
+ * `roadmap.column-retracted` (PR #26 follow-up A1): the withdrawal of ONE of
+ * the three lifecycle facts above — a sweep summarised from the wrong run, a
+ * deploy logged against the wrong epic, a release announced early.
+ *
+ * An open-extension type like the facts it corrects, so it is logged through
+ * `nahel log` and never self-recorded. It is a correction, not a deletion: the
+ * journal stays append-only and the retracted line stays exactly where it was.
+ * What changes is the DERIVATION — the named event leaves column-winner
+ * computation, and the winner is recomputed from the survivors, so retracting
+ * the latest sweep promotes the one before it rather than emptying the column.
+ *
+ * Payload `{event, reason}`. The `event` id is the whole causal edge: NOT the
+ * retraction's timestamp (a retraction logged before the fact it names still
+ * removes it — the two can arrive in either order across a merge), and not its
+ * `item` ref (coverage is the retracted FACT's business). `reason` is prose for
+ * the human reading the correction back, and `validate` warns when it is blank
+ * — a withdrawal nobody can account for is worse than the fact it withdraws.
+ *
+ * Only the three types above may be named. A retraction of an item mutation,
+ * of another retraction, or of an id no event carries is structurally invalid:
+ * `validate` names it and the derivation ignores it. Retraction is IDEMPOTENT
+ * (an id is in the retracted set or it is not), and there is no un-retraction:
+ * a mis-retraction is corrected by RE-LOGGING the original fact, which is a new
+ * event with a new id that no retraction names.
+ */
+export const ROADMAP_COLUMN_RETRACTED_EVENT_TYPE = "roadmap.column-retracted";
+
+/** The retraction payload keys: the fact it withdraws, and why. */
+export const RETRACTION_EVENT_PAYLOAD_KEY = "event";
+export const RETRACTION_REASON_PAYLOAD_KEY = "reason";
+
+/**
  * The one payload key of each lifecycle type that a VIEW renders (F9's shapes,
  * F2's render table): a deploy's `environment` and a release's `version`. The
  * rest of each documented shape — a deploy's `ref` and `shipped`, a release's

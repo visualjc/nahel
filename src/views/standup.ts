@@ -5,6 +5,7 @@ import {
   QA_SWEEP_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
   RELEASE_VERSION_PAYLOAD_KEY,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 } from "../schema/events";
 import type { JournalEvent, WorkItemFrontmatter } from "../schema/records";
 import { epochSeconds, timestampFromEpochSeconds, TIMESTAMP_PATTERN } from "../schema/time";
@@ -145,16 +146,26 @@ const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * True for every act a standup can read: the item mutations whose payload
- * carries a status, the run pause, and the three lifecycle types. Exported so
- * the command can KEEP only these while streaming the journal — the
- * isRoadmapColumnEvent precedent, so a store whose journal outgrows memory
- * still renders a standup. Anything else is not movement and is dropped.
+ * carries a status, the run pause, the three lifecycle types — and the
+ * retractions that withdraw one of those (A1). Exported so the command can KEEP
+ * only these while streaming the journal — the isRoadmapColumnEvent precedent,
+ * so a store whose journal outgrows memory still renders a standup. Anything
+ * else is not movement and is dropped.
+ *
+ * A retraction is kept for the GROUP HEADERS, not for a line of its own: each
+ * header carries roadmapNodeSummary's derived stage, which reads retractions,
+ * so a filter that dropped them would print a stage the roadmap view no longer
+ * shows. It renders no movement line — the journal is append-only and a standup
+ * reports the acts that happened, each named by its id; that a fact was later
+ * withdrawn is a statement about the derivation, and the header is where the
+ * derivation speaks.
  */
 export function isStandupEvent(event: JournalEvent): boolean {
   return (
     ITEM_RECORD_EVENT_TYPES.has(event.type) ||
     event.type === CORE_EVENT_TYPES.runPaused ||
-    LIFECYCLE_EVENT_TYPES.has(event.type)
+    LIFECYCLE_EVENT_TYPES.has(event.type) ||
+    event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE
   );
 }
 

@@ -1,4 +1,8 @@
-import { CORE_EVENT_TYPES, ROADMAP_ACKED_EVENT_TYPE } from "../schema/events";
+import {
+  CORE_EVENT_TYPES,
+  ROADMAP_ACKED_EVENT_TYPE,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
+} from "../schema/events";
 import type { Actor, Governance, JournalEvent } from "../schema/records";
 import { resolveGovernance } from "./authority";
 
@@ -71,17 +75,29 @@ export interface AwaitingRoadmapReview {
   since: string;
 }
 
-/** The roadmap acts a HUMAN performs to say "I have seen this". */
+/**
+ * The roadmap acts a HUMAN performs to say "I have seen this" — the same list
+ * as the changes below, plus `ack`, which says it and nothing else.
+ */
 const CLEARING_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.roadmapNodeCreated,
   CORE_EVENT_TYPES.roadmapNodeUpdated,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
   ROADMAP_ACKED_EVENT_TYPE,
 ]);
 
-/** The roadmap acts that MOVE the roadmap; `ack` moves nothing, so it is absent. */
+/**
+ * The roadmap acts that MOVE the roadmap; `ack` moves nothing, so it is absent.
+ *
+ * A retraction (A1) is one of them: withdrawing a lifecycle fact changes what
+ * every roadmap surface derives — a feature drops from `released` back to
+ * `built` with no record written at all — and a correction the human never sees
+ * is exactly the shape this line exists to prevent.
+ */
 const CHANGE_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.roadmapNodeCreated,
   CORE_EVENT_TYPES.roadmapNodeUpdated,
+  ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
 ]);
 
 /**
@@ -162,6 +178,13 @@ export function awaitingRoadmapReview(
   for (const event of agentActs) {
     if (event.ts < cutoff) continue;
     changes += 1;
+    // A retraction touches NO node and none is invented for it: the fact it
+    // withdraws covers an epic subtree, which is a resolution this function
+    // cannot make from governance and events alone. Keying it by its own act
+    // id — touchedNode's fallback for a mutation whose payload is unreadable —
+    // would print an event id in a list of node slugs, naming a node that does
+    // not exist. The act is COUNTED, which is what raises the line.
+    if (event.type === ROADMAP_COLUMN_RETRACTED_EVENT_TYPE) continue;
     const node = touchedNode(event);
     const seen = nodes.get(node.id);
     if (seen === undefined) nodes.set(node.id, node);

@@ -183,6 +183,78 @@ describe("nahel roadmap ticket resolve — decision, observation, derived index"
     expect(events.filter((e) => e.type === "roadmap.map-updated")).toHaveLength(0);
   });
 
+  test("--rationale is kept verbatim in the observation BODY, paragraphs and all", async () => {
+    // The one-liner is the decision; the REASONING behind it is what a reader
+    // six months later needs and what nothing else records. It belongs in the
+    // observation, which survives the ticket body distill throws away — and
+    // never as a map line, which is one row.
+    const { root, layout, env, map, ticket } = await charted();
+    const rationale =
+      "  Fly.io is the only target both stores already deploy to.\n" +
+      "\n" +
+      "Everything downstream is the customer's, and we refuse to own it.  ";
+    await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION, "--rationale", rationale]);
+
+    const observation = await readObservation(layout, (await listObservations(layout))[0]!);
+    expect(observation.body).toContain(
+      "Fly.io is the only target both stores already deploy to.\n" +
+        "\n" +
+        "Everything downstream is the customer's, and we refuse to own it.",
+    );
+    // Outer whitespace is trimmed — the leading spaces above never reach it.
+    expect(observation.body).not.toContain("  Fly.io");
+    expect(observation.body.split("\n")[0]).toBe(DECISION);
+    // A rationale is never an index line: the map's row is still the one-liner.
+    const shown = (await ok(env, root, ["map", "show", map])).join("\n");
+    expect(shown).toContain(`${ticket}  ${DECISION}`);
+    expect(shown).not.toContain("Fly.io is the only target");
+  });
+
+  test("the observation carries the FULL question, the destination, and the resolution event", async () => {
+    const { root, layout, env, map } = await charted();
+    const question = "which deploy target do we own?\n\nand who pays for it when it breaks?";
+    const multi = lastId(
+      await ok(env, root, [
+        "ticket",
+        "new",
+        "--map",
+        map,
+        "--type",
+        "grilling",
+        "--question",
+        question,
+      ]),
+    );
+    await ok(env, root, ["ticket", "resolve", multi, "--decision", DECISION]);
+
+    const observation = await readObservation(layout, (await listObservations(layout))[0]!);
+    expect(observation.body).toContain(question);
+    expect(observation.body).toContain("a deploy a fresh agent can drive");
+    expect(observation.frontmatter.sources).toEqual([
+      (await readTicket(layout, multi)).frontmatter.resolution!,
+    ]);
+    // No rationale was given, so the observation claims none.
+    expect(observation.body).not.toContain("Rationale");
+  });
+
+  test("a --rationale with nothing in it is refused — an empty reasoning is a lie", async () => {
+    const { root, layout, env, ticket } = await charted();
+    const message = await fails(env, root, [
+      "ticket",
+      "resolve",
+      ticket,
+      "--decision",
+      DECISION,
+      "--rationale",
+      "   ",
+    ]);
+    expect(message).toContain("--rationale");
+    // Named as a blank reasoning, not as a flag nobody has heard of.
+    expect(message).toContain("omit the flag");
+    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
+    expect(await listObservations(layout)).toEqual([]);
+  });
+
   test("`nahel recall` finds the decision by its own terms", async () => {
     const { root, env, ticket } = await charted();
     await ok(env, root, ["ticket", "resolve", ticket, "--decision", DECISION]);
@@ -329,8 +401,34 @@ describe("nahel roadmap ticket close — two dispositions, and only one of them 
     const shown = (await ok(env, root, ["map", "show", map])).join("\n");
     expect(shown).toContain(`marketing announcements are a later phase  (${ticket})`);
     expect(shown).toContain("decisions so far (0)");
-    // A close records no decision, so it distills no observation either.
-    expect(await listObservations(layout)).toEqual([]);
+
+    // A close records no DECISION, but it does distill an observation: the
+    // question and the ruling have to survive the body distill throws away.
+    const observation = await readObservation(layout, (await listObservations(layout))[0]!);
+    expect(observation.frontmatter.name).toBe(`closed-${ticket}`);
+    expect(observation.frontmatter.tags).toEqual(["closed", "out-of-scope"]);
+    expect(observation.frontmatter.sources).toEqual([closed.id]);
+    expect(observation.body.split("\n")[0]).toBe("marketing announcements are a later phase");
+    expect(observation.body).toContain(QUESTION);
+    expect(observation.body).toContain("out of scope");
+  });
+
+  test("a closed question survives distill and reads back from `nahel recall`", async () => {
+    const { root, layout, env, ticket } = await charted();
+    await ok(env, root, [
+      "ticket",
+      "close",
+      ticket,
+      "--out-of-scope",
+      "--reason",
+      "marketing announcements are a later phase",
+    ]);
+    await ok(env, root, ["ticket", "distill", ticket]);
+    expect((await readTicket(layout, ticket)).body).toBe("");
+
+    const found = await recall(root, ["marketing", "announcements"]);
+    expect(found).toContain("1 observation(s) match");
+    expect(found).toContain("marketing announcements are a later phase");
   });
 
   test("--invalidated-by records the decision that killed the question, and writes NO Out-of-scope line", async () => {
@@ -386,6 +484,21 @@ describe("nahel roadmap ticket close — two dispositions, and only one of them 
     expect((await ok(env, root, ["ticket", "show", second])).join("\n")).toContain(
       `invalidated_by=${ticket}`,
     );
+
+    // The invalidated question is distilled too, and its observation says WHICH
+    // decision killed it — the fact the ticket body is about to stop carrying.
+    const names = [];
+    for (const id of await listObservations(layout)) {
+      names.push(await readObservation(layout, id));
+    }
+    const observation = names.find((o) => o.frontmatter.name === `closed-${second}`)!;
+    expect(observation.frontmatter.tags).toEqual(["closed", "invalidated"]);
+    expect(observation.frontmatter.sources).toEqual([
+      (await readTicket(layout, second)).frontmatter.closure!,
+    ]);
+    expect(observation.body.split("\n")[0]).toBe("the fly.io decision already settles the region");
+    expect(observation.body).toContain("which region do we deploy to?");
+    expect(observation.body).toContain(`invalidated by ${ticket}`);
   });
 
   test("a close states WHICH disposition it is: neither is refused, and both together are refused", async () => {

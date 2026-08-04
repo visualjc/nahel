@@ -297,10 +297,17 @@ describe("distill interrupted between its two steps (F7)", () => {
   });
 });
 
-describe("close interrupted before its record write (F7)", () => {
-  test("the closed ticket rolls forward from the same one event, and the line is derived from it", async () => {
+describe("close interrupted between any two steps (F7)", () => {
+  /**
+   * `close` is the same two-record sequence `resolve` is — the ticket, then the
+   * observation that keeps the ruled-away question findable — so it earns the
+   * same convergence at every interruption point.
+   */
+  async function interruptedAt(step: "ticket" | "observation") {
     const { root, layout, env, map, ticket } = await charted();
-    await freeze(layout.ticketsDir);
+    const frozen = { ticket: layout.ticketsDir, observation: layout.observationsDir }[step];
+
+    await freeze(frozen);
     expect(
       await fails(env, root, [
         "ticket",
@@ -311,18 +318,40 @@ describe("close interrupted before its record write (F7)", () => {
         "a later phase owns it",
       ]),
     ).not.toBe("");
-    await thaw(layout.ticketsDir);
+    await thaw(frozen);
 
-    expect((await readTicket(layout, ticket)).frontmatter.state).toBe("open");
-    expect((await validate(root)).code).toBe(1);
+    const before = await validate(root);
+    expect(before.code).toBe(1);
+    expect(before.out).toContain("journal.divergence");
+
     expect((await validate(root, ["--repair"])).code).toBe(0);
     expect((await readTicket(layout, ticket)).frontmatter.state).toBe("closed");
+    expect(await listObservations(layout)).toHaveLength(1);
     expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain(
       `a later phase owns it  (${ticket})`,
     );
+
+    // Re-running is a no-op: no duplicate observation, no second line, and
+    // nothing journaled twice.
     expect(
       await fails(env, root, ["ticket", "close", ticket, "--out-of-scope", "--reason", "again"]),
     ).toContain("closed");
+    expect(await listObservations(layout)).toHaveLength(1);
+    expect(
+      (await Array.fromAsync(readJournal(layout))).filter((e) => e.type === "roadmap.ticket-closed"),
+    ).toHaveLength(1);
     expect((await ok(env, root, ["map", "show", map])).join("\n")).toContain("out of scope (1):");
+
+    const after = await validate(root);
+    expect(after.out).not.toContain("journal.divergence");
+    expect(after.code).toBe(0);
+  }
+
+  test("killed before the ticket state write — the first record of the sequence", async () => {
+    await interruptedAt("ticket");
+  });
+
+  test("killed between the ticket state and the observation", async () => {
+    await interruptedAt("observation");
   });
 });

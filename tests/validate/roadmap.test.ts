@@ -739,3 +739,91 @@ describe("validate — retracted lifecycle facts (A1)", () => {
     expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
   });
 });
+
+/**
+ * The sweep count the stage rests on (PR #26 follow-up A2). The stage advances
+ * to `tested` only on `failed === 0` exactly, so a winning sweep whose count is
+ * missing, non-numeric or negative silently holds the feature at its dev row.
+ * Silently is the problem: the workflow that logged it believes it recorded a
+ * pass. A WARNING names the sweep and says what the stage did instead.
+ *
+ * A count GREATER than zero is not a defect — it is a sweep that found
+ * failures, recorded correctly — so it warns about nothing.
+ */
+describe("validate — an unreadable sweep count (A2)", () => {
+  /** A feature node whose epic holds one done leaf, plus one covering sweep. */
+  async function sweptWith(fixture: ValidateFixture, payload: Record<string, unknown>) {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "swept-epic", type: "plan", lane: "full" });
+    await createItem(fixture, { name: "leaf-work", status: "done", parent: epic.id });
+    const node = await createNode(fixture, {
+      name: "swept-feature",
+      parent: product.id,
+      epic: epic.id,
+    });
+    const sweep = await appendEvent(fixture.layout, fixture.env, {
+      type: QA_SWEEP_EVENT_TYPE,
+      actor: { kind: "agent", id: "claude-code" },
+      item: epic.id,
+      payload,
+      session: fixture.agent.session,
+    });
+    return { node, epic, sweep };
+  }
+
+  test("a sweep with no `failed` count is a WARNING naming the sweep and the node", async () => {
+    const fixture = await setup();
+    const { node, sweep } = await sweptWith(fixture, { suite: "unit" });
+
+    const findings = findingsFor(
+      await validateStore(fixture.layout),
+      "roadmap.sweep-failed-count",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(`${node.id}.md`);
+    expect(findings[0]!.message).toContain(sweep.id);
+    expect(findings[0]!.message).toContain("swept-feature");
+    // It says what the stage did instead of advancing.
+    expect(findings[0]!.message).toContain("built");
+    expect(findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  test("a non-numeric and a negative count are the same WARNING", async () => {
+    for (const payload of [{ failed: "none" }, { failed: -1 }]) {
+      const fixture = await setup();
+      await sweptWith(fixture, payload);
+      const findings = findingsFor(
+        await validateStore(fixture.layout),
+        "roadmap.sweep-failed-count",
+      );
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.severity).toBe("warning");
+    }
+  });
+
+  test("failed = 0 and failed > 0 both warn about NOTHING — a found failure is not a defect", async () => {
+    for (const payload of [{ failed: 0 }, { failed: 4 }]) {
+      const fixture = await setup();
+      await sweptWith(fixture, payload);
+      expect(
+        findingsFor(await validateStore(fixture.layout), "roadmap.sweep-failed-count"),
+      ).toEqual([]);
+    }
+  });
+
+  test("a RETRACTED unreadable sweep warns about nothing — it decides no column", async () => {
+    const fixture = await setup();
+    const { sweep } = await sweptWith(fixture, { suite: "unit" });
+    await appendEvent(fixture.layout, fixture.env, {
+      type: "roadmap.column-retracted",
+      actor: { kind: "agent", id: "claude-code" },
+      payload: { event: sweep.id, reason: "summarised from the wrong run" },
+      session: fixture.agent.session,
+    });
+
+    expect(
+      findingsFor(await validateStore(fixture.layout), "roadmap.sweep-failed-count"),
+    ).toEqual([]);
+  });
+});

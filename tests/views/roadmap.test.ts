@@ -726,7 +726,17 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
     expect(status.stage).toBe("unknown");
   });
 
-  test("a failing sweep still reaches tested — the stage says a sweep ran, not that it passed", () => {
+  /**
+   * CHANGED by the PR #26 review (follow-up A2), superseding the earlier
+   * reading this case pinned ("the word says a sweep ran, and the QA column is
+   * where the outcome is read"). A stage is what a reader scans a column of, and
+   * `tested` beside a sweep that found four failures reads as a feature that
+   * passed. The stage row now advances ONLY on `failed === 0` exactly; the QA
+   * COLUMN still prints the outcome verbatim, so nothing is hidden — the reader
+   * sees `built` in the stage and `(4 failed)` in the column, which is the truth
+   * twice rather than once.
+   */
+  test("a failing sweep does NOT reach tested — the stage stays at the dev rollup", () => {
     const env = seededEnv({ tickSeconds: 1 });
     const { epic, items } = epicWith(env, ["done"]);
     const node = makeNode(env, { epic: epic.id });
@@ -734,6 +744,120 @@ describe("featureStatus — the stage, by precedence (F9's table, F2's machinery
 
     const status = featureStatus(node, items, [event]);
     expect(status.qa).toBe("tested 2026-07-16T12:00:00Z (4 failed)");
+    expect(status.stage).toBe("built");
+  });
+});
+
+/**
+ * The QA row of the precedence table (PR #26 follow-up A2): only a CLEAN sweep
+ * advances the stage. `failed === 0` exactly — a count that is missing,
+ * non-numeric, or negative is not a pass, it is a sweep whose summary nobody
+ * can read, and reading it as one would let a workflow reach `tested` by
+ * logging nothing at all.
+ *
+ * The COLUMN is untouched throughout: F2's render table is the contract, so a
+ * feature can (and does) read `built  qa=tested <ts> (4 failed)` — the stage
+ * says where the feature stands, the column says what the sweep found.
+ * Everything above the QA row is untouched too: a deploy or a release still
+ * wins whatever the sweep said.
+ */
+describe("featureStatus — the stage advances on a CLEAN sweep only (A2)", () => {
+  /** A feature over an epic with one done child (dev `built`) and one sweep. */
+  function swept(
+    payload: Record<string, unknown>,
+    statuses: readonly WorkItemFrontmatter["status"][] = ["done"],
+  ) {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, statuses);
+    const node = makeNode(env, { epic: epic.id });
+    return featureStatus(node, items, [makeEvent({ id: "aaaaaaa1", item: epic.id, payload })]);
+  }
+
+  test("failed = 0 → tested, the only row that advances", () => {
+    expect(swept({ failed: 0 }).stage).toBe("tested");
+  });
+
+  test("failed absent → the dev row, and the column still says (? failed)", () => {
+    const status = swept({});
+    expect(status.stage).toBe("built");
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z (? failed)");
+  });
+
+  test("failed non-numeric → the dev row", () => {
+    expect(swept({ failed: "none" }).stage).toBe("built");
+    expect(swept({ failed: null }).stage).toBe("built");
+    expect(swept({ failed: Number.NaN }).stage).toBe("built");
+  });
+
+  test("failed negative → the dev row, and the column prints the impossible count", () => {
+    const status = swept({ failed: -1 });
+    expect(status.stage).toBe("built");
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z (-1 failed)");
+  });
+
+  test("the dev row it falls back to is the node's own, not always `built`", () => {
+    expect(swept({ failed: 3 }, ["backlog"]).stage).toBe("planned");
+    expect(swept({ failed: 3 }, ["done", "backlog"]).stage).toBe("in-flight");
+  });
+
+  test("the rows ABOVE it are untouched: a deploy over a failing sweep still reads deployed", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    const events = [
+      makeEvent({ id: "aaaaaaa1", item: epic.id, payload: { failed: 4 } }),
+      makeEvent({
+        id: "aaaaaaa2",
+        item: epic.id,
+        type: DEPLOY_COMPLETED_EVENT_TYPE,
+        payload: { environment: "prod" },
+      }),
+    ];
+
+    expect(featureStatus(node, items, events).stage).toBe("deployed");
+  });
+
+  test("it is the WINNING sweep that decides — a later failing sweep un-tests the feature", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    const clean = makeEvent({
+      id: "aaaaaaa1",
+      item: epic.id,
+      ts: "2026-07-16T12:00:00Z",
+      payload: { failed: 0 },
+    });
+    const failing = makeEvent({
+      id: "aaaaaaa2",
+      item: epic.id,
+      ts: "2026-07-17T12:00:00Z",
+      payload: { failed: 2 },
+    });
+
+    expect(featureStatus(node, items, [clean, failing]).stage).toBe("built");
+    // And the other way round: a clean re-run after a failure reaches tested.
+    expect(featureStatus(node, items, [failing, { ...clean, ts: "2026-07-18T12:00:00Z" }]).stage).toBe(
+      "tested",
+    );
+  });
+
+  test("retracting the failing sweep hands the row back to the clean one below it", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const node = makeNode(env, { epic: epic.id });
+    const events = [
+      makeEvent({ id: "aaaaaaa1", item: epic.id, ts: "2026-07-16T12:00:00Z", payload: { failed: 0 } }),
+      makeEvent({ id: "aaaaaaa2", item: epic.id, ts: "2026-07-17T12:00:00Z", payload: { failed: 2 } }),
+      makeEvent({
+        id: "aaaaaaa3",
+        ts: "2026-07-18T12:00:00Z",
+        type: "roadmap.column-retracted",
+        payload: { event: "aaaaaaa2", reason: "summarised from the wrong run" },
+      }),
+    ];
+
+    const status = featureStatus(node, items, events);
+    expect(status.qa).toBe("tested 2026-07-16T12:00:00Z");
     expect(status.stage).toBe("tested");
   });
 });

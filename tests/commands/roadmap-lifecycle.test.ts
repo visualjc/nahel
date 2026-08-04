@@ -494,6 +494,19 @@ describe("the vocabulary the two types are recorded under (F9)", () => {
     expect(defined).toContain("not recency");
     expect(defined).toContain("no stage field");
   });
+
+  /**
+   * The QA row's condition (PR #26 follow-up A2). The glossary is where a
+   * workflow author learns what makes a feature read `tested`, so the earlier
+   * sentence — a sweep that found failures still reads `tested` — would now
+   * teach the opposite of what the derivation does.
+   */
+  test("the glossary states that only a CLEAN sweep advances the stage", async () => {
+    const defined = await entry("Stage");
+    expect(defined).toContain("`failed`");
+    expect(defined).toContain("exactly");
+    expect(defined).not.toContain("still reads `tested`");
+  });
 });
 
 /**

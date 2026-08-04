@@ -195,8 +195,12 @@ describe("nahel roadmap — the product level (F3)", () => {
     const ts = sweep[0]!.ts;
 
     const out = await view(env, root);
+    // The stage stays at the dev row while the QA column prints the outcome
+    // verbatim (PR #26 follow-up A2, superseding the earlier reading in which a
+    // sweep that found failures still read `tested`): one line now tells the
+    // reader both where the feature stands and what the sweep found.
     expect(out).toContain(
-      `    detached-state-repo  tested  dev=built  qa=tested ${ts} (2 failed)  deploy=—  release=—  id=${built}`,
+      `    detached-state-repo  built  dev=built  qa=tested ${ts} (2 failed)  deploy=—  release=—  id=${built}`,
     );
     expect(out).toContain(
       `    architecture-docs-wiki  planned  dev=planned  qa=—  deploy=—  release=—  id=${planned}`,

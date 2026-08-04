@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmod, readdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { CommandContext } from "../../src/cli";
 import { itemCommand } from "../../src/commands/item";
@@ -23,6 +23,7 @@ import {
   ensureLayout,
   failedRoadmapNodePath,
   listRoadmapNodes,
+  readRoadmapNode,
   roadmapNodePath,
   writeConfig,
   type StoreLayout,
@@ -1052,5 +1053,188 @@ describe("a migration interrupted mid-flight recovers through the CLI alone (rev
     const live = await listRoadmapNodes(layout);
     expect(live).toHaveLength(3);
     expect(live).toContain(product);
+  });
+});
+
+/**
+ * The convergence precondition (XP repro on head dc8eae5, verified).
+ *
+ * The hole: a product node's creation EVENT journals and its record write dies
+ * — the ordinary write-ahead crash window, healed by `validate --repair` like
+ * any other. But supersede reads attribution from the journal and presence from
+ * disk, and an unattributed node that exists in neither list is invisible to
+ * it. So the retirement succeeded, the retry created a replacement product,
+ * and a LATER `validate --repair` materialized the first one from its
+ * journal-ahead event: two live product nodes, and validation passes, because
+ * more than one product node is schema-legal.
+ *
+ * The fix is a PRECONDITION, not a sweep: supersede refuses while the store
+ * carries journal-ahead roadmap state, and says to repair first. Retiring
+ * records while unmaterialized roadmap writes are pending is exactly when a
+ * retirement mis-scopes — it is computed against a store that does not exist
+ * yet. After repair the materialized product is visible to the operator AND to
+ * step 4's create-or-reuse, so the existing semantics compose with no new
+ * machinery and nothing has to hunt for ghosts.
+ *
+ * This is about divergence that PRE-DATES the supersession. The supersession's
+ * own crash windows are a different thing entirely, covered by its own
+ * write-ahead tests above and unchanged by this.
+ */
+describe("supersede refuses over journal-ahead roadmap state (XP repro)", () => {
+  /** The repro's first half: the product's event lands, its record write dies. */
+  async function crashedProduct() {
+    const { root, layout, env } = await setup();
+    const epics = [await newItem(env, root, "one"), await newItem(env, root, "two")];
+    const stranded = await selection(env, root, epics);
+    // The roadmap directory appears with the first node, so it is created and
+    // frozen: every read still succeeds, and only the record write dies.
+    await mkdir(layout.roadmapDir, { recursive: true });
+    await chmod(layout.roadmapDir, 0o555);
+    try {
+      expect(
+        await roadmapCommand.run(
+          [
+            "node",
+            "new",
+            "product",
+            "the-product",
+            "--horizon",
+            "now",
+            "--intent",
+            "what this product is",
+          ],
+          env,
+          root,
+        ),
+      ).toBe(1);
+    } finally {
+      await chmod(layout.roadmapDir, 0o755);
+      errs = [];
+    }
+    const created = (await events(layout)).filter(
+      (event) => event.type === CORE_EVENT_TYPES.roadmapNodeCreated,
+    );
+    // Exactly the crash window: one event, no record.
+    expect(created).toHaveLength(1);
+    expect(await listRoadmapNodes(layout)).toEqual([]);
+    return { root, layout, env, epics, stranded, pending: created[0]! };
+  }
+
+  test("the acknowledged path refuses, naming the pending event and the repair", async () => {
+    const fixture = await crashedProduct();
+    const message = await fails(fixture.env, fixture.root, [
+      "migration",
+      "supersede",
+      fixture.stranded,
+      "--reason",
+      "killed before any feature node",
+      "--nothing-to-move",
+    ]);
+    expect(message).toContain("journal-ahead");
+    expect(message).toContain("nahel validate --repair");
+    expect(message).toContain(fixture.pending.id);
+    // Nothing was retired: the store is exactly as the crash left it.
+    expect(
+      (await events(fixture.layout)).filter(
+        (event) => event.type === CORE_EVENT_TYPES.migrationSuperseded,
+      ),
+    ).toEqual([]);
+  });
+
+  test("the ordinary path refuses too — the precondition is about the store, not the flag", async () => {
+    const fixture = await crashedProduct();
+    const message = await fails(fixture.env, fixture.root, [
+      "migration",
+      "supersede",
+      fixture.stranded,
+      "--reason",
+      "killed before any feature node",
+    ]);
+    expect(message).toContain("journal-ahead");
+    expect(message).toContain("nahel validate --repair");
+  });
+
+  test("the whole repro, recovered: repair, retire, REUSE the materialized product", async () => {
+    const fixture = await crashedProduct();
+    const { root, layout, env } = fixture;
+
+    // Repair materializes the product the crash left journal-ahead.
+    expect((await validate(root, ["--repair"])).code).toBe(0);
+    const product = (await listRoadmapNodes(layout))[0]!;
+    expect(await listRoadmapNodes(layout)).toHaveLength(1);
+
+    // Now the retirement is computed against a store that actually exists.
+    await ok(env, root, [
+      "migration",
+      "supersede",
+      fixture.stranded,
+      "--reason",
+      "killed before any feature node",
+      "--nothing-to-move",
+    ]);
+    // The product survived — it is the store's, not the attempt's — and step 4
+    // of the retry REUSES it rather than charting a second.
+    expect(await listRoadmapNodes(layout)).toEqual([product]);
+    await ok(env, root, [
+      "node",
+      "update",
+      "the-product",
+      "--intent",
+      "what this product is, restated on the retry",
+    ]);
+    const redo = await selection(env, root, fixture.epics);
+    for (const [index, epic] of fixture.epics.entries()) {
+      await ok(env, root, [
+        "node",
+        "new",
+        "feature",
+        index === 0 ? "one" : "two",
+        "--horizon",
+        "now",
+        "--parent",
+        "the-product",
+        "--epic",
+        epic,
+        "--intent",
+        "the feature",
+        "--migration",
+        redo,
+      ]);
+    }
+
+    // Exactly one product node — the resurrection the repro produced is gone.
+    const live = await Promise.all(
+      (await listRoadmapNodes(layout)).map((id) => readRoadmapNode(layout, id)),
+    );
+    expect(live.filter(({ frontmatter }) => frontmatter.kind === "product")).toHaveLength(1);
+    expect(live).toHaveLength(3);
+    const validated = await validate(root);
+    expect(validated.code).toBe(0);
+    expect(validated.out).not.toContain("error [");
+    expect(validated.out).not.toContain("migration-audit");
+    // And a later repair pass changes nothing: there is nothing left pending.
+    expect((await validate(root, ["--repair"])).code).toBe(0);
+    expect(await listRoadmapNodes(layout)).toHaveLength(3);
+  });
+
+  test("divergence in NON-roadmap records does not block roadmap recovery", async () => {
+    const fixture = await migrated();
+    const { root, layout, env } = fixture;
+    // An item whose record write died: the same write-ahead crash window, in a
+    // record kind that cannot change what a retirement retires. Scoping the
+    // precondition to roadmap state is the point — a pending item write is a
+    // real defect, and blocking recovery on it would strand the store for a
+    // reason that has nothing to do with the migration.
+    await chmod(layout.itemsDir, 0o555);
+    try {
+      expect(await itemCommand.run(["new", "chore", "unrelated", "direct"], env, root)).toBe(1);
+    } finally {
+      await chmod(layout.itemsDir, 0o755);
+      errs = [];
+    }
+    expect((await validate(root)).out).toContain("journal.divergence");
+
+    await ok(env, root, ["migration", "supersede", fixture.selection, "--reason", "tainted"]);
+    expect((await shape(fixture)).failed).toHaveLength(2);
   });
 });

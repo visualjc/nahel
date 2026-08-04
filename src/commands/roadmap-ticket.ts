@@ -65,14 +65,20 @@ export const TICKET_USAGE = `  nahel roadmap ticket new --map <ref> --type <t> -
   nahel roadmap ticket release <ref>
     Hand it back to the frontier. Permitted to any actor, always.
 
-  nahel roadmap ticket resolve <ref> --decision <one-liner>
+  nahel roadmap ticket resolve <ref> --decision <one-liner> [--rationale <prose>]
     Record the decision: journals it and distills an observation citing the
     resolution event — so \`nahel recall\` finds it. The map's Decisions so far
     index is derived from this ticket; no map record is written.
+      --decision: the decision itself, in one line
+      --rationale: WHY, in as many lines as it takes. Stored verbatim in the
+        observation body (paragraphs kept), never as a map row — the one place
+        the reasoning survives \`distill\`.
 
   nahel roadmap ticket close <ref> --reason <why> (--out-of-scope | --invalidated-by <ref>)
     Rule the question away, stating WHICH disposition it is. Under either one
-    it never becomes a decision, and no map record is written.
+    it never becomes a decision, and no map record is written. Distills an
+    observation too, so the question survives \`distill\` and \`nahel recall\`
+    still finds what was ruled away.
       --out-of-scope: ruled beyond the destination — the reason renders as one
         line under the map's Out of scope section, which never graduates.
       --invalidated-by <ticket-or-event-id>: another decision answered the
@@ -320,11 +326,27 @@ async function ticketRelease(
 }
 
 /**
+ * A labelled block of prose in an observation body: the heading on its own
+ * line, the text below it. A BLOCK rather than `Label: <text>`, because both
+ * things it carries — a question and a rationale — are prose that may run to
+ * paragraphs, and folding a paragraph onto a label line loses its shape.
+ * Absent text contributes nothing at all, never an empty heading.
+ */
+function observationBlock(label: string, text: string): string[] {
+  return text === "" ? [] : ["", `${label}:`, text];
+}
+
+/**
  * The observation `resolve` distills (F7). Its BODY carries the decision on
- * the first line — what `nahel recall` prints as the fact — then the question
- * and the map's destination, because `distill` is about to throw the ticket's
- * own copy of the question away and the decision must stay readable from
- * `recall` and `progress` alone.
+ * the first line — what `nahel recall` prints as the fact — then where it was
+ * decided, the whole question, and the rationale when one was given, because
+ * `distill` is about to throw the ticket's own copy of the question away and
+ * the decision must stay readable from `recall` and `progress` alone.
+ *
+ * The RATIONALE is why this record exists at all: the one-liner says what was
+ * decided and nothing anywhere else says why. It lives here rather than on the
+ * map, whose index is one row per decision, and rather than on the ticket,
+ * whose body is the thing distill empties.
  *
  * The name is derived from the ticket id rather than from the decision prose:
  * a slug is a schema-hardened field, and no slugification of free text is
@@ -335,6 +357,7 @@ function decisionObservation(
   destination: string,
   question: string,
   decision: string,
+  rationale: string | undefined,
   eventId: string,
   now: string,
   id: string,
@@ -343,14 +366,55 @@ function decisionObservation(
     decision,
     "",
     `Decided by resolving ${ticket.type} ticket ${ticket.id}, charting: ${destination}`,
+    ...observationBlock("Question", question),
+    ...observationBlock("Rationale", rationale ?? ""),
   ];
-  if (question !== "") lines.push(`Question: ${question}`);
   return {
     frontmatter: {
       id,
       name: `decision-${ticket.id}`,
       created: now,
       tags: ["decision", ticket.type],
+      sources: [eventId],
+    },
+    body: `${lines.join("\n")}\n`,
+  };
+}
+
+/**
+ * The observation `close` distills — the same durability the decision gets, for
+ * the question nobody is going to answer. Without it, `distill` on a closed
+ * ticket throws away the only copy of the question, and a reader who later asks
+ * "did we ever consider X?" finds a `reason` with nothing to attach it to.
+ *
+ * The first line is the REASON, because that is the fact `recall` prints; the
+ * disposition is spelled out beneath it, naming the invalidating ref when there
+ * is one. Tagged `closed` plus the disposition, so a recall can ask for either.
+ */
+function closureObservation(
+  ticket: TicketFrontmatter,
+  destination: string,
+  question: string,
+  reason: string,
+  disposition: CloseDisposition,
+  eventId: string,
+  now: string,
+  id: string,
+): { frontmatter: ObservationFrontmatter; body: string } {
+  const ruling =
+    disposition.kind === "out-of-scope" ? "out of scope" : `invalidated by ${disposition.by}`;
+  const lines = [
+    reason,
+    "",
+    `Closed ${ticket.type} ticket ${ticket.id} as ${ruling}, charting: ${destination}`,
+    ...observationBlock("Question", question),
+  ];
+  return {
+    frontmatter: {
+      id,
+      name: `closed-${ticket.id}`,
+      created: now,
+      tags: ["closed", disposition.kind],
       sources: [eventId],
     },
     body: `${lines.join("\n")}\n`,
@@ -371,11 +435,36 @@ function onlyPositional(positionals: string[], verb: string): string {
   return positionals[0]!;
 }
 
-/** `resolve <ref> --decision <one-liner>`. */
-function parseResolveArgs(args: string[]): { ref: string; decision: string } {
+/**
+ * The optional `--rationale` prose: multi-line by design, since reasoning runs
+ * to paragraphs. Only the OUTER whitespace goes — everything between the first
+ * and last non-blank characters is stored exactly as written, so the blank line
+ * an author put between two paragraphs is still there when it is read back.
+ *
+ * A flag passed with nothing in it is refused rather than dropped: an agent
+ * that meant to explain itself and shipped a blank should hear about it, and
+ * omitting the flag is the way to say there is nothing to add.
+ */
+function optionalRationale(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new UsageError(
+      "--rationale was passed with nothing in it — omit the flag, or give the reasoning behind the " +
+        "decision (it becomes the observation's body, where prose is welcome: paragraphs are kept as written)",
+    );
+  }
+  return value.trim();
+}
+
+/** `resolve <ref> --decision <one-liner> [--rationale <prose>]`. */
+function parseResolveArgs(args: string[]): {
+  ref: string;
+  decision: string;
+  rationale: string | undefined;
+} {
   const { values, positionals } = parseArgs({
     args,
-    options: { decision: { type: "string" } },
+    options: { decision: { type: "string" }, rationale: { type: "string" } },
     allowPositionals: true,
   });
   return {
@@ -385,6 +474,7 @@ function parseResolveArgs(args: string[]): { ref: string; decision: string } {
       "--decision",
       "a resolution IS its decision — pass a non-empty --decision <one-liner> (it is journaled, distilled into an observation, and indexed on the map from this ticket)",
     ),
+    rationale: optionalRationale(values.rationale),
   };
 }
 
@@ -475,7 +565,7 @@ async function ticketResolve(
   cwd: string,
   actorOverride?: string,
 ): Promise<number> {
-  const { ref, decision } = parseResolveArgs(args);
+  const { ref, decision, rationale } = parseResolveArgs(args);
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "resolve");
@@ -497,6 +587,7 @@ async function ticketResolve(
     map.frontmatter.destination,
     current.body.trim(),
     decision,
+    rationale,
     eventId,
     now,
     generateId(ctx.env),
@@ -517,13 +608,17 @@ async function ticketResolve(
 /**
  * `close`: rule the question away, saying WHICH way (see CloseDisposition).
  * A closed question never becomes a decision under either disposition, so
- * nothing is indexed in Decisions so far.
+ * nothing is indexed in Decisions so far — but it IS distilled into an
+ * observation, the same two-record sequence `resolve` is: `distill` empties a
+ * closed ticket's body too, and without the observation the question itself
+ * would be the one thing the store forgot.
  *
  * Like `resolve`, this writes NO map record under either disposition: an
  * out-of-scope line is derived from the ticket that earned it, so a close
- * touches only the ticket. The event id is minted first because the ticket
- * records it (`closure`) — the key the derived section orders by, which
- * `updated` cannot be, since `distill` moves it long afterwards.
+ * touches only its own two records. The event id is minted first for both
+ * reasons the layer has one — the observation cites the event carrying it, and
+ * the ticket records it (`closure`), the key the derived section orders by,
+ * which `updated` cannot be since `distill` moves it long afterwards.
  */
 async function ticketClose(
   args: string[],
@@ -535,8 +630,10 @@ async function ticketClose(
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "close");
+  const map = await readMap(ctx.layout, current.frontmatter.map);
 
   const eventId = generateId(ctx.env);
+  const now = ctx.env.now();
   const { claimant: _released, ...rest } = current.frontmatter;
   const closed: TicketFrontmatter = {
     ...rest,
@@ -544,13 +641,26 @@ async function ticketClose(
     reason,
     ...(disposition.kind === "invalidated" ? { invalidated_by: disposition.by } : {}),
     closure: eventId,
-    updated: ctx.env.now(),
+    updated: now,
   };
+  const observation = closureObservation(
+    current.frontmatter,
+    map.frontmatter.destination,
+    current.body.trim(),
+    reason,
+    disposition,
+    eventId,
+    now,
+    generateId(ctx.env),
+  );
   await mutate(ctx, {
     target: "sequence",
     eventType: CORE_EVENT_TYPES.ticketClosed,
     eventId,
-    writes: [{ target: "ticket", frontmatter: closed, body: current.body }],
+    writes: [
+      { target: "ticket", frontmatter: closed, body: current.body },
+      { target: "observation", frontmatter: observation.frontmatter, body: observation.body },
+    ],
   });
   await closeStoreContext(ctx);
   return 0;

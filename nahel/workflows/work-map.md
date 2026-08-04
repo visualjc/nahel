@@ -58,7 +58,9 @@ Before any `nahel` command: if you are an agent, set
 
 4. Record the decision. This is the act the whole workflow exists for:
 
-       nahel roadmap ticket resolve <ticket-id> --decision "<the decision, in one line>"
+       nahel roadmap ticket resolve <ticket-id> \
+         --decision "<the decision, in one line>" \
+         --rationale "<why — as many lines and paragraphs as it takes>"
 
    One command does three things: it journals the decision, flips the ticket,
    and distills an **observation** so `nahel recall <terms>` finds the decision
@@ -67,6 +69,12 @@ Before any `nahel` command: if you are an agent, set
    two sessions resolving two tickets on one map never collide. Write the
    one-liner as the answer, not the topic — "we own the fly.io deploy and
    nothing downstream of it", never "deploy target decided".
+
+   `--rationale` is optional and worth almost always writing: the one-liner
+   says WHAT was decided, and it is the only thing that says WHY. It is stored
+   verbatim in the observation — paragraphs kept — so it survives step 6's
+   distill, and it never becomes a map row. Pass it blank and you are refused;
+   omit it when there is genuinely nothing to add.
 
    If the question is not going to be answered, close it instead — and say
    WHICH of the two reasons it is, because they are different facts and only
@@ -87,6 +95,11 @@ Before any `nahel` command: if you are an agent, set
    into a graveyard nobody trusts. Both readings are derived from the closed
    ticket; like `resolve`, neither disposition writes the map.
 
+   A close distills an **observation** too, under either disposition, so the
+   question and the ruling survive step 6's distill and `nahel recall` still
+   finds what was ruled away. Write the `--reason` the way you would write a
+   decision: the answer, not the topic.
+
    If you are stopping without an answer, hand it back:
 
        nahel roadmap ticket release <ticket-id>
@@ -102,13 +115,14 @@ Before any `nahel` command: if you are an agent, set
 
 6. Distill the ticket once the decision reads back without it:
 
-       nahel recall <a few words from the decision>
+       nahel recall <a few words from the decision, or from the question you closed>
        nahel roadmap ticket distill <ticket-id>
 
    `distill` empties the ticket's body **through the CLI** — never with an
    editor, which `nahel validate` reports as a finding. Check `recall` first:
    the body may go only because the decision, and the question it answered,
-   already live in the journal and in the observation.
+   already live in the journal and in the observation. A CLOSED ticket distills
+   the same way and for the same reason — its close wrote an observation too.
 
 7. Confirm the shape and leave the map readable:
 

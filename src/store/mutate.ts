@@ -191,19 +191,19 @@ export type Mutation =
   | { target: "map"; eventType: string; frontmatter: MapFrontmatter; body: string }
   | { target: "ticket"; eventType: string; frontmatter: TicketFrontmatter; body: string }
   /**
-   * A sequence under one write-ahead event (F7): `resolve` writes the ticket
-   * and the decision observation; `close` writes the ticket. One event carrying
-   * every record is what makes the sequence recoverable — a process killed
-   * between any two of the writes leaves the journal ahead of the records,
-   * which is the single crash shape replayPending already heals, rather than a
-   * half-applied sequence nothing could complete without inventing state.
+   * A MULTI-RECORD sequence under one write-ahead event (F7): `resolve` and
+   * `close` each write the ticket and the observation distilled from it. One
+   * event carrying every record is what makes the sequence recoverable — a
+   * process killed between any two of the writes leaves the journal ahead of
+   * the records, which is the single crash shape replayPending already heals,
+   * rather than a half-applied sequence nothing could complete without
+   * inventing state.
    *
    * `eventId` is pre-minted by the caller so a record inside the payload can
-   * cite the event carrying it: the resolution's observation sources the
-   * resolution event id (F7's acceptance criterion), and a closed ticket
-   * records its own close event — neither of which can be read back from an
-   * event that does not exist yet. That is also why a one-write act still comes
-   * through here: this is the only path that mints the id before the append.
+   * cite the event carrying it: each observation sources the very event it
+   * travels in (F7's acceptance criterion), and a closed ticket records its own
+   * close event — neither of which can be read back from an event that does not
+   * exist yet.
    */
   | {
       target: "sequence";

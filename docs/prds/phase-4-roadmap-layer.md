@@ -513,12 +513,28 @@ wayfinder's decisions-are-permanent principle on nahel's existing recall
 design. `distill` then **empties the ticket body through the CLI** — body
 deletion is a state mutation, never a raw file delete.
 
-Both are **multi-record sequences**, so each step rides the existing
-write-ahead choke point (`store/mutate.ts`: journal the event, then apply
-the record write) — no step invents its own write path. A sequence
-interrupted between any two steps is therefore a **recoverable partial
-state**, not corruption: `validate` names it and `validate --repair`
-(`replayPending`) rolls it forward.
+**Every terminal act distils, and the reasoning goes with it** (contract
+clarification, PR #26 review, superseding the earlier reading in which only
+`resolve` distilled and only the one-line decision was recorded):
+
+- `resolve` takes an optional **`--rationale`**, multi-line, stored verbatim
+  in the observation body with its paragraphs intact and its outer whitespace
+  trimmed. The one-liner says *what* was decided; nothing else in the store
+  says *why*, and the map's index is one row, so the rationale belongs in the
+  record that outlives the ticket body. A `--rationale` passed blank is
+  refused; omitting the flag is how a resolution says there is nothing to add.
+  The observation also carries the FULL question and the map's destination.
+- `close` **also distills an observation**, under both dispositions —
+  `closed-<ticket-id>`, tagged `closed` plus the disposition, sourcing the
+  close event, its body carrying the question, the ruling and the invalidating
+  ref where there is one. `distill` empties a closed ticket's body too, and
+  without this the question itself would be the one thing the store forgot.
+
+Resolve, close and distill all ride the existing write-ahead choke point
+(`store/mutate.ts`: journal the event, then apply the record write) — no step
+invents its own write path. A sequence interrupted between any two steps is
+therefore a **recoverable partial state**, not corruption: `validate` names it
+and `validate --repair` (`replayPending`) rolls it forward.
 
 - **Two workflow docs** ship: charting a map (name the destination, grill
   breadth-first, create tickets then wire blocking in a second pass, sketch
@@ -537,7 +553,12 @@ state**, not corruption: `validate` names it and `validate --repair`
   actor succeeds and returns the ticket to the frontier (F8).
 - `resolve` writes the decision event **and** an observation whose `sources`
   include the resolution event id; `nahel recall <decision terms>` returns it,
-  and `map show` renders the index line derived from the resolved ticket.
+  and `map show` renders the index line derived from the resolved ticket. A
+  `--rationale` reaches that observation's body with its paragraphs intact and
+  never becomes a map row; a blank one is refused.
+- `close` writes an observation the same way under both dispositions, and a
+  closed ticket whose body has been distilled still answers `nahel recall
+  <question terms>` with its question, its ruling and its reason.
 - `distill` empties the body **through the CLI** and journals it; afterwards
   the decision is still fully readable from `nahel recall` and `nahel
   progress` alone — exercised by actually distilling one. A ticket body
@@ -545,7 +566,7 @@ state**, not corruption: `validate` names it and `validate --repair`
   distill event for an emptied body).
 - **Crash-shape**: with the process killed between **any two** steps of
   `resolve` (decision event → ticket state → observation), of `close`
-  (close event → ticket state → observation) and of `distill`, `validate`
+  (close event → ticket state → observation), and of `distill`, `validate`
   names the partial state, `validate --repair` completes it, and re-running
   the original verb afterwards is idempotent — no duplicate observation, no
   second index line. Exercised at every interruption point, not just the

@@ -451,6 +451,30 @@ describe("the bare form (F1)", () => {
     );
   });
 
+  test("an intent-only edit is news: at roadmap altitude the prose IS the record (D2)", async () => {
+    const fixture = await productStore();
+    const events = await journal(fixture.layout);
+    const baseline = act(events, CORE_EVENT_TYPES.ticketCreated, fixture.ticket);
+    const agent = seededEnv({ seed: 21, now: "2026-08-02T09:00:00Z", tickSeconds: 1 });
+    await ok(
+      agent,
+      fixture.root,
+      ["node", "update", "paperbird", "--intent", "A product that folds paper, and charges for it."],
+      "agent:codex",
+    );
+
+    const out = await plan(fixture.root);
+
+    // `--intent` moves no frontmatter field whatsoever, so a debrief reading
+    // frontmatter alone would render this store's real shaping work as silence.
+    expect(out).toContain(
+      `since your last session (after your last act here, ${baseline.ts}):\n  node  intent  changed\n`,
+    );
+    expect(out).not.toContain("nothing new since your last touch");
+    // The prose stays where it lives; the line says only where to go look.
+    expect(out).not.toContain("charges for it");
+  });
+
   test("a multi-product store lists the products and asks which one", async () => {
     const fixture = await productStore();
     const env = seededEnv({ seed: 9, now: "2026-08-02T09:00:00Z", tickSeconds: 1 });

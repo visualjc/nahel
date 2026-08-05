@@ -88,11 +88,15 @@ function makeEvent(
   };
 }
 
-/** One roadmap-node act, carrying the record payload mutate() journals. */
+/**
+ * One roadmap-node act, carrying the record payload mutate() journals. `body` is
+ * the node's INTENT — `--intent` writes prose, never a frontmatter field — so an
+ * intent-only edit is a case only this knob can build.
+ */
 function nodeEvent(
   ts: string,
   actor: Actor,
-  options: EventOptions & { node?: string } = {},
+  options: EventOptions & { node?: string; body?: string } = {},
 ): JournalEvent {
   return makeEvent(
     ts,
@@ -109,17 +113,17 @@ function nodeEvent(
         updated: ts,
         ...options.fields,
       },
-      body: "intent\n",
+      body: options.body ?? "intent\n",
     },
     options,
   );
 }
 
-/** One map act — the wayfinder chart attached to the node. */
+/** One map act — the wayfinder chart attached to the node; `body` is its notes. */
 function mapEvent(
   ts: string,
   actor: Actor,
-  options: EventOptions & { map?: string } = {},
+  options: EventOptions & { map?: string; body?: string } = {},
 ): JournalEvent {
   return makeEvent(
     ts,
@@ -137,7 +141,7 @@ function mapEvent(
         updated: ts,
         ...options.fields,
       },
-      body: "notes\n",
+      body: options.body ?? "notes\n",
     },
     options,
   );
@@ -534,6 +538,7 @@ describe("planSince — what the window reports (DD5's debrief)", () => {
       { field: "out_of_scope", added: ["PM-tool adapters"], removed: [] },
     ]);
     expect(window.map!.fields).toEqual([]);
+    expect(window.map!.body).toBe(false);
   });
 
   test("a map destination rewritten in the window is a field change", () => {
@@ -565,6 +570,7 @@ describe("planSince — what the window reports (DD5's debrief)", () => {
       { field: "prd", from: undefined, to: "docs/prds/planning-partner.md" },
     ]);
     expect(window.node!.lists).toEqual([]);
+    expect(window.node!.body).toBe(false);
     expect(window.map).toBeUndefined();
   });
 
@@ -574,6 +580,7 @@ describe("planSince — what the window reports (DD5's debrief)", () => {
     const window = since([before, after]);
     expect(window.node!.events.map((event) => event.id)).toEqual([after.id]);
     expect(window.node!.fields).toEqual([]);
+    expect(window.node!.body).toBe(false);
     expect(window.empty).toBe(false);
   });
 
@@ -589,6 +596,64 @@ describe("planSince — what the window reports (DD5's debrief)", () => {
       { field: "fog", added: ["how it degrades bare-bash"], removed: [] },
     ]);
     expect(window.map!.fields.map((change) => change.field)).toEqual(["destination", "node"]);
+    // Its notes are new for the same reason every field above is.
+    expect(window.map!.body).toBe(true);
+  });
+
+  test("a record charted with no prose at all changed no prose", () => {
+    const seedAct = nodeEvent("2026-08-01T09:00:00Z", HUMAN);
+    const created = mapEvent("2026-08-02T09:00:00Z", AGENT, {
+      type: CORE_EVENT_TYPES.mapCreated,
+      body: "",
+    });
+    const window = since([seedAct, created]);
+    expect(window.map!.created).toBe(true);
+    expect(window.map!.body).toBe(false);
+  });
+
+  test("a node whose INTENT alone was re-worded is a change the window reports", () => {
+    // The gap this pins: `--intent` writes the record's BODY and moves no
+    // frontmatter field, so a window that diffed frontmatter alone would call
+    // real shaping work (D2: at roadmap altitude the node mutations ARE the
+    // record) nothing at all.
+    const before = nodeEvent("2026-08-01T09:00:00Z", HUMAN);
+    const after = nodeEvent("2026-08-02T09:00:00Z", AGENT, {
+      body: "Take a payment without a queue, and charge for it.\n",
+    });
+    const window = since([before, after]);
+    expect(window.node!.body).toBe(true);
+    // THAT it changed, never WHAT it says: the prose is a paragraph, and the
+    // debrief's job is to send the reader to it, not to reprint it.
+    expect(JSON.stringify(window.node)).not.toContain("charge for it");
+    expect(window.node!.fields).toEqual([]);
+    expect(window.node!.lists).toEqual([]);
+    expect(window.empty).toBe(false);
+  });
+
+  test("an intent restated word for word is no change at all", () => {
+    const before = nodeEvent("2026-08-01T09:00:00Z", HUMAN);
+    const after = nodeEvent("2026-08-02T09:00:00Z", AGENT, { body: "intent\n" });
+    expect(since([before, after]).node!.body).toBe(false);
+  });
+
+  test("prose re-worded and put back inside one window is net nothing", () => {
+    // The lists' rule, applied to the prose: a window reports its NET effect,
+    // not the keystrokes that reached it.
+    const before = nodeEvent("2026-08-01T09:00:00Z", HUMAN);
+    const edited = nodeEvent("2026-08-02T09:00:00Z", AGENT, { body: "a sharper intent\n" });
+    const reverted = nodeEvent("2026-08-02T10:00:00Z", AGENT, { body: "intent\n" });
+    const window = since([before, edited, reverted]);
+    expect(window.node!.body).toBe(false);
+    expect(window.node!.events.map((event) => event.id)).toEqual([edited.id, reverted.id]);
+  });
+
+  test("a map's NOTES are prose too, and change the same way", () => {
+    const before = mapEvent("2026-08-01T09:00:00Z", HUMAN);
+    const after = mapEvent("2026-08-02T09:00:00Z", AGENT, { body: "notes, rewritten\n" });
+    const window = since([before, after]);
+    expect(window.map!.body).toBe(true);
+    expect(window.map!.fields).toEqual([]);
+    expect(window.map!.lists).toEqual([]);
   });
 
   test("research notes are reported with the ticket they name, in total order", () => {

@@ -466,11 +466,18 @@ describe("the bare form (F1)", () => {
 
     const out = await plan(fixture.root);
 
+    // Products list in the id order readRoadmapNodes returns; the HINT names
+    // the alphabetically first one, which is stable against id churn.
+    const listed = [
+      { id: fixture.product, line: `  paperbird  product  horizon=now  id=${fixture.product}` },
+      { id: second, line: `  stonebird  product  horizon=later  id=${second}` },
+    ]
+      .sort((a, b) => (a.id < b.id ? -1 : 1))
+      .map((entry) => entry.line);
     expect(out).toBe(
       [
         "products (2):",
-        `  paperbird  product  horizon=now  id=${fixture.product}`,
-        `  stonebird  product  horizon=later  id=${second}`,
+        ...listed,
         "",
         "pick the one you are planning, or name a new one.",
         "",

@@ -1,0 +1,2 @@
+{"id":"x455dn5c","ts":"2026-08-05T00:42:21Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"6dw2kyjg","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T00:42:21Z","updated":"2026-08-05T00:42:21Z"},"body":"Which of the three postures ship in v1?\n"}}
+{"id":"jr52aa87","ts":"2026-08-05T00:42:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

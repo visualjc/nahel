@@ -1,0 +1,19 @@
+---
+id: ccv60z5j
+name: decision-5gwg4xrg
+created: 2026-08-05T00:43:20Z
+tags:
+  - decision
+  - grilling
+sources:
+  - 0rsb8yd6
+---
+One research ticket type, two-lens posture: outside-in (agent web tools — competitors, prior art, user demand, examples) and inside-out (our codebase and store). The workflow instructs coverage of both lenses when the question spans them, each lens journaled as separate notes, resolution citing both; question wording drives the weighting, not a hard-coded taxonomy.
+
+Decided by resolving grilling ticket 5gwg4xrg, charting: Wayfinder-style planning works at three altitudes with granularity to match: (1) roadmap shaping — 5k ft, create/edit/move roadmap nodes like a mind map without going deep; (2) ideation — 10k ft, 'wouldn't it be cool if' PO/CEO-level brainstorm of new features; (3) feature definition — PRD-level, how a feature works and its sub-features. Each altitude gets the partner posture: grills the human for decisions only they can make, runs research/prototype tickets AFK and returns with findings, makes delegated judgment calls, and hands off to build the moment the human says 'enough to start' — no full de-fogging required.
+
+Question:
+How does research handle both product research (web: competitors, demand, examples) and code research (our implementation)?
+
+Rationale:
+The human's example: 'go research hi-lo counting' should return both product feature requirements from the wild AND how our code counts today, side by side in the decision's provenance. Separate research-product/research-code ticket types were rejected: a schema migration plus a classification burden on every charting session, when the LLM reads the question fine — the leverage-the-agentic-LLM principle. Altitude naturally weights the lenses (ideation/roadmap lean outside-in; PRD needs both). A question feeding two different decisions is cut into two tickets — a charting judgment, not a schema one.

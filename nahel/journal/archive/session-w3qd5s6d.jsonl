@@ -1,0 +1,2 @@
+{"id":"eqkqy333","ts":"2026-08-05T00:43:36Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"summary":"charted planning-partner (map gp4sycwm): live HITL grill with visualjc — 8 grilling tickets cut and resolved with the human's rulings in-session, 5 fog lines, 3 out-of-scope lines; two later-horizon nodes filed from the grill (plan-launcher 8qtfdcxz, recommendation-engine t96cbcnh)"}}
+{"id":"acqk5rqy","ts":"2026-08-05T00:43:36Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

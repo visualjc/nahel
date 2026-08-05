@@ -1,0 +1,2 @@
+{"id":"bf03szfk","ts":"2026-08-05T00:42:21Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"4pvfrdzy","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T00:42:21Z","updated":"2026-08-05T00:42:21Z"},"body":"Which judgment calls may the partner make alone, and where is the line?\n"}}
+{"id":"0yrzf3ar","ts":"2026-08-05T00:42:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

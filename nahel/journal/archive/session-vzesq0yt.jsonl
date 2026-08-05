@@ -1,0 +1,2 @@
+{"id":"g1rweh8t","ts":"2026-08-05T00:42:21Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"x5d2tmn0","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T00:42:21Z","updated":"2026-08-05T00:42:21Z"},"body":"When do research/prototype tickets run autonomously — mid-session, between sessions, or both?\n"}}
+{"id":"1nbn608w","ts":"2026-08-05T00:42:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

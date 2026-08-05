@@ -1,0 +1,2 @@
+{"id":"2bjd3g7x","ts":"2026-08-05T05:15:44Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"99aqt3f7","payload":{"target":"item","record":{"id":"99aqt3f7","name":"planning-partner-epic","type":"feature","status":"in-review","lane":"full","depends_on":[],"external_refs":[],"prd":"docs/prds/planning-partner.md","created":"2026-08-05T04:05:23Z","updated":"2026-08-05T05:15:44Z"},"body":""}}
+{"id":"y1kjt3x9","ts":"2026-08-05T05:15:44Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

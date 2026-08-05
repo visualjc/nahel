@@ -1,0 +1,2 @@
+{"id":"1vfpx93e","ts":"2026-08-05T00:42:21Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"6efeqsmd","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T00:42:21Z","updated":"2026-08-05T00:42:21Z"},"body":"What happens at 'enough to start', and how does a PRD get written while sub-features are still foggy?\n"}}
+{"id":"setv208k","ts":"2026-08-05T00:42:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

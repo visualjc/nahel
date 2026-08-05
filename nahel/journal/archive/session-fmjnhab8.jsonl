@@ -1,0 +1,2 @@
+{"id":"zrn0y2aa","ts":"2026-08-05T00:42:20Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"cphjdnrp","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T00:42:20Z","updated":"2026-08-05T00:42:20Z"},"body":"What does a planning session produce at each altitude — does ticket ceremony scale with granularity?\n"}}
+{"id":"dc66a39x","ts":"2026-08-05T00:42:20Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

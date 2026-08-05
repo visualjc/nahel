@@ -1,0 +1,2 @@
+{"id":"zx8csqxs","ts":"2026-08-05T04:04:45Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"yy2tzkjm","payload":{"target":"item","record":{"id":"yy2tzkjm","name":"planning-partner","type":"plan","status":"done","lane":"direct","depends_on":[],"external_refs":[],"prd":"docs/prds/planning-partner.md","created":"2026-08-05T00:59:37Z","updated":"2026-08-05T04:04:45Z"},"body":""}}
+{"id":"qw2xsg84","ts":"2026-08-05T04:04:45Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

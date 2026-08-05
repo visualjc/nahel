@@ -1,0 +1,2 @@
+{"id":"ca3tv0er","ts":"2026-08-05T04:05:34Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"ssrsgm8p","payload":{"target":"item","record":{"id":"ssrsgm8p","name":"plan-frontier-lane","type":"feature","status":"backlog","lane":"direct","parent":"99aqt3f7","depends_on":["ffydsnnd"],"external_refs":[],"created":"2026-08-05T04:05:34Z","updated":"2026-08-05T04:05:34Z"},"body":""}}
+{"id":"559h7b02","ts":"2026-08-05T04:05:34Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

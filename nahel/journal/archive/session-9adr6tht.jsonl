@@ -1,0 +1,2 @@
+{"id":"43t8m000","ts":"2026-08-05T01:08:05Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"5rb9n6ep","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T01:08:05Z","updated":"2026-08-05T01:08:05Z"},"body":"What is the schema and enforcement shape of the human-only ticket flag — including who may clear it?\n"}}
+{"id":"5xn75dxf","ts":"2026-08-05T01:08:05Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

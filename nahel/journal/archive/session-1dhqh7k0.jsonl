@@ -1,0 +1,2 @@
+{"id":"aw4d1drc","ts":"2026-08-05T01:08:05Z","seq":0,"type":"roadmap.ticket-created","actor":{"kind":"agent","id":"claude-code"},"payload":{"target":"ticket","record":{"id":"xnmj8j9j","map":"gp4sycwm","type":"grilling","state":"open","blockers":[],"created":"2026-08-05T01:08:05Z","updated":"2026-08-05T01:08:05Z"},"body":"What is the degradation posture for mid-session research on harnesses without subagent spawning?\n"}}
+{"id":"xjage5ch","ts":"2026-08-05T01:08:05Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -146,6 +146,50 @@ describe("nahel skills restore", () => {
     expect(sha).toMatch(SHA);
   });
 
+  test("lock + restore against a CATALOG-layout fixture repo places both nested skills", async () => {
+    // End to end over the shape the vendored upstream really uses: the two
+    // pinned skills live under two different category directories, and the
+    // committed manifest names only their bare names.
+    const repo = await tempDir("nahel-catalogrepo-");
+    git(repo, "init", "-q");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test User");
+    git(repo, "config", "commit.gpgsign", "false");
+    for (const [category, name] of [
+      ["productivity", "grilling"],
+      ["engineering", "domain-modeling"],
+      ["engineering", "wayfinder"],
+    ] as const) {
+      await mkdir(join(repo, "skills", category, name), { recursive: true });
+      await writeFile(join(repo, "skills", category, name, "SKILL.md"), `# ${name}\n`);
+    }
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "catalog");
+
+    const root = await makeTarget();
+    await writeFile(
+      join(root, "skills.yaml"),
+      `skills:\n  - repo: ${repo}\n    ref: HEAD\n    use: [grilling, domain-modeling]\n`,
+    );
+    expect((await runSkills(root, ["lock"])).code).toBe(0);
+
+    const result = await runSkills(root, ["restore"]);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("grilling, domain-modeling");
+    for (const name of ["grilling", "domain-modeling"]) {
+      expect(await readFile(join(claudeSkillsDir(storeLayout(root)), name, "SKILL.md"), "utf8")).toBe(
+        `# ${name}\n`,
+      );
+    }
+    // Only the USED skills are placed — the unlisted category sibling is not.
+    expect(
+      await readFile(join(claudeSkillsDir(storeLayout(root)), "wayfinder", "SKILL.md"), "utf8").catch(
+        () => null,
+      ),
+    ).toBeNull();
+  });
+
   test("a fresh clone restores the EXACT locked commit even after the branch advances", async () => {
     const { repo, sha } = await makeSkillsRepo(["tdd"]);
     const source = await makeTarget();
@@ -377,6 +421,43 @@ describe("nahel skills — CLI detection and execution agree on the directory", 
       );
     } finally {
       process.chdir(originalCwd);
+      process.env.PATH = originalPath;
+    }
+  });
+});
+
+describe("nahel skills restore — no external CLI delegation (ADR-0009 amendment)", () => {
+  test("a `skills` binary on PATH is NOT delegated to — restore always clones the locked SHA", async () => {
+    // The upstream CLI cannot express "this exact commit" (its `<source>@…`
+    // suffix selects a SKILL NAME, not a ref), so delegating to it would place
+    // whatever the default branch points at today while skills.lock claims a
+    // pinned SHA. Determinism wins: one restore path, the clone.
+    const { repo } = await makeSkillsRepo(["tdd"]);
+    const root = await makeTarget();
+    await writeFile(
+      join(root, "skills.yaml"),
+      `skills:\n  - repo: ${repo}\n    ref: HEAD\n    use: [tdd]\n`,
+    );
+    expect((await runSkills(root, ["lock"])).code).toBe(0);
+
+    // A real, working `skills` executable, first on PATH, that records any call.
+    const binDir = await tempDir("nahel-skills-bin-");
+    const record = join(binDir, "called.txt");
+    await writeFile(join(binDir, "skills"), `#!/bin/sh\npwd > ${JSON.stringify(record)}\n`, "utf8");
+    await chmod(join(binDir, "skills"), 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+    try {
+      const result = await runSkills(root, ["restore"]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      // It was never invoked, and the clone did the work.
+      expect(await readFile(record, "utf8").catch(() => null)).toBeNull();
+      expect(result.stdout).not.toContain("via skills CLI");
+      expect(await readFile(join(claudeSkillsDir(storeLayout(root)), "tdd", "SKILL.md"), "utf8")).toBe(
+        "# tdd\n",
+      );
+    } finally {
       process.env.PATH = originalPath;
     }
   });

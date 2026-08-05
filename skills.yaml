@@ -1,0 +1,14 @@
+# Pinned external skills (PRD F7, ADR-0009). `nahel skills lock` resolves each
+# ref to an exact commit in skills.lock; `nahel skills restore` places them at
+# that commit under .claude/skills/ (symlinks into the gitignored clone cache,
+# so the placed tree is ENVIRONMENT, reproduced from the lock — never committed).
+#
+# mattpocock/skills is canonical for `grilling` and `domain-modeling`: we vendor
+# them rather than fork them (planning-partner D6). Deliberately NOT vendored:
+# wayfinder, grill-with-docs, research, prototype. Both live one category level
+# down — skills/productivity/grilling, skills/engineering/domain-modeling — which
+# the locator searches.
+skills:
+  - repo: mattpocock/skills
+    ref: main
+    use: [grilling, domain-modeling]

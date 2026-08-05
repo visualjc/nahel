@@ -16,9 +16,7 @@ import {
   repoToUrl,
   resolveRef,
   restoreViaClone,
-  restoreViaSkillsCli,
   skillsCacheDir,
-  skillsCliPath,
   SkillsError,
 } from "../../src/store/skills";
 import { makeTempDir } from "./helpers";
@@ -27,8 +25,9 @@ import { makeTempDir } from "./helpers";
  * Skill fetch/placement (PRD F7, ADR-0009). Git-touching functions run against
  * REAL local git repos in temp dirs — no mocks, no network (file paths, not
  * remotes), mirroring baseline.test.ts. `repoToUrl` is pure and tested without
- * any I/O. The `skills` CLI delegation is exercised with a fake `skills`
- * executable placed on PATH so both branches are proven.
+ * any I/O. Clone-and-symlink is the ONE placement path (ADR-0009 amendment):
+ * there is no CLI delegation left to exercise, and a fake `skills` executable
+ * on PATH must not change what a restore produces (tests/commands).
  */
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -472,83 +471,6 @@ describe("restoreViaClone (clone at pinned SHA + symlink)", () => {
     const layout = await initTargetRepo();
     await restoreViaClone(layout, { repo, ref: "main", sha, skills: ["tdd"] });
     expect(await readFile(join(claudeSkillsDir(layout), "tdd", "SKILL.md"), "utf8")).toBe("# v1\n");
-  });
-});
-
-describe("skills CLI delegation", () => {
-  /** Put a fake `skills` executable on PATH; returns a restore function. */
-  async function withFakeSkills(script: string): Promise<() => void> {
-    const bin = await tempDir("nahel-fakebin-");
-    await writeFile(join(bin, "skills"), script);
-    await chmod(join(bin, "skills"), 0o755);
-    const original = process.env["PATH"];
-    process.env["PATH"] = `${bin}:${original ?? ""}`;
-    return () => {
-      process.env["PATH"] = original;
-    };
-  }
-
-  test("skillsCliPath is null when no skills binary is on PATH", async () => {
-    // The test environment has no `skills` CLI installed.
-    expect(await skillsCliPath(await initTargetRepo())).toBeNull();
-  });
-
-  test("skillsCliPath returns the ABSOLUTE path of a skills binary on PATH", async () => {
-    const restore = await withFakeSkills("#!/bin/sh\nexit 0\n");
-    try {
-      const found = await skillsCliPath(await initTargetRepo());
-      expect(found).not.toBeNull();
-      expect(isAbsolute(found!)).toBe(true);
-      expect(found!.endsWith("/skills")).toBe(true);
-    } finally {
-      restore();
-    }
-  });
-
-  test("restoreViaSkillsCli invokes `skills add <url>@<sha> <names…>` in the store root and returns the names", async () => {
-    const argsDir = await tempDir("nahel-args-");
-    const argsFile = join(argsDir, "argv");
-    const cwdFile = join(argsDir, "cwd");
-    const restore = await withFakeSkills(
-      `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\npwd > "${cwdFile}"\nexit 0\n`,
-    );
-    try {
-      const layout = await initTargetRepo();
-      const entry = {
-        repo: "PromptDrivenDev/skills",
-        ref: "main",
-        sha: "b".repeat(40),
-        skills: ["tdd", "grilling"],
-      };
-      const placed = await restoreViaSkillsCli(layout, entry, (await skillsCliPath(layout))!);
-      // The delegated CLI places relative to its own cwd: it must be the root.
-      expect((await readFile(cwdFile, "utf8")).trim()).toBe(await realpath(layout.root));
-      expect(placed).toEqual(["tdd", "grilling"]);
-      const argv = (await readFile(argsFile, "utf8")).split("\n").filter((l) => l !== "");
-      expect(argv).toEqual([
-        "add",
-        "https://github.com/PromptDrivenDev/skills.git@" + "b".repeat(40),
-        "tdd",
-        "grilling",
-      ]);
-    } finally {
-      restore();
-    }
-  });
-
-  test("restoreViaSkillsCli surfaces a non-zero CLI exit as SkillsError", async () => {
-    const restore = await withFakeSkills("#!/bin/sh\necho boom 1>&2\nexit 3\n");
-    try {
-      const layout = await initTargetRepo();
-      const attempt = restoreViaSkillsCli(
-        layout,
-        { repo: "a/b", ref: "main", sha: "c".repeat(40), skills: ["tdd"] },
-        (await skillsCliPath(layout))!,
-      );
-      await expect(attempt).rejects.toBeInstanceOf(SkillsError);
-    } finally {
-      restore();
-    }
   });
 });
 

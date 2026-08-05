@@ -1,25 +1,32 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdir, rm, stat, symlink } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { lstat, mkdir, readdir, rm, stat, symlink } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { SkillsLockEntry } from "../schema/records";
 import { gitSpawnEnv, isOutputCapExceeded, MAX_OUTPUT_BYTES, outputCapDetail } from "./exec";
 import type { StoreLayout } from "./layout";
 
 /**
- * Skill fetch/placement (PRD F7, ADR-0009). Spawning `git` (and the external
- * `skills` CLI) is store-layer I/O — the same privilege baseline.ts uses for
- * git, and for the same reason it lives here: the command stays pure over the
- * data these functions return. `resolveRef` and the clone touch the network by
+ * Skill fetch/placement (PRD F7, ADR-0009 as amended 2026-08-05). Spawning
+ * `git` is store-layer I/O — the same privilege baseline.ts uses for git, and
+ * for the same reason it lives here: the command stays pure over the data
+ * these functions return. `resolveRef` and the clone touch the network by
  * nature (git talks to a remote); that is acceptable for environment setup,
  * exactly like doctor's healthcheck — but the parsing/normalization helpers
- * (`repoToUrl`) and all of validate's drift logic are deterministic and
- * network-free.
+ * (`repoToUrl`, `selectRef`, `locateSkill`) and all of validate's drift logic
+ * are deterministic and network-free.
+ *
+ * Clone-and-symlink is the ONE placement path. Delegation to the external
+ * `skills` CLI was dropped in the ADR-0009 amendment: that CLI has no way to
+ * express "this exact commit" (its `<source>@…` suffix selects a skill NAME,
+ * not a ref), so it would place today's default-branch tip while skills.lock
+ * claims a pinned SHA — and which tool happened to be installed would decide
+ * what a restore produced.
  */
 
 const execFileAsync = promisify(execFile);
 
-/** A git or skills-CLI invocation failed, or a repo spec was unusable. */
+/** A git invocation failed, or a repo spec was unusable. */
 export class SkillsError extends Error {}
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -118,14 +125,41 @@ export async function resolveRef(
   if (SHA_PATTERN.test(ref)) return ref;
   const url = repoToUrl(repo);
   const output = await runGit(layout.root, ["ls-remote", url, ref], maxOutputBytes);
-  const line = output.split("\n").find((entry) => entry.trim() !== "");
-  const sha = line?.split("\t")[0]?.trim();
-  if (sha === undefined || !SHA_PATTERN.test(sha)) {
+  return selectRef(output, repo, ref);
+}
+
+/**
+ * Pick the row `git ls-remote <url> <ref>` MEANT, out of everything it matched.
+ *
+ * The pattern matches the TAIL of a ref name, so `main` also matches
+ * `refs/heads/changeset-release/main` — and that row sorts FIRST, so taking
+ * the first line silently pins a commit off the wrong branch. (The upstream
+ * this feature vendors, mattpocock/skills, really carries that branch.) So:
+ * prefer an EXACT ref name in git's own documented disambiguation order
+ * (gitrevisions: the literal name, then `refs/`, `refs/tags/`, `refs/heads/`),
+ * fall through to a lone match, and REFUSE when several rows tail-match with
+ * no exact name among them — never guess which branch the manifest meant.
+ */
+function selectRef(output: string, repo: string, ref: string): string {
+  const rows = output
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .map(([sha, name]) => ({ sha: (sha ?? "").trim(), name: (name ?? "").trim() }))
+    .filter((row) => SHA_PATTERN.test(row.sha) && row.name !== "");
+  for (const exact of [ref, `refs/${ref}`, `refs/tags/${ref}`, `refs/heads/${ref}`]) {
+    const hit = rows.find((row) => row.name === exact);
+    if (hit !== undefined) return hit.sha;
+  }
+  if (rows.length === 1) return rows[0]!.sha;
+  if (rows.length > 1) {
     throw new SkillsError(
-      `could not resolve ref ${JSON.stringify(ref)} in ${repo} — no matching branch or tag`,
+      `ref ${JSON.stringify(ref)} is ambiguous in ${repo} — it matches ` +
+        `${rows.map((row) => row.name).join(", ")}; pin the full ref name or a commit SHA`,
     );
   }
-  return sha;
+  throw new SkillsError(
+    `could not resolve ref ${JSON.stringify(ref)} in ${repo} — no matching branch or tag`,
+  );
 }
 
 /**
@@ -150,13 +184,44 @@ async function ensureClone(layout: StoreLayout, url: string, sha: string): Promi
 /** Skill directories live at the repo root or under a conventional `skills/`. */
 const SKILL_SUBDIRS = ["", "skills"] as const;
 
-/** Locate a skill's directory within a clone; null when it is not present. */
-async function locateSkill(cloneDir: string, name: string): Promise<string | null> {
+/**
+ * Locate a skill's directory within a clone; null when it is not present.
+ *
+ * Three levels, searched shallowest first: the repo root, `skills/<name>`, and
+ * ONE category level below that — `skills/<category>/<name>`, the catalog
+ * layout the pinned upstream uses (`skills/productivity/grilling`,
+ * `skills/engineering/domain-modeling`). Deeper nesting is deliberately NOT
+ * searched: an unbounded walk turns any same-named directory anywhere in a
+ * third-party repo into a candidate.
+ *
+ * A shallower hit SHADOWS a deeper one — the levels are ordered, so a repo
+ * keeping both a canonical `skills/<name>` and a category copy resolves the
+ * same way every time (and the same way the wider ecosystem's own discovery
+ * resolves it). Ambiguity WITHIN the category level has no such ordering, so
+ * the same name under two categories is REFUSED, naming both paths, rather
+ * than picked by directory order. Categories are read sorted, so both the
+ * refusal and any hit are identical on every filesystem.
+ */
+export async function locateSkill(cloneDir: string, name: string): Promise<string | null> {
   for (const sub of SKILL_SUBDIRS) {
     const candidate = join(cloneDir, sub, name);
     if (await pathExists(candidate)) return candidate;
   }
-  return null;
+  const skillsDir = join(cloneDir, "skills");
+  const categories = await readdir(skillsDir).catch(() => [] as string[]);
+  const matches: string[] = [];
+  for (const category of [...categories].sort()) {
+    const candidate = join(skillsDir, category, name);
+    if (await pathExists(candidate)) matches.push(candidate);
+  }
+  if (matches.length > 1) {
+    throw new SkillsError(
+      `skill ${JSON.stringify(name)} is ambiguous in this repo — it exists under ` +
+        `${matches.join(" and ")}; nahel will not guess which one you meant — pin a repo ` +
+        `that carries the name once, or vendor the copy you want under a distinct name`,
+    );
+  }
+  return matches[0] ?? null;
 }
 
 /**
@@ -186,9 +251,10 @@ async function placeSymlink(layout: StoreLayout, name: string, target: string): 
 }
 
 /**
- * The dumb clone-and-symlink fallback (ADR-0009 v1): clone the pinned commit,
- * then symlink each used skill into .claude/skills/. Returns the names placed.
- * Deterministic over repo state — the same lock entry restores the same tree.
+ * The dumb clone-and-symlink placement (ADR-0009 v1, and since the amendment
+ * the only one): clone the pinned commit, then symlink each used skill into
+ * .claude/skills/. Returns the names placed. Deterministic over repo state —
+ * the same lock entry restores the same tree, on every machine.
  */
 export async function restoreViaClone(
   layout: StoreLayout,
@@ -202,67 +268,11 @@ export async function restoreViaClone(
     if (dir === null) {
       throw new SkillsError(
         `skill ${JSON.stringify(name)} not found in ${entry.repo}@${entry.sha} ` +
-          `(looked in the repo root and skills/)`,
+          `(looked in the repo root, skills/, and skills/<category>/)`,
       );
     }
     await placeSymlink(layout, name, dir);
     placed.push(name);
   }
   return placed;
-}
-
-/**
- * The external `skills` CLI as an ABSOLUTE path, or null when it is not on
- * PATH (then the clone fallback runs). Resolved FROM THE STORE ROOT — the
- * directory the CLI is then run in — and returned as a path rather than a
- * yes/no, because those are two different resolutions otherwise: a relative
- * PATH entry (`./tools/bin`) is resolved by the shell against ITS cwd but by
- * the spawn against the PARENT process's, so a boolean probe and the later
- * execution can disagree in both directions (a detected CLI that then fails
- * to spawn, or a missed one that silently falls back to cloning). Answering
- * once with the resolved path removes the second resolution entirely.
- */
-export async function skillsCliPath(layout: StoreLayout): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync("/bin/sh", ["-c", "command -v skills"], {
-      cwd: layout.root,
-      maxBuffer: MAX_OUTPUT_BYTES,
-    });
-    const found = stdout.trim();
-    if (found === "") return null;
-    return isAbsolute(found) ? found : resolve(layout.root, found);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Delegate placement to the external `skills` CLI (ADR-0009: use the existing
- * ecosystem where possible): `skills add <url>@<sha> <name…>`. Returns the
- * names handed to the CLI. The CLI owns placement into .claude/skills/ —
- * relative to ITS cwd, so it is run in the store root exactly as the clone
- * fallback writes there: which tool is installed must not change where skills
- * land. Takes the layout for that reason, mirroring restoreViaClone, and the
- * `cli` path skillsCliPath already resolved from that same root.
- */
-export async function restoreViaSkillsCli(
-  layout: StoreLayout,
-  entry: SkillsLockEntry,
-  cli: string,
-): Promise<string[]> {
-  const url = repoToUrl(entry.repo);
-  const args = ["add", `${url}@${entry.sha}`, ...entry.skills];
-  try {
-    await execFileAsync(cli, args, { cwd: layout.root, maxBuffer: MAX_OUTPUT_BYTES });
-  } catch (error) {
-    const stderr = (error as { stderr?: unknown }).stderr;
-    const detail =
-      typeof stderr === "string" && stderr.trim() !== ""
-        ? stderr.trim()
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    throw new SkillsError(`skills ${args.join(" ")} failed: ${detail}`);
-  }
-  return [...entry.skills];
 }

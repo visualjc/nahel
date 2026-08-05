@@ -161,14 +161,14 @@ function sinceLines(window: PlanSinceWindow): string[] {
   for (const act of window.resolved) body.push(actLine("resolved", act));
   for (const act of window.closed) body.push(actLine("closed", act));
   for (const act of window.created) body.push(actLine("opened", act));
-  body.push(...changeLines("map", window.map));
-  body.push(...changeLines("node", window.node));
+  body.push(...changeLines("map", window.map, "notes"));
+  body.push(...changeLines("node", window.node, "intent"));
   for (const note of window.notes) {
     body.push(`  ${note.event.ts}  noted  ticket=${note.ticket}  act=${note.event.id}`);
   }
   // `empty` is the window's own verdict; the length check catches the one shape
-  // it cannot see — an act that re-stated a record without changing a field,
-  // which is movement with nothing to report.
+  // it cannot see — an act that re-stated a record without changing a field or a
+  // word of its prose, which is movement with nothing to report.
   return [
     `since your last session (${baselineClause(window)}):`,
     ...(window.empty || body.length === 0 ? ["  nothing new since your last touch"] : body),
@@ -190,8 +190,18 @@ function actLine(verb: string, act: PlanSinceTicketAct): string {
   return `  ${act.event.ts}  ${verb}  ${detail}  act=${act.event.id}`;
 }
 
-/** What the window did to one record — scalars as `from → to`, lists as `+`/`-`. */
-function changeLines(what: string, change: PlanSinceRecordChange | undefined): string[] {
+/**
+ * What the window did to one record — scalars as `from → to`, lists as `+`/`-`,
+ * and the record's prose as the bare fact that it moved, under the name the CLI
+ * writes it by (`--intent` for a node, `--notes` for a map). The prose itself is
+ * never printed: the window does not carry it, and a paragraph inlined here
+ * would drown the list it sits in — `roadmap node show` is where it reads.
+ */
+function changeLines(
+  what: string,
+  change: PlanSinceRecordChange | undefined,
+  prose: string,
+): string[] {
   if (change === undefined) return [];
   const lines: string[] = [];
   // A record CREATED inside the window says so first: every field below it is
@@ -204,6 +214,7 @@ function changeLines(what: string, change: PlanSinceRecordChange | undefined): s
     for (const entry of added) lines.push(`  ${what}  ${field}  + ${entry}`);
     for (const entry of removed) lines.push(`  ${what}  ${field}  - ${entry}`);
   }
+  if (change.body) lines.push(`  ${what}  ${prose}  changed`);
   return lines;
 }
 

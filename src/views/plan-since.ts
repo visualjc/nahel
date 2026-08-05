@@ -45,11 +45,22 @@ import { compareEvents } from "../store/journal";
  *
  * What the window REPORTS is DD5's debrief list and nothing more: tickets
  * resolved and closed with their one-liners, tickets created, the map's
- * changes, the node's field changes, and the linked research notes. A claim or
+ * changes, the node's changes, and the linked research notes. A claim or
  * a release is a subject act — it advances its actor's baseline, because they
  * were HERE then — but it is not reported: the briefing's frontier section
  * already shows every ticket's current claim, and a debrief that repeated it
  * would spend its most-read lines on state the reader is about to see anyway.
+ *
+ * A record's changes include its PROSE — a node's intent, a map's notes, both
+ * of which the CLI writes to the record BODY and to no frontmatter field. At
+ * roadmap altitude the node mutations ARE the record (D2), so a re-worded
+ * intent is shaping work, and a frontmatter-only diff would report the one act
+ * a roadmap-shaping session is most likely to leave behind as nothing at all.
+ * What it reports is THAT the prose moved, never the prose itself: an intent is
+ * a paragraph, the debrief is a list, and the `show` verbs already print it in
+ * full. Like every other change here it is the NET effect across the window —
+ * prose re-worded and restored is nothing to hear about — and it is compared as
+ * written, so a whitespace-only edit counts, exactly as a scalar field would.
  *
  * Nothing here formats: every field is the fact, and the briefing verb decides
  * how it reads.
@@ -126,6 +137,11 @@ export interface PlanSinceRecordChange {
   fields: PlanSinceFieldChange[];
   /** List changes in field-name order. */
   lists: PlanSinceListChange[];
+  /**
+   * True when the record's PROSE reads differently at the window's end — a
+   * node's intent, a map's notes. THAT it moved and never what it now says.
+   */
+  body: boolean;
   /** The acts themselves, in the store's total order. */
   events: JournalEvent[];
 }
@@ -189,6 +205,13 @@ const NOTE_TICKET_PAYLOAD_KEY = "ticket";
  */
 const UNREPORTED_RECORD_FIELDS: ReadonlySet<string> = new Set(["id", "created", "updated"]);
 
+/** One record an act wrote, as the payload carries it: its fields and its prose. */
+interface RecordedState {
+  record: Record<string, unknown>;
+  /** The markdown the act wrote; "" for a payload carrying none, as a run's does. */
+  body: string;
+}
+
 /**
  * The records of one kind a mutation event carries, read defensively — events
  * are data, the rule every journal reader in the codebase follows.
@@ -200,8 +223,8 @@ const UNREPORTED_RECORD_FIELDS: ReadonlySet<string> = new Set(["id", "created", 
  * that only looked at `payload.record` would miss every decision the window
  * exists to report.
  */
-function recordedRecords(event: JournalEvent, target: string): Record<string, unknown>[] {
-  const found: Record<string, unknown>[] = [];
+function recordedStates(event: JournalEvent, target: string): RecordedState[] {
+  const found: RecordedState[] = [];
   const consider = (step: unknown): void => {
     if (typeof step !== "object" || step === null) return;
     const fields = step as Record<string, unknown>;
@@ -209,7 +232,11 @@ function recordedRecords(event: JournalEvent, target: string): Record<string, un
     const record = fields["record"];
     if (typeof record !== "object" || record === null) return;
     if (typeof (record as Record<string, unknown>)["id"] !== "string") return;
-    found.push(record as Record<string, unknown>);
+    const body = fields["body"];
+    found.push({
+      record: record as Record<string, unknown>,
+      body: typeof body === "string" ? body : "",
+    });
   };
   consider(event.payload);
   const records = event.payload["records"];
@@ -218,11 +245,8 @@ function recordedRecords(event: JournalEvent, target: string): Record<string, un
 }
 
 /** The one record of `target` an act carries, or undefined when it carries none. */
-function recordedRecord(
-  event: JournalEvent,
-  target: string,
-): Record<string, unknown> | undefined {
-  return recordedRecords(event, target)[0];
+function recordedState(event: JournalEvent, target: string): RecordedState | undefined {
+  return recordedStates(event, target)[0];
 }
 
 /** A record field as a change list reports it: a string, or absent. */
@@ -255,13 +279,19 @@ function recordChange(
   acts: readonly JournalEvent[],
 ): PlanSinceRecordChange | undefined {
   if (acts.length === 0) return undefined;
-  const priorState = before === undefined ? {} : (recordedRecord(before, target) ?? {});
+  const prior = before === undefined ? undefined : recordedState(before, target);
+  const priorState = prior?.record ?? {};
+  const priorBody = prior?.body ?? "";
   // The LAST act that carries a readable record decides the end state; an act
   // whose payload cannot be read moves nothing and is left to the acts list.
   let endState: Record<string, unknown> = priorState;
+  let endBody = priorBody;
   for (const act of acts) {
-    const record = recordedRecord(act, target);
-    if (record !== undefined) endState = record;
+    const state = recordedState(act, target);
+    if (state !== undefined) {
+      endState = state.record;
+      endBody = state.body;
+    }
   }
 
   const fields: PlanSinceFieldChange[] = [];
@@ -288,6 +318,7 @@ function recordChange(
     created: acts.some((act) => act.type === createdType),
     fields,
     lists,
+    body: endBody !== priorBody,
     events: [...acts],
   };
 }
@@ -312,13 +343,13 @@ export function planSince(input: PlanSinceInput): PlanSinceWindow {
 
   for (const event of input.events) {
     if (NODE_EVENT_TYPES.has(event.type)) {
-      if (recordedRecord(event, "roadmap-node")?.["id"] !== input.node) continue;
+      if (recordedState(event, "roadmap-node")?.record["id"] !== input.node) continue;
       nodeActs.push(event);
     } else if (input.map !== undefined && MAP_EVENT_TYPES.has(event.type)) {
-      if (recordedRecord(event, "map")?.["id"] !== input.map) continue;
+      if (recordedState(event, "map")?.record["id"] !== input.map) continue;
       mapActs.push(event);
     } else if (TICKET_EVENT_TYPES.has(event.type)) {
-      const id = recordedRecord(event, "ticket")?.["id"];
+      const id = recordedState(event, "ticket")?.record["id"];
       if (typeof id !== "string" || !ticketIds.has(id)) continue;
       ticketActs.push({ ticket: id, event });
     } else if (!SELF_RECORDED_EVENT_TYPES.has(event.type)) {
@@ -344,7 +375,7 @@ export function planSince(input: PlanSinceInput): PlanSinceWindow {
   const created: PlanSinceTicketAct[] = [];
   for (const { ticket, event } of [...ticketActs].sort((a, b) => compareEvents(a.event, b.event))) {
     if (!after(event)) continue;
-    const record = recordedRecord(event, "ticket") ?? {};
+    const record = recordedState(event, "ticket")?.record ?? {};
     if (event.type === CORE_EVENT_TYPES.ticketResolved) {
       resolved.push({ id: ticket, line: scalar(record["decision"]), event });
     } else if (event.type === CORE_EVENT_TYPES.ticketClosed) {

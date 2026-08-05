@@ -768,6 +768,18 @@ describe("Scenario 2 — altitude coverage (the PRD's second exit scenario)", ()
       `since your last session (after your last act here, ${created[0]!.ts}):`,
       "  node  horizon  next → now",
     ]);
+    // And the re-worded INTENT is read back the same way, though it moved no
+    // frontmatter field at all: `--intent` writes the record's body, and at this
+    // altitude the prose IS the record (D2), so the product's own briefing
+    // reports it as movement rather than as an untouched node.
+    const charted = (await journal(layout)).filter(
+      (event) => event.type === CORE_EVENT_TYPES.mapCreated,
+    );
+    expect(charted.length).toBe(1);
+    expect(sinceBlock(await plan(root, ["paperbird"]))).toEqual([
+      `since your last session (after your last act here, ${charted[0]!.ts}):`,
+      "  node  intent  changed",
+    ]);
     await validatesClean(root, "after roadmap shaping");
   });
 

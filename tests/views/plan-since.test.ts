@@ -621,12 +621,13 @@ describe("planSince — what the window reports (DD5's debrief)", () => {
       body: "Take a payment without a queue, and charge for it.\n",
     });
     const window = since([before, after]);
-    expect(window.node!.body).toBe(true);
     // THAT it changed, never WHAT it says: the prose is a paragraph, and the
-    // debrief's job is to send the reader to it, not to reprint it.
-    expect(JSON.stringify(window.node)).not.toContain("charge for it");
-    expect(window.node!.fields).toEqual([]);
-    expect(window.node!.lists).toEqual([]);
+    // debrief's job is to send the reader to it, not to reprint it. So the
+    // whole reported change is one flag — the acts alongside it are the same
+    // citations every other record change carries.
+    const { events, ...reported } = window.node!;
+    expect(reported).toEqual({ created: false, fields: [], lists: [], body: true });
+    expect(events.map((event) => event.id)).toEqual([after.id]);
     expect(window.empty).toBe(false);
   });
 

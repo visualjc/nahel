@@ -26,9 +26,11 @@ Before any `nahel` command: if you are an agent, set
 
 2. Pick the path. Check whether the feature's roadmap node has a charted
    map (`nahel roadmap map show <node-slug>`). A charted map means the
-   interview already happened, ticket by ticket — so the PRD STARTS from
-   the map (step 2a). No map, or a map with no resolved tickets, means the
-   from-scratch interview (step 2b).
+   map GOVERNS — the PRD starts from it (step 2a), even when nothing is
+   resolved yet: zero resolved tickets just means the cut check has more
+   to resolve, and the interviewing happens INSIDE the map, each answer
+   recorded as a ticket resolution rather than as loose prose. Only a
+   node with no map at all takes the from-scratch interview (step 2b).
 
    2a. **Map-fed path.** The map's resolved decisions become the PRD's
    settled sections — each stating the decision and CITING its ticket id,

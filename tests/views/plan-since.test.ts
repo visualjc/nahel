@@ -432,11 +432,17 @@ describe("planSince — who is reading (DD1's reader rule)", () => {
   });
 
   test("a reader matched by id alone would be wrong: kind is part of the identity", () => {
-    const human = ticketEvent("2026-08-01T09:00:00Z", { kind: "human", id: "claude-code" }, TICKET_A);
-    const agentAct = ticketEvent("2026-08-01T10:00:00Z", AGENT, TICKET_B);
-    const window = since([human, agentAct], AGENT);
+    // A human sharing the agent's id acts AFTER it. Matched by id alone the
+    // human's act would open the agent's window and swallow it.
+    const agentAct = ticketEvent("2026-08-01T10:00:00Z", AGENT, TICKET_A);
+    const namesake = ticketEvent(
+      "2026-08-01T11:00:00Z",
+      { kind: "human", id: "claude-code" },
+      TICKET_B,
+    );
+    const window = since([agentAct, namesake], AGENT);
     expect(window.baseline!.event.id).toBe(agentAct.id);
-    expect(window.created).toEqual([]);
+    expect(window.created.map((act) => act.id)).toEqual([TICKET_B]);
   });
 });
 

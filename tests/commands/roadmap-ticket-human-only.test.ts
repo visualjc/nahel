@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { rm } from "node:fs/promises";
+import { relative } from "node:path";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
@@ -331,12 +332,16 @@ describe("validate accepts a store with the field and one without (F4)", () => {
     // Same seeded env and same command sequence, so the two stores differ in
     // exactly one key: the flag. Any finding the field caused would show up as
     // a difference here.
-    expect(await findings(withFlag.layout, withFlag.env)).toEqual(
-      await findings(withoutFlag.layout, withoutFlag.env),
+    expect(await findings(withFlag.layout, withFlag.env, withFlag.root)).toEqual(
+      await findings(withoutFlag.layout, withoutFlag.env, withoutFlag.root),
     );
   });
 });
 
-function findings(layout: StoreLayout, env: Env) {
-  return validateStore(layout, { now: env.now() });
+/** Validate one store, with each finding's path made root-relative so two stores compare. */
+async function findings(layout: StoreLayout, env: Env, root: string) {
+  const found = await validateStore(layout, { now: env.now() });
+  return found.map((finding) =>
+    finding.path === undefined ? finding : { ...finding, path: relative(root, finding.path) },
+  );
 }

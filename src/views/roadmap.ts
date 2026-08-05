@@ -111,10 +111,18 @@ function ticketQuestion(record: TicketRecord): string {
   return record.body.split("\n", 1)[0] ?? "";
 }
 
+/**
+ * The one marker DD2's flag renders as, in all three surfaces that list a
+ * ticket. One spelling everywhere, because an AFK lane skipping these greps for
+ * it — a per-surface wording would be a per-surface skip rule.
+ */
+const HUMAN_ONLY_MARKER = "[human-only]";
+
 /** One ticket as a map's reader sees it: identity, then the question's first line. */
 function ticketLines(record: TicketRecord): string[] {
   const ticket = record.frontmatter;
   const head = [ticket.id, ticket.type, ticket.state];
+  if (ticket.human_only === true) head.push(HUMAN_ONLY_MARKER);
   if (ticket.claimant !== undefined) head.push(`claimed by ${ticket.claimant}`);
   if (ticket.blockers.length > 0) head.push(`blocked by ${ticket.blockers.join(", ")}`);
   const question = ticketQuestion(record);
@@ -244,7 +252,9 @@ export function renderMap(
  */
 export function renderTicket(record: TicketRecord, map: MapRecord | null): string {
   const ticket = record.frontmatter;
-  const lines = [`ticket ${ticket.id}  ${ticket.type}  ${ticket.state}`];
+  const head = [`ticket ${ticket.id}`, ticket.type, ticket.state];
+  if (ticket.human_only === true) head.push(HUMAN_ONLY_MARKER);
+  const lines = [head.join("  ")];
   fieldLine(lines, "map", ticket.map);
   fieldLine(lines, "destination", map?.frontmatter.destination);
   fieldLine(lines, "claimant", ticket.claimant);
@@ -1521,7 +1531,11 @@ export function renderFrontier(facts: FrontierFacts): string {
   }
   for (const record of tickets) {
     const ticket = record.frontmatter;
-    lines.push(`  ${ticket.id}  ${ticket.type}  map=${labels.get(ticket.map) ?? ticket.map}`);
+    const head = [`  ${ticket.id}`, ticket.type, `map=${labels.get(ticket.map) ?? ticket.map}`];
+    // A human-only ticket is still TAKEABLE — the frontier refuses nothing —
+    // so it stays listed, and the marker is how an AFK lane skips it.
+    if (ticket.human_only === true) head.push(HUMAN_ONLY_MARKER);
+    lines.push(head.join("  "));
     const question = ticketQuestion(record);
     if (question !== "") lines.push(`      ${question}`);
   }

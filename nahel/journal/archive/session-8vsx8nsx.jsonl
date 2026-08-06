@@ -1,0 +1,2 @@
+{"id":"em3fjmv4","ts":"2026-08-06T19:04:32Z","seq":0,"type":"note","actor":{"kind":"agent","id":"devin"},"item":"99aqt3f7","payload":{"summary":"Review follow-up: plan.md governance posture rules are not directly CLI-enforced outside human_only ticket flag"}}
+{"id":"namppgwv","ts":"2026-08-06T19:04:32Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"devin"},"payload":{}}

@@ -4,6 +4,16 @@ created: 2026-08-05T00:59:37Z
 updated: 2026-08-05T03:54:33Z
 ---
 
+> **Archived — the delta this PRD stated is closed.**
+>
+> - Release: released 0.4.0 2026-08-06T21:24:57Z
+> - Epic: 99aqt3f7 — roadmap node planning-partner (ntej9rtr)
+> - Journal: archived by event e0qdy9nv
+>
+> The code and tests are the truth now — this PRD is never reopened and
+> never edited. Further work on this feature is a new node with a new PRD,
+> which may name this one as its predecessor.
+
 # PRD: planning-partner
 
 Roadmap node: `planning-partner` (ntej9rtr) · Map: gp4sycwm · Plan item: yy2tzkjm

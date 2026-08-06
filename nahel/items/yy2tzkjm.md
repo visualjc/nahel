@@ -6,7 +6,7 @@ status: done
 lane: direct
 depends_on: []
 external_refs: []
-prd: docs/prds/planning-partner.md
+prd: docs/prds/archived/planning-partner.md
 created: 2026-08-05T00:59:37Z
-updated: 2026-08-05T04:04:45Z
+updated: 2026-08-06T21:25:02Z
 ---

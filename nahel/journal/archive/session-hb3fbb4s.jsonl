@@ -1,0 +1,2 @@
+{"id":"4gx36qqe","ts":"2026-08-06T21:24:56Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"vj6zpc7p","payload":{"target":"item","record":{"id":"vj6zpc7p","name":"skills-vendoring","type":"feature","status":"done","lane":"direct","parent":"99aqt3f7","depends_on":[],"external_refs":[],"created":"2026-08-05T04:05:33Z","updated":"2026-08-06T21:24:56Z"},"body":""}}
+{"id":"fw38hzf4","ts":"2026-08-06T21:24:56Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"1x0ypbb6","ts":"2026-08-06T21:24:56Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"27rydz4s","payload":{"target":"item","record":{"id":"27rydz4s","name":"plan-workflow","type":"feature","status":"done","lane":"direct","parent":"99aqt3f7","depends_on":["ezrmqwj5"],"external_refs":[],"created":"2026-08-05T04:05:34Z","updated":"2026-08-06T21:24:56Z"},"body":""}}
+{"id":"7y55wtev","ts":"2026-08-06T21:24:56Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -158,3 +158,5 @@ The layer *above* plan items: the thing that feeds the PRD→Epic→Issue engine
 - **2026-08-01** — Phases renumbered from 4 onward at Jim's ruling (journal event `wf87dkyx`, plan item `sp2yf32m`): the **roadmap layer becomes Phase 4**; Roles & governance shifts 4→5, Ecosystem breadth 5→6, UI 6→7 (no work had started on any of them). The former "roadmap layer" deferred question is resolved into the new Phase 4.
 
 - **phase-4-roadmap-layer** shipped — its delta is closed and the PRD that stated it is archived at `docs/prds/archived/phase-4-roadmap-layer.md` (archival event 4zx0yf0h).
+
+- **planning-partner** shipped — its delta is closed and the PRD that stated it is archived at `docs/prds/archived/planning-partner.md` (archival event e0qdy9nv).

@@ -59,7 +59,7 @@ human-only refusals in step 2.
    | `research` | work it | work it |
    | `task` | work it | work it |
    | `prototype` | build the variants, park the verdict (step 4) | build the variants, judge per prototype-lane |
-   | `grilling` | **SKIP** — the interview is the human's | work it, with a defend-it-later rationale |
+   | `grilling` | **SKIP** — the interview is the human's | work it THROUGH a cross-agent grill (step 4); solo only as recorded fallback |
    | anything marked `[human-only]` | **NEVER touch** | **NEVER touch** |
 
    A `grilling` ticket under `human` governance is skipped because answering it
@@ -137,11 +137,36 @@ human-only refusals in step 2.
    act is what produces the record. Journal what the doing revealed (it is
    rarely nothing), with the same `ticket=` key, then resolve citing it.
 
-   **`grilling` under `delegated` or `agent`** — you may answer it, and the
-   `--rationale` is where you earn that. Write it to be defended later: the
-   recommendation, the alternatives you rejected and why, and what evidence
-   would change it. A human reading it next week must be able to overturn it on
-   the merits rather than on the fact that an agent wrote it.
+   **`grilling` under `delegated` or `agent`** — the grilling POSTURE survives
+   the missing human: you answer it through a **cross-agent grill**, never as a
+   monologue (ticket jhxg756e — an agent answering its own interview question
+   is the exact smell the HITL rule exists to prevent; removing the human
+   removes the human, not the interview). Run it as the house's capped
+   cross-vendor loop pointed at a decision ticket, second VENDOR preferred
+   (codex ↔ claude, claude ↔ cursor; consult `setup-routing.md` for what this
+   store routes where — a same-vendor second agent is better than none):
+
+   1. Draft your position — decision, rationale, evidence — and journal it as
+      a `ticket=`-keyed note.
+   2. Hand the draft to the other agent with the ticket's question and the
+      map's destination, instructed to PROBE AND REFUTE, not to agree. Journal
+      its counter as its own `ticket=`-keyed note under ITS actor when it runs
+      CLI-side, or quoted in yours when it cannot.
+   3. Revise or defend; stop at convergence or after a small fixed round cap
+      (two or three — a grill that cannot converge is a finding that the
+      question belongs to the human: release the claim and leave it).
+   4. Resolve citing BOTH sides' notes, and write the `--rationale` to be
+      defended later: the recommendation, what the other agent attacked, what
+      survived and why, and what evidence would change it. A human reading it
+      next week must be able to overturn it on the merits rather than on the
+      fact that agents wrote it.
+
+   **Solo is the recorded fallback, not a choice**: only when no second agent
+   is reachable (offline, no routed vendor, spawn refused) may you answer
+   alone — and the resolution must SAY so and why, so a solo answer can never
+   pass as a grilled one. The same applies to a DD6-delegated ticket under
+   `human` governance: the human's delegation hands the question to the PAIR,
+   not to one agent's defaults.
 
 5. Record the decision, citing everything you journaled:
 

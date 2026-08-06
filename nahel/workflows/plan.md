@@ -68,8 +68,12 @@ Before any `nahel` command: if you are an agent, set
 
    - Grilling tickets are HITL under `human` governance: you NEVER answer
      your own interview question — except through a recorded delegation
-     (step 6) or under `delegated`/`agent` governance, where you resolve
-     with rationale written as if defending the call to the human later.
+     (step 6) or under `delegated`/`agent` governance. And even then the
+     answer comes out of a **cross-agent grill**, not a monologue: a second
+     agent (second vendor preferred) probes and refutes your draft before
+     you resolve, per the grilling procedure in `plan-frontier.md` step 4;
+     solo-with-rationale is only the recorded fallback when no second
+     agent is reachable, and the resolution says so.
    - A ticket flagged `[human-only]` is answered by the human under EVERY
      governance mode; the CLI refuses an agent actor regardless.
 
@@ -102,13 +106,18 @@ Before any `nahel` command: if you are an agent, set
 
        nahel log note --data summary="delegation by <human>: tickets <ids> to agent defaults — <their words, near enough>"
 
-   Then resolve each named ticket yourself, your stated default as the
-   decision, your reasoning as the rationale, and the delegation note's
-   event id among the `--source` refs — so the trail reads "delegated
-   here, answered so, because." Per-ticket, per-delegation: it is never a
-   standing mode change, and a `[human-only]` ticket is never delegable —
-   the CLI refuses even if the human waves it through here; that flag is
-   cleared (by them) first or the question waits.
+   The delegation hands each named ticket to the PAIR, not to your
+   defaults alone: run the cross-agent grill from `plan-frontier.md`
+   step 4 — your stated default as the drafted position, a second agent
+   probing it — then resolve with the surviving decision, your reasoning
+   as the rationale, and the delegation note's event id among the
+   `--source` refs beside both sides' notes, so the trail reads
+   "delegated here, grilled so, answered so, because." Solo is the
+   recorded fallback only when no second agent is reachable. Per-ticket,
+   per-delegation: it is never a standing mode change, and a
+   `[human-only]` ticket is never delegable — the CLI refuses even if the
+   human waves it through here; that flag is cleared (by them) first or
+   the question waits.
 
 7. "Enough to start" — the cut check, then the handoff. When the human
    says some form of it, walk every remaining fog line and open ticket on

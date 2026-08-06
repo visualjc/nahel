@@ -1,0 +1,2 @@
+{"id":"7jsfpkja","ts":"2026-08-06T21:16:21Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"summary":"PR #27 review side-findings triaged: store-wide decision ledger blessed to next as decision-digest (kept OUT of PR #27 per closed-delta doctrine); suspected recall multi-word bug diagnosed as quoted-phrase search working as designed — no chore filed"}}
+{"id":"tr0jzxgk","ts":"2026-08-06T21:16:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -242,9 +242,13 @@ describe("plan-frontier.md — the canonical AFK lane doc (F5)", () => {
     const { body } = await shippedWorkflow("plan-frontier.md");
     for (const mode of ["human", "delegated", "agent"]) expect(body).toContain(mode);
     expect(body).toContain("nahel brief");
-    // grilling: skipped under human, self-resolvable with a defensible rationale.
+    // grilling: skipped under human; under delegated/agent the posture survives
+    // as a cross-agent grill, and answering alone is a disclosed fallback, not
+    // a choice (ticket jhxg756e).
     expect(body).toContain("SKIP");
-    expect(body).toContain("defend-it-later");
+    expect(body).toContain("cross-agent grill");
+    expect(body).toContain("recorded fallback");
+    expect(body).toContain("defended later");
     // human-only: never, under any mode — and the refusal is the net, not the rule.
     expect(body).toContain("NEVER touch");
     expect(body).toContain("--clear-human-only");

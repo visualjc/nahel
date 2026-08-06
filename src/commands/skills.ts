@@ -8,27 +8,24 @@ import {
   writeSkillsLock,
   type StoreLayout,
 } from "../store/layout";
-import {
-  resolveRef,
-  restoreViaClone,
-  restoreViaSkillsCli,
-  skillsCliPath,
-} from "../store/skills";
+import { resolveRef, restoreViaClone } from "../store/skills";
 import { UsageError } from "./item";
 
 /**
- * `nahel skills` (PRD F7, ADR-0009): manage pinned skill dependencies.
+ * `nahel skills` (PRD F7, ADR-0009 as amended 2026-08-05): manage pinned skill
+ * dependencies.
  *
  *   nahel skills lock     resolve each skills.yaml source's ref to an exact
  *                         commit SHA (git ls-remote) and write skills.lock.
  *   nahel skills restore  materialize the pinned skills at their locked
- *                         commits — delegating to the external `skills` CLI
- *                         when it is on PATH, else a dumb clone-and-symlink.
+ *                         commits by clone-and-symlink — the ONE placement
+ *                         path, because no external skills CLI can express
+ *                         "this exact commit" (ADR-0009 amendment).
  *
  * Both subcommands touch the network by nature (git talks to a remote); that
  * is acceptable for environment setup, exactly like `nahel doctor`'s
- * healthcheck. This command stays a thin verb: all git/CLI spawning lives in
- * the store (store/skills.ts), all parsing/validation in the schema layer.
+ * healthcheck. This command stays a thin verb: all git spawning lives in the
+ * store (store/skills.ts), all parsing/validation in the schema layer.
  */
 
 const USAGE = "usage: nahel skills <lock|restore>";
@@ -80,18 +77,11 @@ async function restore(layout: StoreLayout, ctx: CommandContext): Promise<number
     ctx.stderr("❌ skills.yaml exists but skills.lock does not — run `nahel skills lock` first");
     return 1;
   }
-  // One resolution serves both the choice and the run: the CLI is delegated to
-  // by the exact path found from the store root, never by name a second time.
-  const cli = await skillsCliPath(layout);
   for (const entry of locked.entries) {
-    const placed =
-      cli === null
-        ? await restoreViaClone(layout, entry)
-        : await restoreViaSkillsCli(layout, entry, cli);
+    const placed = await restoreViaClone(layout, entry);
     ctx.stdout(`restored ${entry.repo}@${entry.sha}: ${placed.join(", ")}`);
   }
-  const via = cli === null ? "" : " via skills CLI";
-  ctx.stdout(`restored ${locked.entries.length} skill source(s)${via}`);
+  ctx.stdout(`restored ${locked.entries.length} skill source(s)`);
   return 0;
 }
 

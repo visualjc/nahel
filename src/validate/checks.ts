@@ -4,6 +4,7 @@ import { resolveReviewSlots } from "../dispatch/invocation";
 import {
   constitutionSignatureStatus,
   mergeAuthorityStatus,
+  resolveGovernance,
   type FoundingDisagreement,
   type FoundingSignatureStatus,
   type InceptionSignatureStatus,
@@ -1676,6 +1677,156 @@ function checkWayfinder(state: ParsedState): Finding[] {
   return findings;
 }
 
+/** The `kind:id` spelling every actor-naming message in the layer uses. */
+function actorRef(actor: JournalEvent["actor"]): string {
+  return `${actor.kind}:${actor.id}`;
+}
+
+/**
+ * The events one resolution CITES beside its own (planning-partner DD6). The
+ * resolve sequence writes the ticket and its decision observation under one
+ * event, and the observation's `sources` is `[the resolution event, ...whatever
+ * --source named]` — so the cited research is derivable from the event itself,
+ * with no dependence on the observation record surviving on disk or on the
+ * `decision-<ticket>` name being reconstructable.
+ */
+function citedSources(mutations: readonly Mutation[], eventId: string): string[] {
+  const sources: string[] = [];
+  for (const mutation of mutations) {
+    if ("invalid" in mutation || mutation.target !== "observation") continue;
+    for (const source of mutation.record.sources) {
+      if (source !== eventId) sources.push(source);
+    }
+  }
+  return sources;
+}
+
+/**
+ * Who was allowed to ANSWER a decision ticket (planning-partner F4/DD2, DD6).
+ *
+ * Both rules this checks live outside the store: `human_only` is enforced on
+ * the COMMAND PATH only (roadmap-ticket.ts's requireHumanActor refuses
+ * resolve, close and `update --clear-human-only` under an `agent:*` actor),
+ * and "the partner never answers its own interview questions" is stated in
+ * `plan.md` and enforced by nothing at all. The store is the durable artefact,
+ * so validate reads the JOURNAL — the only place recording WHO acted — and
+ * reports what the command path would have refused, or what the workflow
+ * forbids.
+ *
+ * Attribution is read from the EVENT, not from any record field: the actor is
+ * a fact about the act, and the ticket record keeps none. Acts are identified
+ * by event TYPE, the same rule mutationRecords() states — a mutation-shaped
+ * payload under another type is inert data, never a resolution.
+ *
+ * The severity split is the difference between the two rules:
+ *
+ * - human-only violations are ERRORS. The CLI refuses those acts outright, so
+ *   a store exhibiting one was mutated outside the CLI or through a bug — there
+ *   is no legitimate reading of it.
+ * - an agent-resolved grilling ticket is a WARNING. The CLI permits it,
+ *   `delegated`/`agent` governance permits it outright, and a DD6 delegation
+ *   makes it legitimate even under `human`. The warning exists so a human
+ *   browsing validate output SEES that an interview question was answered by an
+ *   agent — hard constraint 6: reported, never silent, and never refused.
+ */
+function checkTicketAuthority(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  // Product governance decides only the GRILLING rule; the human-only rule is
+  // absolute (DD6: "F4's agent-actor refusal stands regardless"). An unreadable
+  // config mutes the grilling half rather than guessing a posture, exactly as
+  // checkMergeAuthority declines to judge a store it cannot read.
+  const productMode =
+    state.config === undefined
+      ? undefined
+      : resolveGovernance(state.config.governance).product.mode;
+  const humanEvents = new Set(
+    state.events.filter((event) => event.actor.kind === "human").map((event) => event.id),
+  );
+
+  // The flag as last RECORDED, ticket by ticket, walking the store's total
+  // order. A ticket mutation event carries the whole end-state record and no
+  // diff, so "the flag was cleared" is derivable only by comparing against the
+  // previously journaled state — which is what makes this a journal walk rather
+  // than a record check.
+  const flagged = new Map<string, boolean>();
+
+  for (const event of state.events) {
+    const mutations = mutationRecords(event);
+    const human = event.actor.kind === "human";
+    for (const mutation of mutations) {
+      if ("invalid" in mutation || mutation.target !== "ticket") continue;
+      const record = mutation.record;
+      const wasFlagged = flagged.get(record.id) === true;
+      const isFlagged = record.human_only === true;
+      flagged.set(record.id, isFlagged);
+
+      if (wasFlagged && !isFlagged && !human) {
+        findings.push({
+          severity: "error",
+          check: "roadmap.ticket-human-only-cleared",
+          message:
+            `decision ticket ${record.id} had its human-only flag cleared by ` +
+            `${actorRef(event.actor)} (event ${event.id}, ${event.type}) — only a human may ` +
+            "loosen a human-only ticket, and the CLI refuses `ticket update --clear-human-only` " +
+            "under an agent actor (clear-then-resolve is the same hole with one extra step)",
+          fix:
+            `restore the flag with \`nahel roadmap ticket update ${record.id} --human-only\` and review ` +
+            "everything done to the ticket after that event — this record was not written through the CLI",
+        });
+        continue;
+      }
+
+      const terminal =
+        event.type === CORE_EVENT_TYPES.ticketResolved ||
+        event.type === CORE_EVENT_TYPES.ticketClosed;
+
+      if (isFlagged && terminal && !human) {
+        findings.push({
+          severity: "error",
+          check: "roadmap.ticket-human-only-bypassed",
+          message:
+            `decision ticket ${record.id} is human-only, and its ${event.type} (event ${event.id}) ` +
+            `was made by ${actorRef(event.actor)} — the CLI refuses that act under an agent actor, ` +
+            "so this store was mutated outside the CLI or through a bug",
+          fix:
+            "take the answer back to the human whose question it was — re-open the decision with them, " +
+            "and find the writer that skipped the refusal (hard constraint 3: agents mutate through the CLI)",
+        });
+        continue;
+      }
+
+      // The grilling rule (DD6). Only RESOLVE: a close rules the question away
+      // rather than answering it, and ruling scope is not the interview. Only
+      // under `human` product governance, and only when the resolution cites no
+      // human-attributed source — a resolution citing the human's delegation
+      // note IS the delegated path, not a rogue one.
+      if (
+        event.type === CORE_EVENT_TYPES.ticketResolved &&
+        !human &&
+        !isFlagged &&
+        record.type === "grilling" &&
+        productMode === "human" &&
+        !citedSources(mutations, event.id).some((source) => humanEvents.has(source))
+      ) {
+        findings.push({
+          severity: "warning",
+          check: "roadmap.ticket-grilling-self-resolved",
+          message:
+            `decision ticket ${record.id} is a grilling question resolved by ` +
+            `${actorRef(event.actor)} (event ${event.id}) under governance.product: human, ` +
+            "citing no human-attributed source — the partner answered its own interview question",
+          fix:
+            `record the delegation the way DD6 does — the human journals a note naming the ticket ` +
+            `(\`nahel log note --data ticket=${record.id} --data summary=…\`) and the resolution cites it ` +
+            "with `--source <event-id>` — or have the human review the decision. Nothing was refused: " +
+            "under delegated/agent product governance the partner holds this authority outright",
+        });
+      }
+    }
+  }
+  return findings;
+}
+
 /**
  * Knowledge-document reference existence: an item's document path (`prd`,
  * `investigation`) should name a file on disk, but a missing one is a
@@ -3202,6 +3353,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkPrdLifecycle(state),
     ...checkRoadmapShape(state),
     ...checkWayfinder(state),
+    ...checkTicketAuthority(state),
     ...checkPrdRefs(state),
     ...checkInvestigationRefs(state),
     ...checkPrdApproval(state),

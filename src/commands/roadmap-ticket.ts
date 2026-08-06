@@ -43,17 +43,23 @@ const QUESTION_HINT =
   "a ticket IS its question — pass a non-empty --question (the one thing the ticket exists to answer)";
 
 export const TICKET_USAGE = `  nahel roadmap ticket new --map <ref> --type <t> --question <text>
-                           [--blocked-by <ticket-id>]...
+                           [--blocked-by <ticket-id>]... [--human-only]
     Create an open ticket on a map and print its generated id.
       --map: the map it hangs off (a map id, or its node's slug or id)
       --type: ${DECISION_TICKET_TYPES.join(" | ")}
       --question: the question itself, stored as the record body
       --blocked-by: a sibling ticket this one waits on (repeatable, ADVISORY)
+      --human-only: the question is the human's to answer. Under an agent actor
+        \`resolve\`, \`close\` and \`--clear-human-only\` are then all REFUSED —
+        unlike blocking, this one really does refuse. Any actor may set it;
+        only a human may clear it.
 
   nahel roadmap ticket update <ref> [--type <t>] [--question <text>]
                               [--blocked-by <ticket-id>]... [--clear-blockers]
-    Re-state the question, the type, or the blocking edges (the second pass of
-    charting). Repeatable --blocked-by replaces the whole list.
+                              [--human-only | --clear-human-only]
+    Re-state the question, the type, the blocking edges, or the human-only flag
+    (the second pass of charting). Repeatable --blocked-by replaces the whole
+    list.
 
   nahel roadmap ticket show <ref>
     Print one ticket: its state, claimant, blockers, decision, and question.
@@ -153,6 +159,25 @@ function actorRef(ctx: StoreContext): string {
   return `${ctx.actor.kind}:${ctx.actor.id}`;
 }
 
+/**
+ * The human-only refusal (DD2) — the one place this layer really does refuse
+ * over a ticket's own state, unlike blocking and claiming, which are advisory
+ * throughout. Three acts are covered because two would leave the hole open:
+ * `resolve` and `close` take the question away from the human, and clearing the
+ * flag is the same act with one extra step.
+ *
+ * One message shape for all three, and it names the ACTOR as well as the
+ * ticket: the refusal an AFK lane reads has to say what identity it is running
+ * under, or the operator cannot tell a rule from a misconfiguration.
+ */
+function requireHumanActor(ctx: StoreContext, ticket: TicketFrontmatter, verb: string): void {
+  if (ticket.human_only !== true || ctx.actor.kind !== "agent") return;
+  throw new UsageError(
+    `ticket ${ticket.id} is human-only, and ${verb} under agent actor ${actorRef(ctx)} is refused — ` +
+      "the question is the human's to answer, so leave it on the frontier for them; nothing was changed",
+  );
+}
+
 async function ticketNew(
   args: string[],
   env: Env,
@@ -166,6 +191,7 @@ async function ticketNew(
       type: { type: "string" },
       question: { type: "string" },
       "blocked-by": { type: "string", multiple: true },
+      "human-only": { type: "boolean" },
     },
     allowPositionals: true,
   });
@@ -195,6 +221,9 @@ async function ticketNew(
     type,
     state: "open",
     blockers,
+    // Absent rather than `false` when the flag is off: "not human-only" has one
+    // spelling, the one every ticket written before the flag already carries.
+    ...(values["human-only"] === true ? { human_only: true } : {}),
     created,
     updated: created,
   };
@@ -222,24 +251,34 @@ async function ticketUpdate(
       question: { type: "string" },
       "blocked-by": { type: "string", multiple: true },
       "clear-blockers": { type: "boolean" },
+      "human-only": { type: "boolean" },
+      "clear-human-only": { type: "boolean" },
     },
     allowPositionals: true,
   });
   if (positionals.length !== 1) {
     throw new UsageError("roadmap ticket update takes exactly one <ref> (a ticket id)");
   }
-  if (values["blocked-by"] !== undefined && values["clear-blockers"] === true) {
-    throw new UsageError(
-      "--blocked-by and --clear-blockers are mutually exclusive — pass one or the other",
-    );
+  // A set flag and its clear flag together are ambiguous — refused outright.
+  for (const [setFlag, clearFlag] of [
+    ["blocked-by", "clear-blockers"],
+    ["human-only", "clear-human-only"],
+  ] as const) {
+    if (values[setFlag] !== undefined && values[clearFlag] === true) {
+      throw new UsageError(
+        `--${setFlag} and --${clearFlag} are mutually exclusive — pass one or the other`,
+      );
+    }
   }
-  const setFlags = ["type", "question", "blocked-by"] as const;
+  const setFlags = ["type", "question", "blocked-by", "human-only"] as const;
+  const clearFlags = ["clear-blockers", "clear-human-only"] as const;
   if (
     !setFlags.some((flag) => values[flag] !== undefined) &&
-    values["clear-blockers"] !== true
+    !clearFlags.some((flag) => values[flag] === true)
   ) {
     throw new UsageError(
-      "nothing to update — pass at least one of --type, --question, --blocked-by, --clear-blockers",
+      "nothing to update — pass at least one of --type, --question, --blocked-by, " +
+        "--clear-blockers, --human-only, --clear-human-only",
     );
   }
 
@@ -253,6 +292,11 @@ async function ticketUpdate(
     next.blockers = values["blocked-by"].map(requireTicketRef);
   }
   if (values["clear-blockers"] === true) next.blockers = [];
+  if (values["human-only"] === true) next.human_only = true;
+  if (values["clear-human-only"] === true) {
+    requireHumanActor(ctx, current.frontmatter, "update --clear-human-only");
+    delete next.human_only;
+  }
   next.updated = env.now();
 
   await mutate(ctx, {
@@ -617,6 +661,7 @@ async function ticketResolve(
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "resolve");
+  requireHumanActor(ctx, current.frontmatter, "resolve");
   const map = await readMap(ctx.layout, current.frontmatter.map);
   // Cited provenance is verified before anything is written, exactly as `nahel
   // observe` verifies it (missingEventIds is the one walk both share): an
@@ -692,6 +737,7 @@ async function ticketClose(
   const ctx = await commandContext(cwd, env, actorOverride);
   const current = await requireTicket(ctx.layout, ref);
   requireState(current.frontmatter, ["open", "claimed"], "close");
+  requireHumanActor(ctx, current.frontmatter, "close");
   const map = await readMap(ctx.layout, current.frontmatter.map);
 
   const eventId = generateId(ctx.env);

@@ -312,6 +312,15 @@ export const ticketFrontmatterSchema = z.strictObject({
    * warning). Advisory throughout: nothing anywhere refuses work over one (F8).
    */
   blockers: z.array(idField),
+  /**
+   * The question is the human's to answer (DD2). ABSENT means false, so every
+   * ticket written before the flag existed reads as open to any actor. The rule
+   * is the CLI's: under an `agent` actor `resolve`, `close` and clearing the
+   * flag are all refused — the third because clear-then-resolve is otherwise
+   * the same hole with one extra step. SETTING it is refused to nobody,
+   * because restricting a ticket is always safe.
+   */
+  human_only: z.boolean().optional(),
   /** The one-liner `resolve` recorded — the map's Decisions index derives from it. */
   decision: nonEmptyString("decision").optional(),
   /** Why `close` ruled the question away — required by both dispositions. */

@@ -14,6 +14,7 @@ import {
 } from "../schema/events";
 import type {
   JournalEvent,
+  MapFrontmatter,
   RoadmapNodeFrontmatter,
   WorkItemFrontmatter,
 } from "../schema/records";
@@ -92,14 +93,25 @@ function fieldLine(lines: string[], key: string, value: string | undefined): voi
   if (value !== undefined && value !== "") lines.push(`  ${key}=${value}`);
 }
 
-/** A section heading with its count, then one indented line per entry. */
-function section(lines: string[], heading: string, entries: readonly string[]): void {
-  lines.push("", `${heading} (${entries.length}):`);
-  // An EMPTY section still prints its heading: a section that vanished when it
-  // emptied would read as one that was never charted, which is a different
-  // fact about a map (F7's five sections are all always present).
+/**
+ * A section heading with its count, then one indented line per entry — the
+ * shape every listed section in this layer takes, and the planning briefing
+ * with it (planning-partner F1).
+ *
+ * An EMPTY section still prints its heading: a section that vanished when it
+ * emptied would read as one that was never charted, which is a different
+ * fact about a map (F7's five sections are all always present).
+ */
+export function sectionLines(heading: string, entries: readonly string[]): string[] {
+  const lines = [`${heading} (${entries.length}):`];
   if (entries.length === 0) lines.push("  (none)");
   for (const entry of entries) lines.push(`  ${entry}`);
+  return lines;
+}
+
+/** The same section, appended to a rendering that separates sections by a blank line. */
+function section(lines: string[], heading: string, entries: readonly string[]): void {
+  lines.push("", ...sectionLines(heading, entries));
 }
 
 /**
@@ -111,10 +123,18 @@ function ticketQuestion(record: TicketRecord): string {
   return record.body.split("\n", 1)[0] ?? "";
 }
 
+/**
+ * The one marker DD2's flag renders as, in all three surfaces that list a
+ * ticket. One spelling everywhere, because an AFK lane skipping these greps for
+ * it — a per-surface wording would be a per-surface skip rule.
+ */
+const HUMAN_ONLY_MARKER = "[human-only]";
+
 /** One ticket as a map's reader sees it: identity, then the question's first line. */
 function ticketLines(record: TicketRecord): string[] {
   const ticket = record.frontmatter;
   const head = [ticket.id, ticket.type, ticket.state];
+  if (ticket.human_only === true) head.push(HUMAN_ONLY_MARKER);
   if (ticket.claimant !== undefined) head.push(`claimed by ${ticket.claimant}`);
   if (ticket.blockers.length > 0) head.push(`blocked by ${ticket.blockers.join(", ")}`);
   const question = ticketQuestion(record);
@@ -194,14 +214,8 @@ export function renderMap(
   lines.push(`  created=${map.created}  updated=${map.updated}`);
   const notes = record.body.trimEnd();
   if (notes !== "") lines.push("", notes);
-  const acts = new Map(events.map((event) => [event.id, event]));
 
-  const decisions: string[] = [];
-  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.resolution)) {
-    if (frontmatter.state !== "resolved" || frontmatter.decision === undefined) continue;
-    decisions.push(`${frontmatter.id}  ${frontmatter.decision}`);
-  }
-  section(lines, "decisions so far", decisions);
+  section(lines, "decisions so far", mapDecisionLines(tickets, events));
   // The questions another decision answered out of existence (F7's invalidated
   // close). It prints HERE, next to the decisions, because the decision that
   // killed each of these is one of them — and deliberately NOT under Out of
@@ -219,21 +233,60 @@ export function renderMap(
       ),
   );
   section(lines, "not yet specified", map.fog);
-  // The charted lines first, in the order they were charted, then one per
-  // out-of-scope close in the order the closes happened: a ruling made before
-  // any ticket existed genuinely precedes every ruling a ticket earned.
-  const outOfScope = [...map.out_of_scope];
-  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.closure)) {
-    if (frontmatter.state !== "closed" || frontmatter.invalidated_by !== undefined) continue;
-    outOfScope.push(
-      [frontmatter.reason, `(${frontmatter.id})`].filter((part) => part !== undefined).join("  "),
-    );
-  }
-  section(lines, "out of scope", outOfScope);
+  section(lines, "out of scope", mapOutOfScopeLines(map, tickets, events));
   lines.push("", `tickets (${tickets.length}):`);
   if (tickets.length === 0) lines.push("  (none)");
   for (const ticket of tickets) for (const line of ticketLines(ticket)) lines.push(`  ${line}`);
   return lines.join("\n");
+}
+
+/**
+ * A map's **Decisions so far** index (F7), derived from its tickets and never
+ * stored: every resolved ticket's one-liner, in the order the resolutions
+ * happened. Exported because the planning briefing (planning-partner F1) shows
+ * the same index over the same tickets — one derivation, two surfaces, so a
+ * decision cannot read one way on the map and another way in the briefing.
+ *
+ * `events` may be the whole journal: the order is read by looking each ticket's
+ * own `resolution` id up, so an event the caller did not collect simply leaves
+ * its ticket undated (see terminalActOrder) and a superset costs nothing.
+ */
+export function mapDecisionLines(
+  tickets: readonly TicketRecord[],
+  events: readonly JournalEvent[],
+): string[] {
+  const acts = new Map(events.map((event) => [event.id, event]));
+  const decisions: string[] = [];
+  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.resolution)) {
+    if (frontmatter.state !== "resolved" || frontmatter.decision === undefined) continue;
+    decisions.push(`${frontmatter.id}  ${frontmatter.decision}`);
+  }
+  return decisions;
+}
+
+/**
+ * A map's **Out of scope** section: the lines it CHARTED first, in the order
+ * they were charted, then one per out-of-scope close in the order the closes
+ * happened — a ruling made before any ticket existed genuinely precedes every
+ * ruling a ticket earned. A ticket closed as invalidated earns no line here: it
+ * was never beyond the destination, and it renders beside the decisions instead.
+ *
+ * Exported for the same reason as the decisions above.
+ */
+export function mapOutOfScopeLines(
+  map: MapFrontmatter,
+  tickets: readonly TicketRecord[],
+  events: readonly JournalEvent[],
+): string[] {
+  const acts = new Map(events.map((event) => [event.id, event]));
+  const lines = [...map.out_of_scope];
+  for (const { frontmatter } of terminalActOrder(tickets, acts, (t) => t.frontmatter.closure)) {
+    if (frontmatter.state !== "closed" || frontmatter.invalidated_by !== undefined) continue;
+    lines.push(
+      [frontmatter.reason, `(${frontmatter.id})`].filter((part) => part !== undefined).join("  "),
+    );
+  }
+  return lines;
 }
 
 /**
@@ -244,7 +297,9 @@ export function renderMap(
  */
 export function renderTicket(record: TicketRecord, map: MapRecord | null): string {
   const ticket = record.frontmatter;
-  const lines = [`ticket ${ticket.id}  ${ticket.type}  ${ticket.state}`];
+  const head = [`ticket ${ticket.id}`, ticket.type, ticket.state];
+  if (ticket.human_only === true) head.push(HUMAN_ONLY_MARKER);
+  const lines = [head.join("  ")];
   fieldLine(lines, "map", ticket.map);
   fieldLine(lines, "destination", map?.frontmatter.destination);
   fieldLine(lines, "claimant", ticket.claimant);
@@ -828,8 +883,13 @@ function statusFields(status: RoadmapFeatureStatus): string[] {
   ];
 }
 
-/** One node as a plain listing line — no derivation, for the kinds that have none. */
-function nodeLine(node: RoadmapNodeFrontmatter): string {
+/**
+ * One node as a plain listing line — no derivation, for the kinds that have
+ * none. Exported because the planning briefing (planning-partner F1) names its
+ * node and lists the store's products with it: one spelling of a node's
+ * identity, so two surfaces cannot describe the same node differently.
+ */
+export function roadmapNodeLine(node: RoadmapNodeFrontmatter): string {
   return `${node.name}  ${node.kind}  horizon=${node.horizon}  id=${node.id}`;
 }
 
@@ -967,7 +1027,7 @@ export function renderRoadmapOverview(
   if (outside.length > 0) {
     if (lines.length > 0) lines.push("");
     lines.push(`outside the product tree (${outside.length}):`);
-    for (const { frontmatter } of outside) lines.push(`  ${nodeLine(frontmatter)}`);
+    for (const { frontmatter } of outside) lines.push(`  ${roadmapNodeLine(frontmatter)}`);
   }
   hintBlock(lines, [zoomHint(nodes.map(({ frontmatter }) => frontmatter))]);
   return lines.join("\n");
@@ -1295,7 +1355,7 @@ export function renderRoadmapZoom(record: RoadmapNodeRecord, facts: RoadmapZoomF
   );
   if (others.length > 0) {
     lines.push("", `other children (${others.length}):`);
-    for (const { frontmatter } of others) lines.push(`  ${nodeLine(frontmatter)}`);
+    for (const { frontmatter } of others) lines.push(`  ${roadmapNodeLine(frontmatter)}`);
   }
 
   const map = facts.maps.find(({ frontmatter }) => frontmatter.node === node.id);
@@ -1521,7 +1581,11 @@ export function renderFrontier(facts: FrontierFacts): string {
   }
   for (const record of tickets) {
     const ticket = record.frontmatter;
-    lines.push(`  ${ticket.id}  ${ticket.type}  map=${labels.get(ticket.map) ?? ticket.map}`);
+    const head = [`  ${ticket.id}`, ticket.type, `map=${labels.get(ticket.map) ?? ticket.map}`];
+    // A human-only ticket is still TAKEABLE — the frontier refuses nothing —
+    // so it stays listed, and the marker is how an AFK lane skips it.
+    if (ticket.human_only === true) head.push(HUMAN_ONLY_MARKER);
+    lines.push(head.join("  "));
     const question = ticketQuestion(record);
     if (question !== "") lines.push(`      ${question}`);
   }

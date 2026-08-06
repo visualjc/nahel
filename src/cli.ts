@@ -19,6 +19,7 @@ import { claimCommand, handbackCommand, pauseCommand } from "./commands/interven
 import { itemCommand } from "./commands/item";
 import { logCommand } from "./commands/log";
 import { observeCommand } from "./commands/observe";
+import { planCommand } from "./commands/plan";
 import { progressCommand } from "./commands/progress";
 import { prototypeCommand } from "./commands/prototype";
 import { recallCommand } from "./commands/recall";
@@ -115,6 +116,7 @@ export const COMMANDS: Record<string, Command> = {
   log: logCommand,
   observe: adapt(observeCommand),
   pause: adapt(pauseCommand),
+  plan: planCommand,
   progress: progressCommand,
   prototype: adapt(prototypeCommand),
   recall: recallCommand,

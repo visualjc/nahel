@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { SkillsLock } from "../../src/schema/records";
 import {
   ensureLayout,
@@ -12,12 +12,11 @@ import {
 } from "../../src/store/layout";
 import {
   claudeSkillsDir,
+  locateSkill,
   repoToUrl,
   resolveRef,
   restoreViaClone,
-  restoreViaSkillsCli,
   skillsCacheDir,
-  skillsCliPath,
   SkillsError,
 } from "../../src/store/skills";
 import { makeTempDir } from "./helpers";
@@ -26,8 +25,9 @@ import { makeTempDir } from "./helpers";
  * Skill fetch/placement (PRD F7, ADR-0009). Git-touching functions run against
  * REAL local git repos in temp dirs — no mocks, no network (file paths, not
  * remotes), mirroring baseline.test.ts. `repoToUrl` is pure and tested without
- * any I/O. The `skills` CLI delegation is exercised with a fake `skills`
- * executable placed on PATH so both branches are proven.
+ * any I/O. Clone-and-symlink is the ONE placement path (ADR-0009 amendment):
+ * there is no CLI delegation left to exercise, and a fake `skills` executable
+ * on PATH must not change what a restore produces (tests/commands).
  */
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -71,6 +71,43 @@ async function makeSkillsRepo(
   return { repo, sha: git(repo, "rev-parse", "HEAD").trim() };
 }
 
+/**
+ * A source repo laid out as a CATALOG — `skills/<category>/<name>/SKILL.md` —
+ * which is the shape the vendored upstream really uses (`grilling` under
+ * `skills/productivity/`, `domain-modeling` under `skills/engineering/`).
+ */
+async function makeCatalogRepo(
+  categories: Record<string, Record<string, string>>,
+): Promise<{ repo: string; sha: string }> {
+  const repo = await tempDir("nahel-catalogrepo-");
+  git(repo, "init", "-q");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "config", "user.name", "Test User");
+  git(repo, "config", "commit.gpgsign", "false");
+  for (const [category, skills] of Object.entries(categories)) {
+    for (const [name, content] of Object.entries(skills)) {
+      await mkdir(join(repo, "skills", category, name), { recursive: true });
+      await writeFile(join(repo, "skills", category, name, "SKILL.md"), content);
+    }
+  }
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "catalog");
+  return { repo, sha: git(repo, "rev-parse", "HEAD").trim() };
+}
+
+/**
+ * A plain directory tree standing in for a clone. The locator is pure lookup
+ * over a checked-out tree — it needs no git, so its unit tests use none.
+ */
+async function makeTree(files: Record<string, string>): Promise<string> {
+  const dir = await tempDir("nahel-clone-");
+  for (const [rel, content] of Object.entries(files)) {
+    await mkdir(join(dir, dirname(rel)), { recursive: true });
+    await writeFile(join(dir, rel), content);
+  }
+  return dir;
+}
+
 async function initTargetRepo(): Promise<ReturnType<typeof storeLayout>> {
   const root = await tempDir("nahel-target-");
   return ensureLayout(root);
@@ -101,6 +138,107 @@ describe("repoToUrl (pure normalization)", () => {
   });
 });
 
+describe("locateSkill (repo root, skills/, and ONE nested category level)", () => {
+  test("finds a skill directory at the clone root", async () => {
+    const clone = await makeTree({ "tdd/SKILL.md": "# tdd\n" });
+    expect(await locateSkill(clone, "tdd")).toBe(join(clone, "tdd"));
+  });
+
+  test("finds a skill under the conventional skills/ directory", async () => {
+    const clone = await makeTree({ "skills/tdd/SKILL.md": "# tdd\n" });
+    expect(await locateSkill(clone, "tdd")).toBe(join(clone, "skills", "tdd"));
+  });
+
+  test("finds a skill one category level down: skills/<category>/<name>", async () => {
+    const clone = await makeTree({
+      "skills/engineering/domain-modeling/SKILL.md": "# domain-modeling\n",
+      "skills/productivity/grilling/SKILL.md": "# grilling\n",
+    });
+    expect(await locateSkill(clone, "grilling")).toBe(
+      join(clone, "skills", "productivity", "grilling"),
+    );
+    expect(await locateSkill(clone, "domain-modeling")).toBe(
+      join(clone, "skills", "engineering", "domain-modeling"),
+    );
+  });
+
+  test("returns null when the skill is nowhere in the clone", async () => {
+    const clone = await makeTree({ "skills/productivity/grilling/SKILL.md": "# grilling\n" });
+    expect(await locateSkill(clone, "wayfinder")).toBeNull();
+  });
+
+  test("a shallower hit shadows a deeper one — skills/<name> wins over a category copy", async () => {
+    // Deterministic precedence, not a refusal: the levels are ordered (root,
+    // then skills/, then the categories), matching how the ecosystem's own
+    // discovery shadows nested copies with shallower ones.
+    const clone = await makeTree({
+      "skills/tdd/SKILL.md": "# canonical\n",
+      "skills/engineering/tdd/SKILL.md": "# nested copy\n",
+    });
+    const found = await locateSkill(clone, "tdd");
+    expect(found).toBe(join(clone, "skills", "tdd"));
+    expect(await readFile(join(found!, "SKILL.md"), "utf8")).toBe("# canonical\n");
+  });
+
+  test("a root hit shadows both a skills/ and a category copy", async () => {
+    const clone = await makeTree({
+      "tdd/SKILL.md": "# root\n",
+      "skills/tdd/SKILL.md": "# skills\n",
+      "skills/engineering/tdd/SKILL.md": "# nested\n",
+    });
+    expect(await locateSkill(clone, "tdd")).toBe(join(clone, "tdd"));
+  });
+
+  test("the search stops at ONE category level — skills/<cat>/<sub>/<name> is not found", async () => {
+    const clone = await makeTree({ "skills/engineering/deep/tdd/SKILL.md": "# too deep\n" });
+    expect(await locateSkill(clone, "tdd")).toBeNull();
+  });
+
+  test("the SAME name under TWO categories is refused, naming both paths", async () => {
+    // Never pick silently: two categories carrying the same skill name is a
+    // question only the human can answer, and guessing pins the wrong file.
+    const clone = await makeTree({
+      "skills/productivity/grilling/SKILL.md": "# productivity copy\n",
+      "skills/engineering/grilling/SKILL.md": "# engineering copy\n",
+    });
+    const attempt = locateSkill(clone, "grilling");
+    await expect(attempt).rejects.toBeInstanceOf(SkillsError);
+    await expect(attempt).rejects.toThrow(/grilling/);
+    // BOTH offending paths are named, so the refusal is actionable.
+    await expect(attempt).rejects.toThrow(/skills[/\\]engineering[/\\]grilling/);
+    await expect(attempt).rejects.toThrow(/skills[/\\]productivity[/\\]grilling/);
+  });
+
+  test("the ambiguity refusal lists the categories in a deterministic (sorted) order", async () => {
+    const clone = await makeTree({
+      "skills/productivity/grilling/SKILL.md": "# p\n",
+      "skills/engineering/grilling/SKILL.md": "# e\n",
+      "skills/misc/grilling/SKILL.md": "# m\n",
+    });
+    const message = await locateSkill(clone, "grilling").then(
+      () => "no refusal",
+      (error: unknown) => (error as Error).message,
+    );
+    expect(message.indexOf("engineering")).toBeLessThan(message.indexOf("misc"));
+    expect(message.indexOf("misc")).toBeLessThan(message.indexOf("productivity"));
+  });
+
+  test("a FILE (not a directory) named like a category is skipped, not treated as one", async () => {
+    const clone = await makeTree({
+      "skills/README.md": "# not a category\n",
+      "skills/productivity/grilling/SKILL.md": "# grilling\n",
+    });
+    expect(await locateSkill(clone, "grilling")).toBe(
+      join(clone, "skills", "productivity", "grilling"),
+    );
+  });
+
+  test("a clone with no skills/ directory at all is not an error — just null", async () => {
+    const clone = await makeTree({ "README.md": "# empty\n" });
+    expect(await locateSkill(clone, "tdd")).toBeNull();
+  });
+});
+
 describe("resolveRef (git ls-remote against a local repo)", () => {
   test("resolves a branch to the exact HEAD SHA", async () => {
     const { repo, sha } = await makeSkillsRepo({ tdd: "# tdd\n" });
@@ -125,6 +263,36 @@ describe("resolveRef (git ls-remote against a local repo)", () => {
     const layout = await initTargetRepo();
     await expect(resolveRef(layout, repo, "no-such-branch")).rejects.toBeInstanceOf(SkillsError);
     await expect(resolveRef(layout, repo, "no-such-branch")).rejects.toThrow(/no-such-branch/);
+  });
+
+  test("`main` resolves to refs/heads/main, NOT a tail-matching refs/heads/*/main", async () => {
+    // `git ls-remote <url> main` matches the TAIL of a ref name, so a repo
+    // carrying `changeset-release/main` (the real mattpocock/skills does)
+    // answers with TWO rows — and refs/heads/changeset-release/main sorts
+    // FIRST. Taking the first row locks a commit off the wrong branch.
+    const { repo } = await makeSkillsRepo({ tdd: "# main\n" });
+    git(repo, "branch", "-M", "main");
+    const mainSha = git(repo, "rev-parse", "HEAD").trim();
+    git(repo, "checkout", "-q", "-b", "changeset-release/main");
+    await writeFile(join(repo, "tdd", "SKILL.md"), "# release branch\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "release");
+    const releaseSha = git(repo, "rev-parse", "HEAD").trim();
+    git(repo, "checkout", "-q", "main");
+    expect(releaseSha).not.toBe(mainSha);
+
+    expect(await resolveRef(await initTargetRepo(), repo, "main")).toBe(mainSha);
+  });
+
+  test("a ref matching only tail-wise in SEVERAL places is refused, naming the candidates", async () => {
+    // No exact ref to prefer and more than one candidate: never pick silently.
+    const { repo } = await makeSkillsRepo({ tdd: "# tdd\n" });
+    git(repo, "branch", "team-a/release");
+    git(repo, "branch", "team-b/release");
+    const attempt = resolveRef(await initTargetRepo(), repo, "release");
+    await expect(attempt).rejects.toBeInstanceOf(SkillsError);
+    await expect(attempt).rejects.toThrow(/team-a\/release/);
+    await expect(attempt).rejects.toThrow(/team-b\/release/);
   });
 });
 
@@ -228,12 +396,52 @@ describe("restoreViaClone (clone at pinned SHA + symlink)", () => {
     );
   });
 
+  test("finds skills in a CATALOG layout — skills/<category>/<name> — end to end", async () => {
+    // The vendored upstream's real shape: two skills under two categories.
+    const { repo, sha } = await makeCatalogRepo({
+      productivity: { grilling: "# grilling\n" },
+      engineering: { "domain-modeling": "# domain-modeling\n" },
+    });
+    const layout = await initTargetRepo();
+    const placed = await restoreViaClone(layout, {
+      repo,
+      ref: "HEAD",
+      sha,
+      skills: ["grilling", "domain-modeling"],
+    });
+    expect(placed).toEqual(["grilling", "domain-modeling"]);
+    for (const [name, category] of [
+      ["grilling", "productivity"],
+      ["domain-modeling", "engineering"],
+    ] as const) {
+      const link = join(claudeSkillsDir(layout), name);
+      expect(await readlink(link)).toContain(join("skills", category, name));
+      expect(await readFile(join(link, "SKILL.md"), "utf8")).toBe(`# ${name}\n`);
+    }
+  });
+
+  test("a skill duplicated across two categories fails the restore rather than guessing", async () => {
+    const { repo, sha } = await makeCatalogRepo({
+      productivity: { grilling: "# productivity\n" },
+      engineering: { grilling: "# engineering\n" },
+    });
+    const layout = await initTargetRepo();
+    const attempt = restoreViaClone(layout, { repo, ref: "HEAD", sha, skills: ["grilling"] });
+    await expect(attempt).rejects.toBeInstanceOf(SkillsError);
+    await expect(attempt).rejects.toThrow(/engineering/);
+    await expect(attempt).rejects.toThrow(/productivity/);
+    // Nothing was placed — an ambiguous restore leaves no half-linked tree.
+    await expect(readFile(join(claudeSkillsDir(layout), "grilling", "SKILL.md"))).rejects.toThrow();
+  });
+
   test("a used skill absent from the pinned commit throws SkillsError naming it", async () => {
     const { repo, sha } = await makeSkillsRepo({ tdd: "# tdd\n" });
     const layout = await initTargetRepo();
     const attempt = restoreViaClone(layout, { repo, ref: "main", sha, skills: ["missing"] });
     await expect(attempt).rejects.toBeInstanceOf(SkillsError);
     await expect(attempt).rejects.toThrow(/missing/);
+    // The refusal names every level that WAS searched, category level included.
+    await expect(attempt).rejects.toThrow(/skills\/<category>\//);
   });
 
   test("refuses to overwrite real user content at .claude/skills/<name> — throws SkillsError, leaves the directory byte-for-byte intact (Finding 5 / PR #13)", async () => {
@@ -263,83 +471,6 @@ describe("restoreViaClone (clone at pinned SHA + symlink)", () => {
     const layout = await initTargetRepo();
     await restoreViaClone(layout, { repo, ref: "main", sha, skills: ["tdd"] });
     expect(await readFile(join(claudeSkillsDir(layout), "tdd", "SKILL.md"), "utf8")).toBe("# v1\n");
-  });
-});
-
-describe("skills CLI delegation", () => {
-  /** Put a fake `skills` executable on PATH; returns a restore function. */
-  async function withFakeSkills(script: string): Promise<() => void> {
-    const bin = await tempDir("nahel-fakebin-");
-    await writeFile(join(bin, "skills"), script);
-    await chmod(join(bin, "skills"), 0o755);
-    const original = process.env["PATH"];
-    process.env["PATH"] = `${bin}:${original ?? ""}`;
-    return () => {
-      process.env["PATH"] = original;
-    };
-  }
-
-  test("skillsCliPath is null when no skills binary is on PATH", async () => {
-    // The test environment has no `skills` CLI installed.
-    expect(await skillsCliPath(await initTargetRepo())).toBeNull();
-  });
-
-  test("skillsCliPath returns the ABSOLUTE path of a skills binary on PATH", async () => {
-    const restore = await withFakeSkills("#!/bin/sh\nexit 0\n");
-    try {
-      const found = await skillsCliPath(await initTargetRepo());
-      expect(found).not.toBeNull();
-      expect(isAbsolute(found!)).toBe(true);
-      expect(found!.endsWith("/skills")).toBe(true);
-    } finally {
-      restore();
-    }
-  });
-
-  test("restoreViaSkillsCli invokes `skills add <url>@<sha> <names…>` in the store root and returns the names", async () => {
-    const argsDir = await tempDir("nahel-args-");
-    const argsFile = join(argsDir, "argv");
-    const cwdFile = join(argsDir, "cwd");
-    const restore = await withFakeSkills(
-      `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\npwd > "${cwdFile}"\nexit 0\n`,
-    );
-    try {
-      const layout = await initTargetRepo();
-      const entry = {
-        repo: "PromptDrivenDev/skills",
-        ref: "main",
-        sha: "b".repeat(40),
-        skills: ["tdd", "grilling"],
-      };
-      const placed = await restoreViaSkillsCli(layout, entry, (await skillsCliPath(layout))!);
-      // The delegated CLI places relative to its own cwd: it must be the root.
-      expect((await readFile(cwdFile, "utf8")).trim()).toBe(await realpath(layout.root));
-      expect(placed).toEqual(["tdd", "grilling"]);
-      const argv = (await readFile(argsFile, "utf8")).split("\n").filter((l) => l !== "");
-      expect(argv).toEqual([
-        "add",
-        "https://github.com/PromptDrivenDev/skills.git@" + "b".repeat(40),
-        "tdd",
-        "grilling",
-      ]);
-    } finally {
-      restore();
-    }
-  });
-
-  test("restoreViaSkillsCli surfaces a non-zero CLI exit as SkillsError", async () => {
-    const restore = await withFakeSkills("#!/bin/sh\necho boom 1>&2\nexit 3\n");
-    try {
-      const layout = await initTargetRepo();
-      const attempt = restoreViaSkillsCli(
-        layout,
-        { repo: "a/b", ref: "main", sha: "c".repeat(40), skills: ["tdd"] },
-        (await skillsCliPath(layout))!,
-      );
-      await expect(attempt).rejects.toBeInstanceOf(SkillsError);
-    } finally {
-      restore();
-    }
   });
 });
 

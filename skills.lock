@@ -1,0 +1,13 @@
+{
+  "entries": [
+    {
+      "repo": "mattpocock/skills",
+      "ref": "main",
+      "sha": "2ab958093e83e0ec752e6c1c5932da465bf23e0c",
+      "skills": [
+        "grilling",
+        "domain-modeling"
+      ]
+    }
+  ]
+}

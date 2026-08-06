@@ -556,8 +556,12 @@ async function overview(cwd: string): Promise<number> {
  * at items and stops there (F1's one-way direction), so the answer is the verb
  * that reads items. Anything else names the slugs it resembles, and points at
  * the complete list when it resembles none.
+ *
+ * Exported because `nahel plan` takes the same kind of ref (planning-partner
+ * F1: refused "with the near-miss hint the roadmap verbs already use") — one
+ * refusal, so a missed ref reads the same however the reader arrived at it.
  */
-async function missedRef(
+export async function missedRef(
   layout: StoreLayout,
   nodes: readonly { frontmatter: RoadmapNodeFrontmatter }[],
   ref: string,
@@ -620,8 +624,13 @@ async function zoom(ref: string, args: string[], cwd: string): Promise<number> {
  * A node with no chart scopes to NO map (null, never "the whole store"), and one
  * with no epic scopes to no items: both are ordinary shapes — intent recorded
  * before the work exists — and both render as a stated empty section.
+ *
+ * Exported because the planning briefing renders this exact frontier as its
+ * fourth section (planning-partner F1/DD5): the scope a node narrows to is one
+ * rule, and a second copy of it would be a second answer to "which tickets and
+ * items are this node's".
  */
-function frontierScope(
+export function frontierScope(
   nodes: readonly RoadmapNodeRecord[],
   maps: readonly MapRecord[],
   items: readonly WorkItemFrontmatter[],

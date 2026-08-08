@@ -3,10 +3,10 @@
 // macOS and Linux (ADR-0001 dual distribution, PRD F8.1), plus the local
 // install path that lands `nahel` on PATH.
 //
-//   bun run build          current platform  → dist/nahel-<os>-<arch>
-//   bun run build:all      every target      → dist/nahel-<os>-<arch>
+//   bun run build          current platform  → $NAHEL_DIST_DIR/nahel-<os>-<arch>
+//   bun run build:all      every target      → $NAHEL_DIST_DIR/nahel-<os>-<arch>
 //   bun run install:local  current platform  → $NAHEL_BIN_DIR/nahel
-//                                              (default ~/.local/bin)
+//   Defaults: NAHEL_DIST_DIR=dist, NAHEL_BIN_DIR=~/.local/bin
 //
 // This is build tooling, not CLI core: cross-compiling fetches the target
 // runtime, so the deterministic-and-offline rule does not bind it.
@@ -21,10 +21,11 @@ type Target = (typeof TARGETS)[number];
 
 /** Environment variable overriding the install directory. */
 const BIN_DIR_VAR = "NAHEL_BIN_DIR";
+const DIST_DIR_VAR = "NAHEL_DIST_DIR";
 const DEFAULT_BIN_DIR = join(homedir(), ".local", "bin");
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
-const DIST_DIR = join(REPO_ROOT, "dist");
+const DIST_DIR = process.env[DIST_DIR_VAR] ?? join(REPO_ROOT, "dist");
 const ENTRY = join(REPO_ROOT, "src", "cli.ts");
 
 const USAGE = "usage: bun run scripts/build-binary.ts [--all] [--install]";

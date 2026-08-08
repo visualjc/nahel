@@ -669,6 +669,24 @@ describe("store additions for install (fs stays store-owned)", () => {
     expect(await prependLineIfMissing(midFile, "@AGENTS.md")).toBe("present");
     expect(await readFile(midFile, "utf8")).toBe(mid);
 
+    // A mention is not the import: `@AGENTS.md-old` fails the boundary check,
+    // so the real line still goes in front.
+    const mentionFile = join(root, "mention.md");
+    await writeFile(mentionFile, "renamed from @AGENTS.md-old\n", "utf8");
+    expect(await prependLineIfMissing(mentionFile, "@AGENTS.md")).toBe("prepended");
+    expect(await readFile(mentionFile, "utf8")).toBe(
+      "@AGENTS.md\nrenamed from @AGENTS.md-old\n",
+    );
+
+    // Bytes that are not valid UTF-8 survive a prepend untouched — the write
+    // is the raw buffer, never a decode/re-encode.
+    const binaryFile = join(root, "binary.md");
+    const invalid = Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0a]);
+    await writeFile(binaryFile, invalid);
+    expect(await prependLineIfMissing(binaryFile, "@AGENTS.md")).toBe("prepended");
+    const rewritten = await readFile(binaryFile);
+    expect(rewritten.subarray(rewritten.length - invalid.length).equals(invalid)).toBe(true);
+
     // Missing → prepended, every existing byte kept after it.
     const otherFile = join(root, "other.md");
     await writeFile(otherFile, "# Mine\n\nkeep me\n", "utf8");

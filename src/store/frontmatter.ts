@@ -85,17 +85,25 @@ export async function prependLineIfMissing(
 ): Promise<"created" | "present" | "prepended"> {
   const prefix = `${line}\n`;
   if (await createFileIfAbsent(path, prefix)) return "created";
-  const existing = await readFile(path, "utf8");
-  if (existing.includes(line)) return "present";
-  await writeFileAtomic(path, `${prefix}${existing}`);
+  // Bytes in, bytes out: the raw buffer is what gets re-written, so a file
+  // that is not valid UTF-8 survives untouched — decoding is for DETECTION
+  // only. And the token must stand on whitespace boundaries: `@AGENTS.md-old`
+  // or `note:@AGENTS.md` is a mention, not the import.
+  const raw = await readFile(path);
+  const boundaryToken = new RegExp(
+    `(^|\\s)${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$)`,
+  );
+  if (boundaryToken.test(raw.toString("utf8"))) return "present";
+  await writeFileAtomic(path, Buffer.concat([Buffer.from(prefix, "utf8"), raw]));
   return "prepended";
 }
 
 /**
  * Write `data` to `path` atomically: temp file in the same directory (same
  * filesystem, so rename is atomic), fsync, rename. Creates parent directories.
+ * Accepts a Buffer so byte-preserving rewrites never round-trip a decode.
  */
-export async function writeFileAtomic(path: string, data: string): Promise<void> {
+export async function writeFileAtomic(path: string, data: string | Buffer): Promise<void> {
   const dir = dirname(path);
   await mkdir(dir, { recursive: true });
   tempCounter += 1;

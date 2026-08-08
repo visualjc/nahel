@@ -1,4 +1,8 @@
-import { CORE_EVENT_TYPES, SELF_RECORDED_EVENT_TYPES } from "../schema/events";
+import {
+  CORE_EVENT_TYPES,
+  NOTE_TICKET_PAYLOAD_KEY,
+  SELF_RECORDED_EVENT_TYPES,
+} from "../schema/events";
 import type { Actor, JournalEvent } from "../schema/records";
 import { compareEvents } from "../store/journal";
 
@@ -194,9 +198,6 @@ const TICKET_EVENT_TYPES: ReadonlySet<string> = new Set([
   CORE_EVENT_TYPES.ticketClosed,
   CORE_EVENT_TYPES.ticketDistilled,
 ]);
-
-/** The `--data` key a research note links itself to a ticket by (DD1). */
-const NOTE_TICKET_PAYLOAD_KEY = "ticket";
 
 /**
  * The record fields a change list never reports: the identity every act

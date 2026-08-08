@@ -249,6 +249,25 @@ export const MIGRATION_EXCLUSION_REASON_KEY = "reason";
 export const MIGRATION_ATTRIBUTION_PAYLOAD_KEY = "migration";
 
 /**
+ * The `--data` key a LOGGED note links itself to a decision ticket by
+ * (planning-partner DD1). One key, one ticket: two tickets is two notes, which
+ * keeps "which decision does this note speak to?" a lookup rather than a
+ * judgement.
+ *
+ * Two readers key on it, which is why the constant lives HERE rather than
+ * beside either — plan-since folds linked research notes into a ticket's
+ * subject set, and validate's grilling check reads a human-attributed note as
+ * post-hoc RATIFICATION of a resolution an agent recorded.
+ *
+ * Both bound the linkage the same way: the note must ride a type `nahel log`
+ * can actually write, i.e. NOT one of SELF_RECORDED_EVENT_TYPES. A `ticket`
+ * key on a self-recorded type is coincidence at best and forgery at worst, and
+ * a ratification an agent could hand-append under a reserved type would ratify
+ * nothing.
+ */
+export const NOTE_TICKET_PAYLOAD_KEY = "ticket";
+
+/**
  * `CORE_EVENT_TYPES.migrationSuperseded` (PR #26 follow-up C3): a migration
  * attempt declared failed, and its nodes retired — the recovery that used to
  * require `git revert` on a store whose whole claim is that it records what

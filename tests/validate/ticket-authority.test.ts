@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import { generateId, ID_PATTERN } from "../../src/schema/id";
-import type { Config, JournalEvent } from "../../src/schema/records";
+import type { Actor, Config, JournalEvent } from "../../src/schema/records";
 import { appendEvent } from "../../src/store/journal";
 import { readTicket } from "../../src/store/layout";
 import { mutate } from "../../src/store/mutate";
@@ -233,18 +233,22 @@ async function forgeClosure(
   return eventId;
 }
 
-/** A human's journaled delegation note (DD6) — the thing a resolution cites. */
-async function delegationNote(
+/**
+ * One journaled note naming a ticket by the `ticket=<id>` data key — the same
+ * linkage DD6's delegation note and the post-hoc ratification both ride on.
+ * Only ACTOR and TIMING separate the two readings: cited-and-earlier is the
+ * delegation a resolution points at, human-and-later is the ratification.
+ */
+async function ticketNote(
   fixture: ValidateFixture,
   ticketId: string,
+  actor: Actor = { kind: "human", id: "jim" },
+  summary = "use your default recommendations on the remaining grilling questions",
 ): Promise<JournalEvent> {
   return appendEvent(fixture.layout, fixture.env, {
     type: CORE_EVENT_TYPES.note,
-    actor: { kind: "human", id: "jim" },
-    payload: {
-      summary: "use your default recommendations on the remaining grilling questions",
-      ticket: ticketId,
-    },
+    actor,
+    payload: { summary, ticket: ticketId },
     session: fixture.agent.session,
   });
 }
@@ -414,7 +418,7 @@ describe("validate — a grilling ticket the partner answered itself (DD6)", () 
     const fixture = await setup(HUMAN_GOVERNANCE);
     const map = await charted(fixture);
     const ticket = await newTicket(fixture, map, "grilling");
-    const note = await delegationNote(fixture, ticket);
+    const note = await ticketNote(fixture, ticket);
     await cli(
       fixture,
       [
@@ -440,12 +444,12 @@ describe("validate — a grilling ticket the partner answered itself (DD6)", () 
     const fixture = await setup(HUMAN_GOVERNANCE);
     const map = await charted(fixture);
     const ticket = await newTicket(fixture, map, "grilling");
-    const research = await appendEvent(fixture.layout, fixture.env, {
-      type: CORE_EVENT_TYPES.note,
-      actor: { kind: "agent", id: "codex" },
-      payload: { summary: "two-lens research", ticket },
-      session: fixture.agent.session,
-    });
+    const research = await ticketNote(
+      fixture,
+      ticket,
+      { kind: "agent", id: "codex" },
+      "two-lens research",
+    );
     await cli(
       fixture,
       ["ticket", "resolve", ticket, "--decision", "we deploy to fly.io", "--source", research.id],
@@ -527,6 +531,138 @@ describe("validate — a grilling ticket the partner answered itself (DD6)", () 
     const findings = await validateStore(fixture.layout);
     expect(findingsFor(findings, BYPASSED)).toHaveLength(1);
     expect(findingsFor(findings, SELF_RESOLVED)).toEqual([]);
+  });
+});
+
+/**
+ * The SECOND door out of the grilling warning.
+ *
+ * DD6's door — the resolution CITES a human-attributed source — is shut the
+ * moment the resolution lands: the journal is append-only and a resolved
+ * ticket's sources are written once, inside the resolve sequence. So a store
+ * where the human ruled verbally and the agent relayed the ruling under its
+ * own actor can never buy its way out of the warning, however honest it was.
+ * That is not hypothetical: the check's first live run flagged all 16 grill
+ * resolutions on nahel's own planning-partner map, every one of them a human's
+ * actual ruling.
+ *
+ * Ratification is the way back: a human, AFTERWARDS, journaling a note that
+ * names the ticket — saying on the record that this decision was theirs. Four
+ * things make a note ratifying, and each is load-bearing:
+ *
+ *   - HUMAN-attributed. An agent vouching for its own answer vouches for
+ *     nothing, exactly as DD6 refuses an agent's own research note.
+ *   - a LOGGED type, the same hand-written-event boundary the plan-since
+ *     linkage draws. `nahel log` refuses the self-recorded types, so a
+ *     `ticket=` key on one of those is coincidence or forgery.
+ *   - naming THAT ticket. One note, one ticket — the linkage convention.
+ *   - STRICTLY LATER than the resolution. A note written before the decision
+ *     cannot vouch for a decision not yet made; earlier-and-cited is the DD6
+ *     path, and earlier-and-uncited is the warning doing its job.
+ */
+describe("validate — post-hoc human ratification of a self-resolved grilling ticket", () => {
+  /** An agent resolving a fresh grilling ticket: the store that warns. */
+  async function selfResolved(fixture: ValidateFixture, map: string): Promise<string> {
+    const ticket = await newTicket(fixture, map, "grilling");
+    await cli(
+      fixture,
+      ["ticket", "resolve", ticket, "--decision", "we deploy to fly.io"],
+      "agent:codex",
+    );
+    return ticket;
+  }
+
+  test("a human note naming the ticket, journaled AFTER the resolution, clears the warning", async () => {
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const ticket = await selfResolved(fixture, map);
+    expect(findingsFor(await validateStore(fixture.layout), SELF_RESOLVED)).toHaveLength(1);
+
+    await ticketNote(fixture, ticket, { kind: "human", id: "jim" }, "ratified: fly.io is right");
+
+    expect(findingsFor(await validateStore(fixture.layout), SELF_RESOLVED)).toEqual([]);
+  });
+
+  test("the same note journaled BEFORE the resolution ratifies nothing", async () => {
+    // Uncited, it is not the DD6 delegation either — and a note that predates
+    // the decision cannot vouch for it.
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const ticket = await newTicket(fixture, map, "grilling");
+    await ticketNote(fixture, ticket, { kind: "human", id: "jim" }, "thinking out loud");
+    await cli(
+      fixture,
+      ["ticket", "resolve", ticket, "--decision", "we deploy to fly.io"],
+      "agent:codex",
+    );
+
+    expect(findingsFor(await validateStore(fixture.layout), SELF_RESOLVED)).toHaveLength(1);
+  });
+
+  test("an AGENT-attributed note after the resolution ratifies nothing", async () => {
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const ticket = await selfResolved(fixture, map);
+    await ticketNote(fixture, ticket, { kind: "agent", id: "codex" }, "ratified: I agree with me");
+
+    expect(findingsFor(await validateStore(fixture.layout), SELF_RESOLVED)).toHaveLength(1);
+  });
+
+  test("a human note naming a DIFFERENT ticket ratifies nothing", async () => {
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const resolved = await selfResolved(fixture, map);
+    const other = await newTicket(fixture, map, "grilling");
+    await ticketNote(fixture, other, { kind: "human", id: "jim" }, "ratified: the other one");
+
+    const findings = findingsFor(await validateStore(fixture.layout), SELF_RESOLVED);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(resolved);
+  });
+
+  test("a note under a SELF-RECORDED event type ratifies nothing, whatever its payload says", async () => {
+    // The boundary plan-since draws: `nahel log` refuses the self-recorded
+    // types precisely so readers can trust them by TYPE. A ratification an
+    // agent could hand-append under a reserved type is no ratification.
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const ticket = await selfResolved(fixture, map);
+    await appendEvent(fixture.layout, fixture.env, {
+      type: CORE_EVENT_TYPES.ticketUpdated,
+      actor: { kind: "human", id: "jim" },
+      payload: { ticket, summary: "ratified" },
+      session: fixture.agent.session,
+    });
+
+    expect(findingsFor(await validateStore(fixture.layout), SELF_RESOLVED)).toHaveLength(1);
+  });
+
+  test("one note ratifies ONE ticket — the second flagged ticket stays warned", async () => {
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const first = await selfResolved(fixture, map);
+    const second = await selfResolved(fixture, map);
+    expect(findingsFor(await validateStore(fixture.layout), SELF_RESOLVED)).toHaveLength(2);
+
+    await ticketNote(fixture, first, { kind: "human", id: "jim" }, "ratified: fly.io is right");
+
+    const findings = findingsFor(await validateStore(fixture.layout), SELF_RESOLVED);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(second);
+    expect(findings[0]!.message).not.toContain(first);
+  });
+
+  test("the warning's fix teaches BOTH doors — cite a source, or ratify post-hoc", async () => {
+    const fixture = await setup(HUMAN_GOVERNANCE);
+    const map = await charted(fixture);
+    const ticket = await selfResolved(fixture, map);
+
+    const findings = findingsFor(await validateStore(fixture.layout), SELF_RESOLVED);
+    expect(findings).toHaveLength(1);
+    const fix = findings[0]!.fix!;
+    expect(fix).toContain("--source");
+    expect(fix).toContain(`nahel log note --data ticket=${ticket}`);
+    expect(fix).toContain("ratif");
   });
 });
 

@@ -44,9 +44,11 @@ import {
   MIGRATION_SELECTED_EVENT_TYPE,
   MIGRATION_SELECTION_PAYLOAD_KEY,
   MUTATION_EVENT_TYPES,
+  NOTE_TICKET_PAYLOAD_KEY,
   PROTOTYPE_VARIANTS_CREATED_EVENT_TYPE,
   RELEASE_ANNOUNCED_EVENT_TYPE,
   ROADMAP_COLUMN_RETRACTED_EVENT_TYPE,
+  SELF_RECORDED_EVENT_TYPES,
   supersededNodeIds,
 } from "../schema/events";
 import { ID_PATTERN } from "../schema/id";
@@ -1712,6 +1714,46 @@ function citedSources(mutations: readonly Mutation[], eventId: string): string[]
 }
 
 /**
+ * The human notes that could RATIFY a self-resolved grilling ticket, grouped
+ * by the ticket each one names and left in the store's total order.
+ *
+ * DD6's door — the resolution CITES a human-attributed source — shuts the
+ * moment the resolution lands: the journal is append-only, and a resolved
+ * ticket's sources are written once, inside the resolve sequence. So a store
+ * where the human ruled out loud and the agent relayed the ruling under its
+ * own actor can never buy its way out of the warning, however honest it was.
+ * Ratification is the SECOND door: a human, afterwards, journaling a note that
+ * names the ticket — putting on the record that the decision was theirs.
+ *
+ * A note qualifies on THREE facts about the act, none of them about the
+ * ticket record:
+ *
+ *   - HUMAN-attributed. An agent vouching for its own answer vouches for
+ *     nothing — the same reason DD6 refuses an agent's own research note.
+ *   - a LOGGED type, i.e. not self-recorded. `nahel log` refuses the reserved
+ *     types precisely so readers can trust them by TYPE, so a `ticket` key on
+ *     one is coincidence at best; this is the exact boundary the plan-since
+ *     linkage draws, and for the same reason.
+ *   - naming ONE ticket, by NOTE_TICKET_PAYLOAD_KEY. Two tickets is two notes.
+ *
+ * The fourth fact — STRICTLY LATER than the resolution — belongs to the caller,
+ * which holds the resolution event; a note is kept here regardless of when it
+ * landed, because whether it ratifies depends on which resolution is asking.
+ */
+function ratifyingNotes(events: readonly JournalEvent[]): Map<string, JournalEvent[]> {
+  const notes = new Map<string, JournalEvent[]>();
+  for (const event of events) {
+    if (event.actor.kind !== "human" || SELF_RECORDED_EVENT_TYPES.has(event.type)) continue;
+    const ticket = event.payload[NOTE_TICKET_PAYLOAD_KEY];
+    if (typeof ticket !== "string") continue;
+    const existing = notes.get(ticket);
+    if (existing === undefined) notes.set(ticket, [event]);
+    else existing.push(event);
+  }
+  return notes;
+}
+
+/**
  * Who was allowed to ANSWER a decision ticket (planning-partner F4/DD2, DD6).
  *
  * Both rules this checks live outside the store: `human_only` is enforced on
@@ -1738,6 +1780,16 @@ function citedSources(mutations: readonly Mutation[], eventId: string): string[]
  *   makes it legitimate even under `human`. The warning exists so a human
  *   browsing validate output SEES that an interview question was answered by an
  *   agent — hard constraint 6: reported, never silent, and never refused.
+ *
+ * That warning has TWO doors out, because one of them can only be walked
+ * through in advance. DD6's door is the resolution citing a human-attributed
+ * source, and it shuts the instant the resolution lands — the journal is
+ * append-only, so a resolution journaled without a source can never gain one.
+ * Post-hoc RATIFICATION is the other: a human note, journaled LATER, naming
+ * the ticket (see ratifyingNotes). Without it the check has no reading for the
+ * ordinary case where the human ruled in conversation and the agent relayed
+ * the ruling under its own actor — which is what its first live run flagged,
+ * sixteen times over, on nahel's own planning-partner map.
  */
 function checkTicketAuthority(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -1752,6 +1804,7 @@ function checkTicketAuthority(state: ParsedState): Finding[] {
   const humanEvents = new Set(
     state.events.filter((event) => event.actor.kind === "human").map((event) => event.id),
   );
+  const ratifications = ratifyingNotes(state.events);
 
   // The flag as last RECORDED, ticket by ticket, walking the store's total
   // order. A ticket mutation event carries the whole end-state record and no
@@ -1809,14 +1862,19 @@ function checkTicketAuthority(state: ParsedState): Finding[] {
       // rather than answering it, and ruling scope is not the interview. Only
       // under `human` product governance, and only when the resolution cites no
       // human-attributed source — a resolution citing the human's delegation
-      // note IS the delegated path, not a rogue one.
+      // note IS the delegated path, not a rogue one — and only when no human
+      // has RATIFIED it since. A ratifying note must be strictly later than
+      // this resolution in the store's total order: a note written before the
+      // decision cannot vouch for a decision not yet made, and an earlier note
+      // the resolution meant to lean on is DD6's door, reached by citing it.
       if (
         event.type === CORE_EVENT_TYPES.ticketResolved &&
         !human &&
         !isFlagged &&
         record.type === "grilling" &&
         productMode === "human" &&
-        !citedSources(mutations, event.id).some((source) => humanEvents.has(source))
+        !citedSources(mutations, event.id).some((source) => humanEvents.has(source)) &&
+        !(ratifications.get(record.id) ?? []).some((note) => compareEvents(note, event) > 0)
       ) {
         findings.push({
           severity: "warning",
@@ -1828,8 +1886,11 @@ function checkTicketAuthority(state: ParsedState): Finding[] {
           fix:
             `record the delegation the way DD6 does — the human journals a note naming the ticket ` +
             `(\`nahel log note --data ticket=${record.id} --data summary=…\`) and the resolution cites it ` +
-            "with `--source <event-id>` — or have the human review the decision. Nothing was refused: " +
-            "under delegated/agent product governance the partner holds this authority outright",
+            "with `--source <event-id>`. Already resolved? the journal is append-only, so no source " +
+            "can be added now — instead a human may ratify it post-hoc, and the same note journaled " +
+            `AFTER the resolution clears this: \`nahel log note --data ticket=${record.id} ` +
+            `--data summary="ratified: <why>"\`, under a human actor. Nothing was refused: under ` +
+            "delegated/agent product governance the partner holds this authority outright",
         });
       }
     }

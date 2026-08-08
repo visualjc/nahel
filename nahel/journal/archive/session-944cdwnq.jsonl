@@ -1,0 +1,2 @@
+{"id":"k46q3m6s","ts":"2026-08-08T18:03:24Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"mcm4ak0e","payload":{"target":"item","record":{"id":"mcm4ak0e","name":"init-ships-no-workflows","type":"bug","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-08T17:40:32Z","updated":"2026-08-08T18:03:24Z"},"body":""}}
+{"id":"r5hg2y82","ts":"2026-08-08T18:03:25Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

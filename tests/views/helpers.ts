@@ -5,7 +5,7 @@ import { runCommand } from "../../src/commands/run";
 import type { Env } from "../../src/schema/env";
 import { ensureLayout, readItem, writeConfig, type StoreLayout } from "../../src/store/layout";
 import { createStoreContext, mutate } from "../../src/store/mutate";
-import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeTempDir, seedCanonicalWorkflows, seededEnv } from "../store/helpers";
 
 /**
  * View-test fixtures: a populated store built through the REAL commands
@@ -124,6 +124,7 @@ export async function buildPopulatedStore(
   tempDirs.push(root);
   const layout = await ensureLayout(root);
   await writeConfig(layout, makeConfig()); // actor: agent:claude-code
+  await seedCanonicalWorkflows(layout); // what `nahel init` writes; ensureLayout does not
   const env = seededEnv({ seed, tickSeconds });
 
   const epicId = await runMutationCommand(

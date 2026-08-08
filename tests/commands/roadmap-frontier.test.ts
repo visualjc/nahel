@@ -20,7 +20,7 @@ import { readJournal } from "../../src/store/journal";
 import { ensureLayout, readItem, writeConfig, type StoreLayout } from "../../src/store/layout";
 import { validateStore } from "../../src/validate";
 import { ROADMAP_SUBCOMMANDS } from "../../src/views/roadmap";
-import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeTempDir, seedCanonicalWorkflows, seededEnv } from "../store/helpers";
 
 /**
  * `nahel roadmap frontier` (Phase 4 F8): the takeable edge — everything that can
@@ -143,6 +143,7 @@ async function setup(): Promise<{
   git(root, "commit", "-q", "-m", "initial");
   const layout = await ensureLayout(root);
   await writeConfig(layout, makeConfig());
+  await seedCanonicalWorkflows(layout); // what `nahel init` writes; ensureLayout does not
   const env = seededEnv({ tickSeconds: 1 });
   const node = lastId(
     await ok(env, root, [

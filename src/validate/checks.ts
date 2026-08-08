@@ -1,6 +1,7 @@
 import YAML from "yaml";
 import type { z } from "zod";
 import { resolveReviewSlots } from "../dispatch/invocation";
+import { CANONICAL_WORKFLOWS } from "../install/canonical-workflows";
 import {
   constitutionSignatureStatus,
   mergeAuthorityStatus,
@@ -139,6 +140,15 @@ export interface ValidationInput {
   skillsLockPath: string;
   skillsLockText?: string;
   skillsLockError?: string;
+  /**
+   * The store's copy of each CANONICAL workflow doc, keyed by the embedded
+   * name: where the doc belongs, and its text — `null` when the file is not
+   * there (or is not a readable file). Only the canonical names are read, so
+   * an ADDITIONAL workflow doc cannot appear here and cannot be flagged.
+   * Optional: without it the workflows checks are skipped, exactly like
+   * `prdPresence`.
+   */
+  workflowDocs?: Record<string, { path: string; text: string | null }>;
   /**
    * `nahel/journal/distilled/` — one empty marker file per distilled archived
    * segment. `distilledMarkers` is the raw filename listing ([] covers the
@@ -3153,6 +3163,62 @@ function checkSkillsDrift(state: ParsedState): Finding[] {
 }
 
 /**
+ * Canonical workflow drift (chore 7fq7yvne, following bug mcm4ak0e): the
+ * workflow docs in the store's `nahel/workflows/` against the copies EMBEDDED
+ * in the running binary. Deterministic — a byte comparison against a build-time
+ * constant, no network and no clock.
+ *
+ * Two warnings, never errors, because both states are legitimate mid-upgrade:
+ *   - `workflows.drift`: the doc is there and differs. Two things produce that
+ *     and nahel cannot tell them apart, so the message names both — the binary
+ *     was upgraded and the store's copy is stale, or the doc was hand-edited.
+ *     `nahel init` is write-if-missing, so the refresh is to move the edited
+ *     copy aside (or delete it) and re-run init.
+ *   - `workflows.missing`: the doc is not there at all. A store scaffolded
+ *     before v0.4.1 never received any of them and warns once per doc, which
+ *     is the honest count — and one `nahel init` writes every one of them back
+ *     without touching anything that already exists.
+ *
+ * EXTRA docs alongside the canonical set are never flagged: additional
+ * workflows are the sanctioned place for a repo's own judgment, and this check
+ * only ever looks up the canonical names.
+ */
+function checkWorkflowDrift(state: ParsedState): Finding[] {
+  const docs = state.input.workflowDocs;
+  if (docs === undefined) return [];
+
+  const findings: Finding[] = [];
+  for (const workflow of CANONICAL_WORKFLOWS) {
+    const doc = docs[workflow.name];
+    if (doc === undefined) continue;
+    const file = `${workflow.name}.md`;
+    if (doc.text === null) {
+      findings.push({
+        severity: "warning",
+        check: "workflows.missing",
+        path: doc.path,
+        message:
+          `${file} is a canonical workflow doc but this store does not have it — ` +
+          `a store scaffolded before the docs shipped is missing all of them`,
+        fix: "run `nahel init`: it only writes what is absent, so one run restores every missing canonical doc and overwrites nothing",
+      });
+    } else if (doc.text !== workflow.body) {
+      findings.push({
+        severity: "warning",
+        check: "workflows.drift",
+        path: doc.path,
+        message:
+          `${file} differs from this binary's embedded copy — either the binary was ` +
+          `upgraded past the store's stale copy, or the doc was hand-edited (the canonical ` +
+          `docs are canonical; local judgment belongs in ADDITIONAL workflow docs beside them)`,
+        fix: `\`nahel init\` never overwrites an existing doc, so refresh it by moving ${file} aside (or deleting it) and running \`nahel init\``,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
  * Read the journaled creation bases: branch → the commit it branched FROM
  * (`prototype.variants-created`, Phase 2 F5.1). Later records win, which is
  * the right answer for a branch name that was disposed of and re-created.
@@ -3370,6 +3436,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkHotState(state),
     ...checkMaintenance(state),
     ...checkSkillsDrift(state),
+    ...checkWorkflowDrift(state),
     ...checkPrototypeRefs(state),
   );
   return findings.sort(compareFindings);

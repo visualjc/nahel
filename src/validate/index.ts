@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { CANONICAL_WORKFLOWS } from "../install/canonical-workflows";
 import { ID_PATTERN } from "../schema/id";
 import { roadmapNodeFrontmatterSchema, workItemFrontmatterSchema } from "../schema/records";
 import { readFrontmatterFile } from "../store/frontmatter";
@@ -25,6 +26,7 @@ import {
   roadmapNodePath,
   runRecordPath,
   ticketPath,
+  workflowsDir,
   type StoreLayout,
 } from "../store/layout";
 import {
@@ -151,6 +153,32 @@ async function collectAdrPresence(
     }
   }
   return presence;
+}
+
+/**
+ * The store's copy of each CANONICAL workflow doc (chore 7fq7yvne): its path
+ * and its text, or `null` text when the file is not there — which is the same
+ * answer a whole missing `nahel/workflows/` gives, doc by doc. Only the
+ * embedded names are read, so an ADDITIONAL workflow doc is never even looked
+ * at, let alone compared; the byte comparison itself stays in the pure check.
+ */
+async function collectWorkflowDocs(
+  layout: StoreLayout,
+): Promise<Record<string, { path: string; text: string | null }>> {
+  const dir = workflowsDir(layout);
+  const docs: Record<string, { path: string; text: string | null }> = {};
+  for (const workflow of CANONICAL_WORKFLOWS) {
+    const path = join(dir, `${workflow.name}.md`);
+    let text: string | null;
+    try {
+      text = await readTextFile(path);
+    } catch {
+      // Unreadable (e.g. the name is taken by a directory): not a usable doc.
+      text = null;
+    }
+    docs[workflow.name] = { path, text };
+  }
+  return docs;
 }
 
 /**
@@ -329,6 +357,9 @@ export async function collectValidationInput(
   input.adrPresence = await collectAdrPresence(layout, input);
   // The document steps journaled acts record (F10), read the same way.
   await collectDocumentState(layout, input);
+  // The store's canonical workflow docs, against which the embedded copies in
+  // this binary are the reference (chore 7fq7yvne).
+  input.workflowDocs = await collectWorkflowDocs(layout);
 
   // Prototype refs (Phase 2 F5.2): read-only git plumbing, the same store-layer
   // privilege the claim baseline holds. Never throws — a checkout that is not a

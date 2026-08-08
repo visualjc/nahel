@@ -25,7 +25,7 @@ import {
 } from "../../src/store/layout";
 import * as lifecycle from "../../src/store/mutate";
 import { createStoreContext, mutate } from "../../src/store/mutate";
-import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+import { makeConfig, makeTempDir, seedCanonicalWorkflows, seededEnv } from "../store/helpers";
 
 /**
  * PRD archival (Phase 4 F10): a released feature's PRD moves to
@@ -176,6 +176,7 @@ async function released(
   dirs.push(root);
   const layout = await ensureLayout(root);
   await writeConfig(layout, makeConfig());
+  await seedCanonicalWorkflows(layout); // what `nahel init` writes; ensureLayout does not
   const env = seededEnv({ tickSeconds: 1 });
 
   await mkdir(join(root, "docs", "prds"), { recursive: true });

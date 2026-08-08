@@ -50,15 +50,21 @@ describe("E2E compiled binary (PRD F8.1) — one documented command installs `na
   test(
     "install:local builds the binary and a clean-PATH `nahel brief` works in a fresh repo",
     async () => {
-      const binDir = await tempDir("nahel-bin-");
+      const prefix = await tempDir("nahel-install-");
+      const binDir = join(prefix, "bin");
+      const distDir = join(prefix, "dist");
 
       // The documented install command — build + land on PATH in one step.
-      // NAHEL_BIN_DIR redirects the install so the test never touches the
-      // developer's real ~/.local/bin.
+      // Both outputs live under this test's prefix so a full suite never
+      // touches the developer's ~/.local/bin or a concurrent suite's dist/.
       const install = spawnSync("bun", ["run", "install:local"], {
         cwd: REPO_ROOT,
         encoding: "utf8",
-        env: { ...process.env, NAHEL_BIN_DIR: binDir },
+        env: {
+          ...process.env,
+          NAHEL_BIN_DIR: binDir,
+          NAHEL_DIST_DIR: distDir,
+        },
       });
       echo("bun run install:local", {
         code: install.status ?? -1,
@@ -66,6 +72,9 @@ describe("E2E compiled binary (PRD F8.1) — one documented command installs `na
         stderr: install.stderr,
       });
       expect(install.status).toBe(0);
+
+      const artifact = join(distDir, `nahel-${process.platform}-${process.arch}`);
+      expect((await stat(artifact)).isFile()).toBe(true);
 
       // The installed artifact is a real executable file, not a wrapper
       // script pointing back at the checkout.

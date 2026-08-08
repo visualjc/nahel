@@ -5,6 +5,13 @@ knowledge:
 actor:
   kind: human
   id: maintainer
+contract:
+  launch: bun run src/cli.ts --help
+  seed: "true"
+  test: bun test
+  healthcheck: bun run src/cli.ts status
+  ports: []
+  env: []
 inception:
   tier: standard
   constitution_signed_by: human:jim — signed 2026-07-31

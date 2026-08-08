@@ -13,7 +13,14 @@ import { writeHotState } from "../../src/store/hotstate";
 import { ensureLayout, writeConfig, type StoreLayout } from "../../src/store/layout";
 import { createStoreContext, mutate, type StoreContext } from "../../src/store/mutate";
 import type { Finding } from "../../src/validate";
-import { makeConfig, makeFrontmatter, makeRun, makeTempDir, seededEnv } from "../store/helpers";
+import {
+  makeConfig,
+  makeFrontmatter,
+  makeRun,
+  makeTempDir,
+  seedCanonicalWorkflows,
+  seededEnv,
+} from "../store/helpers";
 
 /**
  * Validate-test fixtures: every fixture starts from a CLEAN store built
@@ -41,6 +48,9 @@ export async function setupFixture(
   tempDirs.push(root);
   const layout = await ensureLayout(root);
   await writeConfig(layout, makeConfig(configOverrides));
+  // `nahel init` writes the canonical workflow docs; ensureLayout does not.
+  // A fixture without them is a pre-v0.4.1 store, which validate reports.
+  await seedCanonicalWorkflows(layout);
   const env = seededEnv({ tickSeconds: 1 });
   const agent = await createStoreContext(root, env);
   const human = await createStoreContext(root, env, { actorOverride: "human:jim" });

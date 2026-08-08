@@ -1,0 +1,2 @@
+{"id":"xgctwhab","ts":"2026-08-08T21:03:05Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"4hd1z0fm","payload":{"target":"item","record":{"id":"4hd1z0fm","name":"grilling-ratification-ack","type":"chore","status":"done","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-06T21:25:57Z","updated":"2026-08-08T21:03:05Z"},"body":""}}
+{"id":"fnyzkmp6","ts":"2026-08-08T21:03:05Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

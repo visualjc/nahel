@@ -1,0 +1,2 @@
+{"id":"6ypd99by","ts":"2026-08-08T20:07:11Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"7fq7yvne","payload":{"target":"item","record":{"id":"7fq7yvne","name":"workflows-drift-check","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-08T17:40:33Z","updated":"2026-08-08T20:07:11Z"},"body":""}}
+{"id":"db6hpzfe","ts":"2026-08-08T20:07:11Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

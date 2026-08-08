@@ -1,0 +1,2 @@
+{"id":"9kf50at0","ts":"2026-08-08T20:07:11Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"zfewc1z3","payload":{"target":"item","record":{"id":"zfewc1z3","name":"claude-md-agents-shim","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-08T19:15:50Z","updated":"2026-08-08T20:07:11Z"},"body":""}}
+{"id":"nkdc69s7","ts":"2026-08-08T20:07:11Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

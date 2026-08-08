@@ -6,7 +6,7 @@ import type { Config, Founding } from "../schema/records";
 import { CANONICAL_WORKFLOWS } from "../install/canonical-workflows";
 import { WORKFLOWS_RELATIVE_DIR } from "../install/workflow";
 import { parseActorSpec, resolveActor } from "../store/actor";
-import { readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
+import { createFileIfAbsent, readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
 import { appendEvent, newSessionSegmentId } from "../store/journal";
 import {
   ensureLayout,
@@ -217,11 +217,10 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
   let workflowsKept = 0;
   for (const workflow of CANONICAL_WORKFLOWS) {
     const path = join(workflows, `${workflow.name}.md`);
-    if (await fileExists(path)) {
-      workflowsKept += 1;
-    } else {
-      await writeFileAtomic(path, workflow.body);
+    if (await createFileIfAbsent(path, workflow.body)) {
       workflowsCreated += 1;
+    } else {
+      workflowsKept += 1;
     }
   }
   if (workflowsCreated > 0) {

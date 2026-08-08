@@ -47,6 +47,28 @@ export function serializeFrontmatter(
 let tempCounter = 0;
 
 /**
+ * Create `path` with `data` only if it does not exist — `wx` open, so the
+ * never-overwrite decision is one syscall rather than a check-then-write race.
+ * Creates parent directories. Returns true when created, false when a file
+ * already held the path (which is then left byte-untouched).
+ */
+export async function createFileIfAbsent(path: string, data: string): Promise<boolean> {
+  await mkdir(dirname(path), { recursive: true });
+  try {
+    const handle = await open(path, "wx");
+    try {
+      await handle.writeFile(data, "utf8");
+    } finally {
+      await handle.close();
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    return false;
+  }
+}
+
+/**
  * Write `data` to `path` atomically: temp file in the same directory (same
  * filesystem, so rename is atomic), fsync, rename. Creates parent directories.
  */

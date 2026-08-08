@@ -15,15 +15,17 @@ import { CANONICAL_WORKFLOWS } from "../../src/install/canonical-workflows";
 
 const WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "nahel", "workflows");
 
+/** The stems on disk, sorted AS STEMS — "plan" sorts before "plan-frontier". */
 function onDisk(): string[] {
   return readdirSync(WORKFLOWS_DIR)
     .filter((file) => file.endsWith(".md"))
+    .map((file) => file.slice(0, -3))
     .sort();
 }
 
 describe("embedded canonical workflows mirror nahel/workflows/ exactly", () => {
   test("the embedded name set equals the directory's file stems — no additions, no omissions", () => {
-    const expected = onDisk().map((file) => file.slice(0, -3));
+    const expected = onDisk();
     expect(expected.length).toBeGreaterThan(0);
     const embedded = CANONICAL_WORKFLOWS.map((workflow) => workflow.name).sort();
     console.log(`[embedded ${embedded.length}] ${embedded.join(", ")}`);

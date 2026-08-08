@@ -10,7 +10,7 @@ import {
   workflowFrontmatterSchema,
   type WorkflowDoc,
 } from "../../src/install/workflow";
-import { parseFrontmatter } from "../../src/store/frontmatter";
+import { parseFrontmatter, prependLineIfMissing } from "../../src/store/frontmatter";
 import {
   ensureLayout,
   listMarkdownDocs,
@@ -376,6 +376,100 @@ describe("nahel install --agent claude", () => {
   });
 });
 
+describe("nahel install --agent claude — CLAUDE.md imports AGENTS.md (chore zfewc1z3)", () => {
+  const claudeMd = (root: string) => join(root, "CLAUDE.md");
+
+  test("no CLAUDE.md: one is created containing exactly the @AGENTS.md import line", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(await readFile(claudeMd(root), "utf8")).toBe("@AGENTS.md\n");
+    expect(result.stdout).toContain("CLAUDE.md");
+  });
+
+  test("the import is ensured even when there is no workflow to shim", async () => {
+    const root = await makeRepo();
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.code).toBe(0);
+    expect(await readFile(claudeMd(root), "utf8")).toBe("@AGENTS.md\n");
+    // The nothing-to-install verdict about SHIMS still stands and is still said.
+    expect(result.stdout.toLowerCase()).toContain("no workflow");
+  });
+
+  test("an existing CLAUDE.md that already imports @AGENTS.md on line 1 is left byte-identical", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    const existing = "@AGENTS.md\n\n# House rules\n\n- Run `bun test` before pushing.\n";
+    await writeFile(claudeMd(root), existing, "utf8");
+
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.code).toBe(0);
+    expect(await readFile(claudeMd(root), "utf8")).toBe(existing);
+    expect(result.stdout).toContain("CLAUDE.md");
+  });
+
+  test("a MID-FILE @AGENTS.md import counts: nothing is prepended, nothing is duplicated", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    // A legitimate import that lives further down the file — containment is
+    // checked over the whole file, not just line 1.
+    const existing = "# House rules\n\n- Run `bun test` before pushing.\n\n@AGENTS.md\n";
+    await writeFile(claudeMd(root), existing, "utf8");
+
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.code).toBe(0);
+    const after = await readFile(claudeMd(root), "utf8");
+    expect(after).toBe(existing);
+    expect(after.split("@AGENTS.md")).toHaveLength(2); // exactly one occurrence
+  });
+
+  test("an existing CLAUDE.md without the import gets it PREPENDED, every existing byte kept", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    const existing = "# House rules\n\n- Run `bun test` before pushing.\n";
+    await writeFile(claudeMd(root), existing, "utf8");
+
+    const result = await runInstall(["--agent", "claude"], root);
+    expect(result.code).toBe(0);
+    expect(await readFile(claudeMd(root), "utf8")).toBe(`@AGENTS.md\n${existing}`);
+    // Loud: editing the user's instruction file is never silent.
+    expect(result.stdout).toContain("prepended @AGENTS.md to existing CLAUDE.md");
+  });
+
+  test("re-install is idempotent: the prepended file is not touched again", async () => {
+    const root = await makeRepo();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+    await writeFile(claudeMd(root), "# House rules\n\nkeep me\n", "utf8");
+    await runInstall(["--agent", "claude"], root);
+    const afterFirst = await readFile(claudeMd(root));
+
+    const second = await runInstall(["--agent", "claude"], root);
+    expect(second.code).toBe(0);
+    expect(Buffer.compare(afterFirst, await readFile(claudeMd(root)))).toBe(0);
+    expect(second.stdout).not.toContain("prepended");
+  });
+
+  test("the codex target never touches CLAUDE.md — codex reads AGENTS.md natively", async () => {
+    const root = await makeRepo();
+    const home = await makeHome();
+    await writeWorkflow(root, "brief.md", workflowDoc("brief"));
+
+    const bare = await runInstall(["--agent", "codex"], root, home);
+    expect(bare.code).toBe(0);
+    expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
+
+    // …and an existing one is left exactly as the user wrote it.
+    const existing = "# House rules\n\nno import here\n";
+    await writeFile(join(root, "CLAUDE.md"), existing, "utf8");
+    const again = await runInstall(["--agent", "codex"], root, home);
+    expect(again.code).toBe(0);
+    expect(await readFile(join(root, "CLAUDE.md"), "utf8")).toBe(existing);
+  });
+});
+
 describe("nahel install --agent codex (PRD F8.2)", () => {
   test("generates one prompt file per workflow under <home>/.codex/prompts, prefix-namespaced", async () => {
     const root = await makeRepo();
@@ -553,6 +647,39 @@ describe("store additions for install (fs stays store-owned)", () => {
     await writeFile(join(root, "notes.txt"), "x", "utf8");
     expect(await listMarkdownDocs(root)).toEqual(["a.md", "b.md"]);
     expect(await listMarkdownDocs(join(root, "missing"))).toEqual([]);
+  });
+
+  test("prependLineIfMissing: creates, keeps a line found anywhere, else prepends atomically", async () => {
+    const root = await makeTempDir("nahel-prepend-");
+    tempDirs.push(root);
+    const path = join(root, "nested", "CLAUDE.md");
+
+    // Absent → created with exactly the line (parent directories included).
+    expect(await prependLineIfMissing(path, "@AGENTS.md")).toBe("created");
+    expect(await readFile(path, "utf8")).toBe("@AGENTS.md\n");
+
+    // Present (line 1) → untouched.
+    expect(await prependLineIfMissing(path, "@AGENTS.md")).toBe("present");
+    expect(await readFile(path, "utf8")).toBe("@AGENTS.md\n");
+
+    // Present mid-file → untouched, no duplicate.
+    const midFile = join(root, "mid.md");
+    const mid = "# Mine\n\n@AGENTS.md\n\nmore\n";
+    await writeFile(midFile, mid, "utf8");
+    expect(await prependLineIfMissing(midFile, "@AGENTS.md")).toBe("present");
+    expect(await readFile(midFile, "utf8")).toBe(mid);
+
+    // Missing → prepended, every existing byte kept after it.
+    const otherFile = join(root, "other.md");
+    await writeFile(otherFile, "# Mine\n\nkeep me\n", "utf8");
+    expect(await prependLineIfMissing(otherFile, "@AGENTS.md")).toBe("prepended");
+    expect(await readFile(otherFile, "utf8")).toBe("@AGENTS.md\n# Mine\n\nkeep me\n");
+
+    // An empty file is a file: it gets the line, not a second blank line.
+    const emptyFile = join(root, "empty.md");
+    await writeFile(emptyFile, "", "utf8");
+    expect(await prependLineIfMissing(emptyFile, "@AGENTS.md")).toBe("prepended");
+    expect(await readFile(emptyFile, "utf8")).toBe("@AGENTS.md\n");
   });
 
   test("removeFile deletes a file and is a no-op on a missing one", async () => {

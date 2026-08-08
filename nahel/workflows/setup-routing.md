@@ -71,6 +71,49 @@ Before any `nahel` command: if you are an agent, set
    The section replaces wholesale per agent kind, and the prompt is always
    passed as the trailing argument (ADR-0016 addendum).
 
+## Unattended sandbox flags
+
+Every agent CLI runs its own sandbox around the commands it executes, and the
+defaults are tuned for a human sitting at the keyboard to approve things. Under
+`nahel dispatch` nobody is sitting there: a sandbox that would have prompted
+just fails, and the failure surfaces further downstream as something that looks
+like a broken task rather than a caged worker.
+
+`args` is where the fix goes — the standing flags each vendor's CLI needs for
+unattended work, in committed config, per agent kind. Nahel ships no vendor
+opinion in code: these are FIELD-TESTED DEFAULTS observed on real runs, not
+requirements, and your vendor's flags change between versions. Check
+`<cli> --help` for yours before pasting.
+
+- **cursor-agent** — unattended nahel flows needed `--force --sandbox enabled
+  --trust` alongside the usual `-p`. Without them the run stalls on approval
+  the way an interactive session would wait for a human.
+
+      nahel config set dispatch --data '{
+        "cursor-agent": {
+          "binary": "cursor-agent",
+          "args": ["-p", "--force", "--sandbox", "enabled", "--trust"],
+          "model_flag": "--model"
+        }
+      }'
+
+- **codex** — codex's default sandbox blocks `ps`, so any healthcheck that
+  inspects processes (nahel's own pgid check, for one) fails inside it while
+  passing perfectly by hand. `codex exec` takes a sandbox mode on `--sandbox`;
+  the writable/full-access modes your version lists are the ones that leave
+  process inspection working. Raise it only as far as the work needs.
+
+The same applies to the CLI you are DISPATCHING FROM, not just the ones being
+dispatched: a host agent running under its own sandbox hands that sandbox to
+every process it spawns, including the worker.
+
+`nahel dispatch` preflights this. Before spawning, it runs the run contract's
+healthcheck (`nahel doctor`'s own probe) in the store root, in the environment
+the worker will inherit, and refuses when it fails — naming the probe and
+pointing back here, instead of letting the sandbox surface as confusing worker
+errors. `--no-preflight` dispatches anyway; the skip is journaled with the
+dispatch, so an overridden run never reads as a clean one.
+
 Fallback (degraded environment): if the `nahel` CLI is unavailable, report
 the detected CLIs and the proposed map as notes, but make NO state
 mutations — routing lives in CLI-maintained config.

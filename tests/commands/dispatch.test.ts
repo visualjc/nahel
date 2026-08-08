@@ -5,7 +5,13 @@ import { join } from "node:path";
 import YAML from "yaml";
 import { dispatchCommand } from "../../src/commands/dispatch";
 import type { Env } from "../../src/schema/env";
-import type { Config, JournalEvent, Run, WorkItemFrontmatter } from "../../src/schema/records";
+import type {
+  Config,
+  Contract,
+  JournalEvent,
+  Run,
+  WorkItemFrontmatter,
+} from "../../src/schema/records";
 import { readJournal } from "../../src/store/journal";
 import {
   ensureLayout,
@@ -83,6 +89,8 @@ interface SetupOptions {
   item?: Partial<WorkItemFrontmatter>;
   /** Replace the committed config with arbitrary (possibly invalid) YAML. */
   rawConfig?: (base: Config) => unknown;
+  /** Run contract to commit; its healthcheck is what the preflight probes. */
+  contract?: Contract;
   /**
    * Have a HUMAN intervene mid-run, through the real CLI, while the worker is
    * still running — exactly what `nahel pause` / `nahel claim` are for.
@@ -165,6 +173,7 @@ async function setup(options: SetupOptions = {}): Promise<Repo> {
   const routing = options.routing === "none" ? undefined : (options.routing ?? DEFAULT_ROUTING);
   const base = makeConfig({
     ...(routing === undefined ? {} : { routing }),
+    ...(options.contract === undefined ? {} : { contract: options.contract }),
     dispatch: { claude: { binary: stubPath, args: ["-p"], model_flag: "--model" } },
   });
   if (options.rawConfig === undefined) {
@@ -425,6 +434,132 @@ describe("nahel dispatch — routing enforcement (F1.2)", () => {
       await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]),
     ).not.toBe(0);
     expect(errs.join("\n")).toContain("nahel config set routing --data");
+  });
+});
+
+/**
+ * Sandbox preflight (chore f35q1rax). A dispatcher running under an agent
+ * CLI's own sandbox hands that sandbox to everything it spawns: the field
+ * report is codex's sandbox blocking `ps`, which fails nahel's pgid
+ * healthcheck, and the failure then surfaces as strange downstream errors from
+ * a worker nobody suspected was caged. So dispatch runs the run contract's
+ * healthcheck — doctor's machinery, in the store root, in the environment the
+ * worker will inherit — before it spawns anything, and refuses when it fails.
+ * Advisory doctrine, not a lock: `--no-preflight` dispatches anyway and the
+ * skip is journaled.
+ */
+describe("nahel dispatch — sandbox preflight (chore f35q1rax)", () => {
+  const CONTRACT = { launch: "l", seed: "s", test: "t" };
+
+  test("a failing contract healthcheck refuses the dispatch: nothing spawned, nothing journaled", async () => {
+    const repo = await setup({
+      contract: { ...CONTRACT, healthcheck: "exit 7" },
+    });
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
+    const message = errs.join("\n");
+    console.log("[preflight refusal]", message);
+    expect(code).toBe(1);
+    // The failing probe is NAMED — the whole point is that the operator learns
+    // what could not run, instead of debugging the worker's downstream mess.
+    expect(message).toContain("exit 7");
+    expect(message).toContain("healthcheck");
+    // …and is pointed at the sandbox recipes and the escape hatch.
+    expect(message.toLowerCase()).toContain("sandbox");
+    expect(message).toContain("setup-routing.md");
+    expect(message).toContain("--no-preflight");
+    // A refusal is inert, like every other dispatch refusal.
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
+    expect(await events(repo.layout)).toEqual([]);
+    expect(await listRuns(repo.layout)).toEqual([]);
+  });
+
+  test("a healthcheck that hangs past its deadline refuses with a distinct timeout message", async () => {
+    const start = Date.now();
+    const repo = await setup({
+      contract: { ...CONTRACT, healthcheck: "sleep 5", healthcheck_timeout_seconds: 1 },
+    });
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
+    const message = errs.join("\n");
+    console.log("[preflight timeout]", message, `${Date.now() - start}ms`);
+    expect(Date.now() - start).toBeLessThan(4000); // killed at the deadline, not hung
+    expect(code).toBe(1);
+    expect(message).toContain("timed out after 1s");
+    expect(message).toContain("setup-routing.md");
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
+  });
+
+  test("a passing healthcheck dispatches normally and journals that the preflight passed", async () => {
+    const repo = await setup({ contract: { ...CONTRACT, healthcheck: "exit 0" } });
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"]);
+    console.log("[preflight pass]", errs.join("\n"));
+    expect(code).toBe(0);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["preflight"]).toBe("passed");
+    expect(await Bun.file(repo.recordPath).exists()).toBe(true);
+  });
+
+  test("--no-preflight dispatches a failing-healthcheck repo anyway, and the SKIP is journaled", async () => {
+    // Advisory doctrine (ADR-0015's spirit): a deliberate override is
+    // permitted, never silent — the trail has to show the gate was skipped, or
+    // the next reader cannot tell a clean run from an overridden one.
+    const repo = await setup({ contract: { ...CONTRACT, healthcheck: "exit 7" } });
+    const code = await dispatch(repo, [
+      "implementation",
+      "--no-preflight",
+      "--item",
+      repo.item.id,
+      "--",
+      "work",
+    ]);
+    console.log("[preflight skipped]", errs.join("\n"));
+    expect(code).toBe(0);
+    expect(await Bun.file(repo.recordPath).exists()).toBe(true);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["preflight"]).toBe("skipped");
+    // And the operator is told, so an override never passes for a pass.
+    expect(errs.join("\n")).toContain("preflight skipped");
+  });
+
+  test("a repo whose contract defines no healthcheck is not gated — there is nothing to probe", async () => {
+    const repo = await setup({ contract: CONTRACT });
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(0);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["preflight"]).toBe("none");
+  });
+
+  test("a repo with no contract section at all dispatches exactly as it always did", async () => {
+    const repo = await setup();
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(0);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    expect(started?.payload["preflight"]).toBe("none");
+  });
+
+  test("the preflight runs in the STORE ROOT, so a root-relative healthcheck passes from a subdirectory", async () => {
+    // The contract's healthcheck is written against the repo root, exactly as
+    // doctor's is. Running it in whatever subdirectory the dispatcher stood in
+    // would refuse a perfectly healthy repo — a false sandbox accusation.
+    const repo = await setup({
+      contract: { ...CONTRACT, healthcheck: "test -f repo-marker" },
+    });
+    expect(spawnSync("git", ["init", "-q"], { cwd: repo.root }).status).toBe(0);
+    await writeFile(join(repo.root, "repo-marker"), "at the root\n", "utf8");
+    const sub = join(repo.root, "nahel", "journal", "archive");
+    await mkdir(sub, { recursive: true });
+
+    const code = await dispatchCommand.run(
+      ["implementation", "--item", repo.item.id, "--", "work"],
+      repo.env,
+      sub,
+      "agent:host-runner",
+    );
+    console.log("[preflight subdir]", errs.join("\n"));
+    expect(code).toBe(0);
+  });
+
+  test("`--help` documents the preflight and its escape hatch", async () => {
+    const repo = await setup();
+    expect(await dispatch(repo, ["--help"])).toBe(0);
+    expect(logs.join("\n")).toContain("--no-preflight");
   });
 });
 

@@ -15,8 +15,9 @@ import {
 } from "../schema/enums";
 import { DISPATCH_ENDED_EVENT_TYPE, DISPATCH_STARTED_EVENT_TYPE } from "../schema/events";
 import type { Env } from "../schema/env";
-import type { Run } from "../schema/records";
+import type { Config, Run } from "../schema/records";
 import { spawnDispatch } from "../store/dispatch";
+import { runContractHealthcheck } from "../store/healthcheck";
 import { appendEvent } from "../store/journal";
 import { readConfig, readItem, readRun } from "../store/layout";
 import { closeStoreContext, type StoreContext } from "../store/mutate";
@@ -61,6 +62,18 @@ const FAILURE = "failure";
 /** Exit status a command runner uses for "binary not found". */
 const NOT_FOUND_EXIT = 127;
 
+/** Where the per-vendor unattended sandbox recipes live, quoted in the refusal. */
+const SANDBOX_DOC = "nahel/workflows/setup-routing.md";
+
+/**
+ * What the preflight did, journaled with the dispatch so a later reader can
+ * tell a probed run from an unprobed one: the gate passed, a human waved it
+ * through with `--no-preflight`, or there was nothing to probe (no contract
+ * healthcheck). Three values rather than a bare flag because "passed" and
+ * "never ran" are different facts about a run that later failed.
+ */
+type PreflightVerdict = "passed" | "skipped" | "none";
+
 const USAGE = `usage:
   nahel dispatch <responsibility> [--slot 2] --item <id> -- <task args...>
     Spawn the agent CLI the routing map assigns to <responsibility>
@@ -74,6 +87,13 @@ const USAGE = `usage:
     reviewer slot to fill, resolving through that slot's routing chain
     (slot 2: routing.review2, then implementation, then default) so any
     capable vendor can drive the review loop.
+    Before spawning, dispatch PREFLIGHTS the environment: it runs the run
+    contract's healthcheck (doctor's own probe) in the store root, and
+    refuses when it fails — a dispatcher under a too-restrictive agent
+    sandbox hands that sandbox to the worker, whose failures then look like
+    anything but the cause. See "Unattended sandbox flags" in
+    ${SANDBOX_DOC}.
+    --no-preflight dispatches without probing; the skip is journaled.
     Exit status is 0 when the worker exited 0, 1 otherwise; the composed
     invocation and the outcome are journaled either way.`;
 
@@ -83,6 +103,8 @@ interface DispatchArgs {
   task: string;
   /** Reviewer slot to fill (`review` only); undefined is the plain route. */
   slot?: ReviewSlot;
+  /** `--no-preflight`: dispatch without probing the environment first. */
+  noPreflight: boolean;
 }
 
 function requireResponsibility(value: string): RoutingResponsibility {
@@ -149,7 +171,11 @@ function parseDispatchArgs(argv: string[]): DispatchArgs {
   const { own, task } = splitArgv(argv);
   const { values, positionals } = parseArgs({
     args: own,
-    options: { item: { type: "string" }, slot: { type: "string" } },
+    options: {
+      item: { type: "string" },
+      slot: { type: "string" },
+      "no-preflight": { type: "boolean" },
+    },
     allowPositionals: true,
   });
   if (positionals.length !== 1) {
@@ -180,8 +206,73 @@ function parseDispatchArgs(argv: string[]): DispatchArgs {
     responsibility,
     item: values.item,
     task: task.join(" "),
+    noPreflight: values["no-preflight"] === true,
     ...(slot === undefined ? {} : { slot }),
   };
+}
+
+/** The preflight found the environment too restrictive to dispatch into. */
+class DispatchPreflightError extends Error {}
+
+/**
+ * Sandbox preflight (chore f35q1rax): prove the environment can actually run
+ * this project's own commands BEFORE a worker is spawned into it.
+ *
+ * The failure this exists for: a dispatcher running under an agent CLI's
+ * sandbox hands that sandbox to everything it spawns — the worker, and every
+ * command the worker runs. The field report is codex's sandbox blocking `ps`,
+ * which fails nahel's pgid healthcheck; the run then dies of strange
+ * downstream errors from a worker nobody suspected was caged.
+ *
+ * What this can honestly check is the DISPATCHING context, not the vendor
+ * CLI's own internal sandbox: running the probe "inside the invocation the
+ * worker gets" would mean spawning the agent CLI and paying an LLM call to ask
+ * it, which dispatch may never do (hard constraint 1 — zero LLM calls, zero
+ * API keys). So the probe runs here, in the store root, under the environment
+ * the child inherits: everything the worker's subprocesses face at minimum. A
+ * sandbox that blocks `ps` for this process blocks it for the worker too.
+ *
+ * The probe itself is the run contract's healthcheck — doctor's machinery
+ * (store/healthcheck.ts), not a second opinion — so the two commands can never
+ * disagree about whether this machine is fit to run the project.
+ */
+async function preflight(
+  config: Config,
+  root: string,
+  skip: boolean,
+): Promise<PreflightVerdict> {
+  if (skip) {
+    // Advisory doctrine: a deliberate override is permitted, never silent.
+    console.error(
+      `⚠ preflight skipped (--no-preflight): dispatching without proving the run contract's ` +
+        `healthcheck can run here. If the worker fails in confusing ways, re-run without the ` +
+        `flag to see whether the environment is the cause.`,
+    );
+    return "skipped";
+  }
+  const contract = config.contract;
+  // No contract, or a contract with no healthcheck: nothing to probe. The gate
+  // is not a reason to require a contract — dispatch predates F2's, and a
+  // project that has not defined one is not thereby suspected of a sandbox.
+  if (contract === undefined) return "none";
+  const result = await runContractHealthcheck(contract, root);
+  if (result === undefined) return "none";
+  if (result.ok) return "passed";
+
+  const what = result.timedOut
+    ? `timed out after ${result.timeoutSeconds}s`
+    : `failed (exit ${result.exitCode ?? "unknown"})`;
+  throw new DispatchPreflightError(
+    `preflight: the run contract's healthcheck ${what} here — \`${result.command}\`. ` +
+      `Nothing was spawned: a worker started in this environment inherits it, and would ` +
+      `fail downstream in ways that look like anything but the real cause.\n` +
+      `If that healthcheck passes when you run it by hand, the process dispatching is ` +
+      `probably under an agent CLI's sandbox (codex's default sandbox blocks \`ps\`, which ` +
+      `fails a pgid healthcheck). Give the dispatching CLI — and the routed agents — the ` +
+      `unattended sandbox flags for their vendor: see "Unattended sandbox flags" in ` +
+      `${SANDBOX_DOC}.\n` +
+      `To dispatch anyway, re-run with --no-preflight (the skip is journaled).`,
+  );
 }
 
 /** Journal the intent, carrying the invocation exactly as it will be spawned. */
@@ -191,6 +282,7 @@ async function journalStart(
   route: ResolvedRoute,
   invocation: ComposedInvocation,
   run: Run,
+  preflightVerdict: PreflightVerdict,
 ): Promise<void> {
   await appendEvent(ctx.layout, ctx.env, {
     type: DISPATCH_STARTED_EVENT_TYPE,
@@ -203,6 +295,8 @@ async function journalStart(
       ...(route.model === undefined ? {} : { model: route.model }),
       ...(args.slot === undefined ? {} : { slot: args.slot }),
       via: route.via,
+      // What the environment probe found — or that it was waved through.
+      preflight: preflightVerdict,
       invocation: {
         binary: invocation.binary,
         args: invocation.args,
@@ -303,6 +397,12 @@ async function runDispatch(
   });
 
   await requireExistingItem(ctx.layout, args.item, "--item");
+
+  // Last of the refusals, and still before any state changes: the probe costs
+  // a subprocess, so it runs after the free checks — but a refused preflight
+  // must leave the store as inert as a misrouted dispatch does.
+  const preflightVerdict = await preflight(config, ctx.layout.root, args.noPreflight);
+
   const { frontmatter: item } = await readItem(ctx.layout, args.item);
   // The run belongs to the EXECUTOR, not to the dispatching session: its
   // actor is the routed agent, while the dispatch events stay attributed to
@@ -325,7 +425,7 @@ async function runDispatch(
 
   // Write-ahead: the invocation is journaled before the child exists, so the
   // record of what was dispatched survives any crash during the run.
-  await journalStart(ctx, args, route, invocation, run);
+  await journalStart(ctx, args, route, invocation, run, preflightVerdict);
 
   let result;
   try {

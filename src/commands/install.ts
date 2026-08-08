@@ -1,14 +1,20 @@
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { AGENT_TARGETS, KNOWN_AGENTS, type AgentTarget, type ShimRoot } from "../install/agents";
+import {
+  AGENT_TARGETS,
+  AGENTS_IMPORT_LINE,
+  KNOWN_AGENTS,
+  type AgentTarget,
+  type ShimRoot,
+} from "../install/agents";
 import {
   parseWorkflowDoc,
   WORKFLOW_NAME_PATTERN,
   WORKFLOWS_RELATIVE_DIR,
   type WorkflowDoc,
 } from "../install/workflow";
-import { readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
+import { prependLineIfMissing, readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
 import {
   listMarkdownDocs,
   openStore,
@@ -213,9 +219,34 @@ async function runInstall(argv: string[], ctx: CommandContext): Promise<number> 
         lines.push(`removed stale: ${join(displayDir, file)}`);
       }
 
+      // An agent that reads its own instruction file rather than the neutral
+      // AGENTS.md (claude: CLAUDE.md) gets the import ensured here, so the
+      // repo's instructions actually reach it. Absent → PREPENDED with every
+      // existing byte kept and said out loud, because editing the user's file
+      // is never silent; found anywhere in the file → left alone, which is
+      // what makes re-install a no-op (chore zfewc1z3).
+      let instructionLine: string | undefined;
+      if (target.instructionFile !== undefined) {
+        const outcome = await prependLineIfMissing(
+          join(layout.root, target.instructionFile),
+          AGENTS_IMPORT_LINE,
+        );
+        instructionLine =
+          outcome === "created"
+            ? `created: ${target.instructionFile} — imports ${AGENTS_IMPORT_LINE}`
+            : outcome === "present"
+              ? `unchanged: ${target.instructionFile} — already imports ${AGENTS_IMPORT_LINE}`
+              : `prepended ${AGENTS_IMPORT_LINE} to existing ${target.instructionFile}`;
+      }
+
       // A repo with no workflows and no stale shims has nothing to say per
-      // agent — the invocation reports that once, after the loop.
-      if (lines.length === 0) continue;
+      // agent — the invocation reports that once, after the loop. The
+      // nothing-to-install verdict is about SHIMS, so an instruction-file line
+      // does not suppress it; it is simply said on its own.
+      if (lines.length === 0) {
+        if (instructionLine !== undefined) ctx.stdout(instructionLine);
+        continue;
+      }
       reported = true;
       ctx.stdout(
         `✅ installed ${workflows.length} shim(s) for agent ${agent} under ${displayDir}/${
@@ -223,6 +254,7 @@ async function runInstall(argv: string[], ctx: CommandContext): Promise<number> 
         }`,
       );
       for (const line of lines) ctx.stdout(`  - ${line}`);
+      if (instructionLine !== undefined) ctx.stdout(`  - ${instructionLine}`);
     }
     if (!reported) ctx.stdout(`no workflow docs in ${WORKFLOWS_RELATIVE_DIR}/ — nothing to install`);
     return 0;

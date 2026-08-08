@@ -87,6 +87,12 @@ Semantics:
   leaves the invocation with nothing generated.
 - **Tolerant scan**: a doc with invalid frontmatter is skipped with a warning;
   the remaining workflows still install.
+- **Instruction-file import**: `--agent claude` also ensures the store root's
+  `CLAUDE.md` imports the agent-neutral instructions, because Claude Code reads
+  `CLAUDE.md` and not `AGENTS.md`. No file → one is created holding
+  `@AGENTS.md`; that line already anywhere in the file → nothing changes; the
+  line missing → it is **prepended**, every existing byte kept after it, and
+  reported out loud. Codex has no such step: it reads `AGENTS.md` natively.
 - **Additive agents**: targets live in a lookup table
   (`src/install/agents.ts`); supporting a new agent is one new table entry.
   Unknown agents fail with the known-agent list.

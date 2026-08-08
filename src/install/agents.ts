@@ -39,7 +39,20 @@ export interface AgentTarget {
   filePrefix(prefix: string): string;
   /** Render the complete shim file for one workflow doc (deterministic). */
   renderShim(workflow: WorkflowDoc): string;
+  /**
+   * The agent's own instruction file (relative to the store root) that must
+   * import the agent-neutral AGENTS.md, or undefined for agents that read
+   * AGENTS.md natively (codex). Installing shims for an agent that needs the
+   * import is what puts it there — see the install command, which owns the I/O.
+   */
+  instructionFile?: string;
 }
+
+/**
+ * The line an agent's own instruction file needs so the agent-neutral
+ * instructions are loaded — Claude Code's `@path` import syntax.
+ */
+export const AGENTS_IMPORT_LINE = "@AGENTS.md";
 
 /**
  * Render a shim: command frontmatter + the 3-line body. Claude Code commands
@@ -67,6 +80,12 @@ export const AGENT_TARGETS: Record<string, AgentTarget> = {
     shimDir: (prefix) => join(".claude", "commands", prefix),
     filePrefix: () => "",
     renderShim: (workflow) => renderMarkdownShim("claude", workflow),
+    /**
+     * Claude Code reads CLAUDE.md, not AGENTS.md, so the repo's agent-neutral
+     * instructions only reach it through an import line there (chore
+     * zfewc1z3). Codex has no such entry because it reads AGENTS.md natively.
+     */
+    instructionFile: "CLAUDE.md",
   },
   /**
    * Codex loads custom prompts from `$CODEX_HOME/prompts` only (default

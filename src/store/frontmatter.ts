@@ -69,6 +69,29 @@ export async function createFileIfAbsent(path: string, data: string): Promise<bo
 }
 
 /**
+ * Ensure `line` is present in the file at `path`, and say what that took:
+ * `created` (no file — it is created holding exactly that line), `present`
+ * (the line already occurs ANYWHERE in the file, which is left byte-untouched)
+ * or `prepended` (the line goes in front, every existing byte kept after it,
+ * in one atomic write). Containment over the whole file, not just line 1: an
+ * import a user deliberately put mid-file is a real import and must not be
+ * duplicated — which is also what makes the operation idempotent under
+ * re-runs. Editing user content is the caller's call; this is the primitive
+ * that does it without ever losing bytes.
+ */
+export async function prependLineIfMissing(
+  path: string,
+  line: string,
+): Promise<"created" | "present" | "prepended"> {
+  const prefix = `${line}\n`;
+  if (await createFileIfAbsent(path, prefix)) return "created";
+  const existing = await readFile(path, "utf8");
+  if (existing.includes(line)) return "present";
+  await writeFileAtomic(path, `${prefix}${existing}`);
+  return "prepended";
+}
+
+/**
  * Write `data` to `path` atomically: temp file in the same directory (same
  * filesystem, so rename is atomic), fsync, rename. Creates parent directories.
  */

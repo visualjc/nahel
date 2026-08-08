@@ -3187,6 +3187,25 @@ function checkWorkflowDrift(state: ParsedState): Finding[] {
   const docs = state.input.workflowDocs;
   if (docs === undefined) return [];
 
+  // The whole canonical set absent is ONE condition — a store scaffolded
+  // before the docs shipped — not eighteen. Collapsing it protects the
+  // brief's byte budget (18 warnings truncated the constitution section),
+  // and the fix is a single command either way. Partial absence stays
+  // per-file below, where naming exactly what is gone earns its lines.
+  const collected = CANONICAL_WORKFLOWS.filter((workflow) => docs[workflow.name] !== undefined);
+  if (collected.length > 0 && collected.every((workflow) => docs[workflow.name]?.text === null)) {
+    return [
+      {
+        severity: "warning",
+        check: "workflows.missing",
+        message:
+          `all ${collected.length} canonical workflow docs are absent from this store — ` +
+          `it was scaffolded before the docs shipped with the binary`,
+        fix: "run `nahel init`: it only writes what is absent, so one run restores the whole canonical set and overwrites nothing",
+      },
+    ];
+  }
+
   const findings: Finding[] = [];
   for (const workflow of CANONICAL_WORKFLOWS) {
     const doc = docs[workflow.name];

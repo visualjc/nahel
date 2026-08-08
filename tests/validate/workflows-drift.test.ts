@@ -89,19 +89,37 @@ describe("validate — canonical workflow drift (warnings only)", () => {
     expect(findingsFor(findings, "workflows.drift")).toEqual([]);
   });
 
-  test("a store scaffolded before the docs shipped warns once per canonical doc, and init heals all of them", async () => {
+  test("a store scaffolded before the docs shipped warns ONCE for the whole absent set — 18 lines would drown the brief", async () => {
     const fixture = await setupFixture(dirs);
     // A pre-v0.4.1 store: nahel/workflows/ never existed.
     await rm(workflowsDir(fixture.layout), { recursive: true, force: true });
 
     const findings = await validateStore(fixture.layout);
     const missing = findingsFor(findings, "workflows.missing");
-    console.log(`[workflows, pre-0.4.1 store] ${missing.length} missing`);
-    expect(missing).toHaveLength(CANONICAL_WORKFLOWS.length);
-    expect(missing.every((f) => f.severity === "warning")).toBe(true);
-    // One command heals the lot, and the hint says so.
-    expect(missing.every((f) => f.fix?.includes("nahel init"))).toBe(true);
+    console.log(`[workflows, pre-0.4.1 store] ${missing.length} finding(s) for the absent set`);
+    // The whole set absent is one condition, not eighteen: a single warning
+    // names the count, and one init heals the lot — the hint says so.
+    expect(missing).toHaveLength(1);
+    expect(missing[0]?.severity).toBe("warning");
+    expect(missing[0]?.message).toContain(`all ${CANONICAL_WORKFLOWS.length}`);
+    expect(missing[0]?.fix).toContain("nahel init");
     expect(findingsFor(findings, "workflows.drift")).toEqual([]);
+  });
+
+  test("PARTIAL absence stays per-file — naming exactly what is gone earns its lines", async () => {
+    const fixture = await setupFixture(dirs);
+    const first = CANONICAL_WORKFLOWS[0];
+    const second = CANONICAL_WORKFLOWS[1];
+    if (first === undefined || second === undefined) throw new Error("no canonical docs");
+    await rm(join(workflowsDir(fixture.layout), `${first.name}.md`), { force: true });
+    await rm(join(workflowsDir(fixture.layout), `${second.name}.md`), { force: true });
+
+    const findings = await validateStore(fixture.layout);
+    const missing = findingsFor(findings, "workflows.missing");
+    console.log(`[workflows, two deleted] ${missing.length} missing finding(s)`);
+    expect(missing).toHaveLength(2);
+    expect(missing.map((f) => f.message).join("\n")).toContain(`${first.name}.md`);
+    expect(missing.map((f) => f.message).join("\n")).toContain(`${second.name}.md`);
   });
 
   test("an extra non-canonical workflow doc is never flagged — additional workflows are the customization path", async () => {

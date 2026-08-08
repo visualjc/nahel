@@ -341,7 +341,19 @@ describe("readJournal — property: order is independent of segment discovery or
       const merged = await Array.fromAsync(mergeSegments(shuffled));
       expect(merged.map((e) => e.id)).toEqual(expected);
     }
-  });
+    // chore wsyxm6bp (test-suite-load-flakiness): this case is 120 appends —
+    // each one re-reading its segment for the next seq — plus 25 merge rounds
+    // over 6 segments, so ~390 file operations, and every one of them is
+    // charged the host's I/O contention. It was observed once at 5328ms
+    // against bun's 5s default during a full-suite run under a parallel epic
+    // build (~40ms in isolation; 53-59ms here even with 8 concurrent `bun
+    // test` processes, which is why the stall it hit is I/O contention rather
+    // than the CPU contention that load reproduces). The generation counts and
+    // every assertion are untouched — capping the rounds would cap the
+    // property, not the flakiness — so this only buys the same work more wall
+    // clock. 30s still catches any real regression: that is ~750x the
+    // isolated cost.
+  }, 30_000);
 });
 
 describe("listSegments", () => {

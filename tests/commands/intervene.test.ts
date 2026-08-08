@@ -558,7 +558,23 @@ describe("handback", () => {
     // repo state — byte-identical to an independent recomputation.
     const recomputed = await collectHandbackEvidence(root, baseline);
     expect(JSON.stringify(evidence)).toBe(JSON.stringify(recomputed));
-  });
+    // chore wsyxm6bp (test-suite-load-flakiness): the handback cases are the
+    // git-spawn-heaviest in this file — setup() alone is 6 synchronous git
+    // invocations, and claim + handback + the independent recomputation add
+    // ~10 more asynchronous ones. Under a full-suite run during a parallel
+    // epic build a handback case hit bun's 5s default in 2 of 8 runs (204ms
+    // here even with 8 concurrent `bun test` processes, and green in
+    // isolation), so what it outran was per-spawn I/O contention, not work
+    // this test does.
+    //
+    // The raise matters more than the lost minute: a timed-out case is NOT
+    // cancelled by bun, so its still-live git children keep running while
+    // afterEach rm -rf's the temp repo out from under them — the abandoned
+    // body then rejects against a deleted root and bun charges that rejection
+    // to whichever case is running by then. One slow handback cascades into a
+    // failure somewhere else entirely. Not timing out is what stops it.
+    // Assertions are untouched; 30s is ~150x the observed cost here.
+  }, 30_000);
 
   test("identical repo state yields byte-identical evidence across claim/handback cycles", async () => {
     const { root, layout, env } = await setup();
@@ -575,7 +591,10 @@ describe("handback", () => {
     expect(JSON.stringify(handbacks[1]!.payload["evidence"])).toBe(
       JSON.stringify(handbacks[0]!.payload["evidence"]),
     );
-  });
+    // Two full claim/handback cycles: the most git spawns of any case in this
+    // file, so it carries the same raise and the same reasoning as the case
+    // above (chore wsyxm6bp; 188ms under 8 concurrent `bun test` processes).
+  }, 30_000);
 
   test("refuses a non-claimant human, an agent, and an unclaimed item — journaling nothing", async () => {
     const { root, layout, env } = await setup();

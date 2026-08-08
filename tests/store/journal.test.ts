@@ -351,8 +351,8 @@ describe("readJournal — property: order is independent of segment discovery or
     // than the CPU contention that load reproduces). The generation counts and
     // every assertion are untouched — capping the rounds would cap the
     // property, not the flakiness — so this only buys the same work more wall
-    // clock. 30s still catches any real regression: that is 75x the isolated
-    // cost.
+    // clock. 30s still catches any real regression: that is ~750x the
+    // isolated cost.
   }, 30_000);
 });
 

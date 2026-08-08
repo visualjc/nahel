@@ -69,10 +69,41 @@ export async function createFileIfAbsent(path: string, data: string): Promise<bo
 }
 
 /**
+ * Ensure `line` is present in the file at `path`, and say what that took:
+ * `created` (no file — it is created holding exactly that line), `present`
+ * (the line already occurs ANYWHERE in the file, which is left byte-untouched)
+ * or `prepended` (the line goes in front, every existing byte kept after it,
+ * in one atomic write). Containment over the whole file, not just line 1: an
+ * import a user deliberately put mid-file is a real import and must not be
+ * duplicated — which is also what makes the operation idempotent under
+ * re-runs. Editing user content is the caller's call; this is the primitive
+ * that does it without ever losing bytes.
+ */
+export async function prependLineIfMissing(
+  path: string,
+  line: string,
+): Promise<"created" | "present" | "prepended"> {
+  const prefix = `${line}\n`;
+  if (await createFileIfAbsent(path, prefix)) return "created";
+  // Bytes in, bytes out: the raw buffer is what gets re-written, so a file
+  // that is not valid UTF-8 survives untouched — decoding is for DETECTION
+  // only. And the token must stand on whitespace boundaries: `@AGENTS.md-old`
+  // or `note:@AGENTS.md` is a mention, not the import.
+  const raw = await readFile(path);
+  const boundaryToken = new RegExp(
+    `(^|\\s)${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$)`,
+  );
+  if (boundaryToken.test(raw.toString("utf8"))) return "present";
+  await writeFileAtomic(path, Buffer.concat([Buffer.from(prefix, "utf8"), raw]));
+  return "prepended";
+}
+
+/**
  * Write `data` to `path` atomically: temp file in the same directory (same
  * filesystem, so rename is atomic), fsync, rename. Creates parent directories.
+ * Accepts a Buffer so byte-preserving rewrites never round-trip a decode.
  */
-export async function writeFileAtomic(path: string, data: string): Promise<void> {
+export async function writeFileAtomic(path: string, data: string | Buffer): Promise<void> {
   const dir = dirname(path);
   await mkdir(dir, { recursive: true });
   tempCounter += 1;

@@ -3192,8 +3192,14 @@ function checkWorkflowDrift(state: ParsedState): Finding[] {
   // brief's byte budget (18 warnings truncated the constitution section),
   // and the fix is a single command either way. Partial absence stays
   // per-file below, where naming exactly what is gone earns its lines.
+  // Guarded on the FULL embedded set, not just what the collector handed
+  // over: a partial input map whose entries all read null must fall through
+  // to per-file findings rather than claim "all N absent".
   const collected = CANONICAL_WORKFLOWS.filter((workflow) => docs[workflow.name] !== undefined);
-  if (collected.length > 0 && collected.every((workflow) => docs[workflow.name]?.text === null)) {
+  if (
+    collected.length === CANONICAL_WORKFLOWS.length &&
+    collected.every((workflow) => docs[workflow.name]?.text === null)
+  ) {
     return [
       {
         severity: "warning",

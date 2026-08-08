@@ -1,0 +1,2 @@
+{"id":"yzvpxbax","ts":"2026-08-08T23:03:38Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-n84xbpew"},"item":"n84xbpew","payload":{"summary":"scope: kickoff resolves to existing item n84xbpew/e2e-suite-mutates-path only; excluded unrelated test flakiness and distribution changes because this repair is limited to test-scoped binary install/build paths."}}
+{"id":"ajdnfeyt","ts":"2026-08-08T23:03:38Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-n84xbpew"},"payload":{}}

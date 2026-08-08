@@ -1,0 +1,2 @@
+{"id":"6qmsy24t","ts":"2026-08-08T23:02:55Z","seq":0,"type":"config.updated","actor":{"kind":"agent","id":"codex-n84xbpew"},"payload":{"section":"contract","value":{"launch":"bun run src/cli.ts --help","seed":"true","test":"bun test","healthcheck":"bun run src/cli.ts status","ports":[],"env":[]}}}
+{"id":"yjd96xna","ts":"2026-08-08T23:02:55Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-n84xbpew"},"payload":{}}

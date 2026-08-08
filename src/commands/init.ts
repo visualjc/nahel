@@ -3,8 +3,10 @@ import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
 import { CONFIG_UPDATED_EVENT_TYPE } from "../schema/events";
 import type { Config, Founding } from "../schema/records";
+import { CANONICAL_WORKFLOWS } from "../install/canonical-workflows";
+import { WORKFLOWS_RELATIVE_DIR } from "../install/workflow";
 import { parseActorSpec, resolveActor } from "../store/actor";
-import { readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
+import { createFileIfAbsent, readFrontmatterFile, writeFileAtomic } from "../store/frontmatter";
 import { appendEvent, newSessionSegmentId } from "../store/journal";
 import {
   ensureLayout,
@@ -12,6 +14,7 @@ import {
   readConfig,
   readTextFile,
   storeLayout,
+  workflowsDir,
   writeConfig,
 } from "../store/layout";
 import { closeStoreContext } from "../store/mutate";
@@ -21,8 +24,9 @@ import { productTemplate } from "../templates/product";
 
 /**
  * `nahel init` (PRD F2, F8.3): non-interactive scaffold. Creates the `nahel/`
- * structure, writes config with flag-overridable knowledge-path defaults, and
- * emits the three knowledge templates. Never overwrites human content:
+ * structure, writes config with flag-overridable knowledge-path defaults,
+ * emits the three knowledge templates, and lands the canonical workflow docs
+ * `nahel install` shims (bug mcm4ak0e). Never overwrites human content:
  * existing files are kept and reported, so re-running is always safe — a full
  * re-run no-ops, a partial one restores only what is missing (per the recorded
  * config, not fresh flags). The single exception is AGENTS.md's explicitly
@@ -200,6 +204,32 @@ async function runInit(argv: string[], ctx: CommandContext): Promise<number> {
       await writeFileAtomic(path, content);
       created.push(`${label} created`);
     }
+  }
+
+  // The canonical workflow docs ride along in the binary (bug mcm4ak0e): a
+  // scaffolded store gets them here, so `nahel install` has something to shim
+  // the moment init returns — the README quickstart's second command. Same
+  // never-overwrite rule as the templates, per doc: a copy the consumer has
+  // edited (or replaced) is kept and reported, so the pair of commands stays
+  // re-runnable forever.
+  const workflows = workflowsDir(layout);
+  let workflowsCreated = 0;
+  let workflowsKept = 0;
+  for (const workflow of CANONICAL_WORKFLOWS) {
+    const path = join(workflows, `${workflow.name}.md`);
+    if (await createFileIfAbsent(path, workflow.body)) {
+      workflowsCreated += 1;
+    } else {
+      workflowsKept += 1;
+    }
+  }
+  if (workflowsCreated > 0) {
+    created.push(`${WORKFLOWS_RELATIVE_DIR}/ — ${workflowsCreated} canonical workflow(s) created`);
+  }
+  if (workflowsKept > 0) {
+    kept.push(
+      `${WORKFLOWS_RELATIVE_DIR}/ — ${workflowsKept} workflow(s) exist — kept (never overwritten)`,
+    );
   }
 
   // AGENTS.md is the one merged file (PRD F8.3): a repo that already has one

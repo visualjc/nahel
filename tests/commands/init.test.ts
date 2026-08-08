@@ -665,3 +665,106 @@ describe("nahel init — hands-off founding (F9.4, F9.5)", () => {
     expect(rerun.stderr).toContain("nahel config set founding");
   });
 });
+
+/**
+ * Bug mcm4ak0e — `nahel init` shipped no workflows, so the README quickstart
+ * (`nahel init` then `nahel install --agent claude,codex`) died on "no workflow
+ * docs in nahel/workflows/ — nothing to install" in every repo except nahel's
+ * own. The canonical docs are THIS repo's `nahel/workflows/*.md`; init must
+ * carry them into every store it scaffolds, without ever overwriting a copy
+ * the consumer has since edited.
+ */
+
+/** This repo's canonical workflow docs — the single source init must ship. */
+const REPO_WORKFLOWS_DIR = join(import.meta.dir, "..", "..", "nahel", "workflows");
+
+function canonicalWorkflowFiles(): string[] {
+  return readdirSync(REPO_WORKFLOWS_DIR)
+    .filter((file) => file.endsWith(".md"))
+    .sort();
+}
+
+describe("nahel init — ships the canonical workflows (bug mcm4ak0e)", () => {
+  test("a fresh init writes every canonical workflow doc into nahel/workflows/, byte for byte", async () => {
+    const root = await makeRepo();
+    const result = await runCli(["init"], root);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+
+    const expected = canonicalWorkflowFiles();
+    expect(expected.length).toBeGreaterThan(0);
+    const shipped = join(root, "nahel", "workflows");
+    expect(readdirSync(shipped).filter((f) => f.endsWith(".md")).sort()).toEqual(expected);
+    for (const file of expected) {
+      expect(readFileSync(join(shipped, file), "utf8")).toBe(
+        readFileSync(join(REPO_WORKFLOWS_DIR, file), "utf8"),
+      );
+    }
+
+    // Init reports what it did, in its own voice.
+    console.log("[init stdout]\n" + result.stdout);
+    expect(result.stdout).toMatch(/nahel\/workflows/);
+    expect(result.stdout).toContain(String(expected.length));
+  });
+
+  test("re-run never overwrites a consumer's edited workflow copy — and says it kept it", async () => {
+    const root = await makeRepo();
+    expect((await runCli(["init"], root)).code).toBe(0);
+
+    // The consumer edits one canonical copy and deletes another.
+    const files = canonicalWorkflowFiles();
+    const edited = files[0]!;
+    const deleted = files[files.length - 1]!;
+    expect(deleted).not.toBe(edited);
+    const shipped = join(root, "nahel", "workflows");
+    const mine = "---\nname: mine\ndescription: my own\nargs: \"\"\n---\n\nMy edit.\n";
+    writeFileSync(join(shipped, edited), mine);
+    rmSync(join(shipped, deleted));
+
+    const rerun = await runCli(["init"], root);
+    expect(rerun.code).toBe(0);
+    console.log("[init re-run stdout]\n" + rerun.stdout);
+
+    // The edit survives byte for byte; only the missing doc is restored.
+    expect(readFileSync(join(shipped, edited), "utf8")).toBe(mine);
+    expect(readFileSync(join(shipped, deleted), "utf8")).toBe(
+      readFileSync(join(REPO_WORKFLOWS_DIR, deleted), "utf8"),
+    );
+    expect(rerun.stdout).toMatch(/nahel\/workflows.*(exist|kept|skipped)/);
+  });
+
+  test("a pristine re-run still no-ops: every workflow present, nothing created", async () => {
+    const root = await makeRepo();
+    expect((await runCli(["init"], root)).code).toBe(0);
+    const shipped = join(root, "nahel", "workflows");
+    const before = canonicalWorkflowFiles().map((f) => readFileSync(join(shipped, f), "utf8"));
+
+    const rerun = await runCli(["init"], root);
+    expect(rerun.code).toBe(0);
+    expect(rerun.stdout).toContain("already initialized");
+    expect(canonicalWorkflowFiles().map((f) => readFileSync(join(shipped, f), "utf8"))).toEqual(
+      before,
+    );
+  });
+
+  test("README quickstart composes: install --agent claude shims what init shipped", async () => {
+    const root = await makeRepo();
+    expect((await runCli(["init"], root)).code).toBe(0);
+
+    const install = await runCli(["install", "--agent", "claude"], root);
+    expect(install.stderr).toBe("");
+    expect(install.code).toBe(0);
+    console.log("[install stdout]\n" + install.stdout);
+
+    const names = canonicalWorkflowFiles();
+    expect(install.stdout).toContain(`installed ${names.length} shim(s) for agent claude`);
+    expect(install.stdout).not.toContain("nothing to install");
+
+    // One shim per canonical workflow, pointing back at the shipped doc.
+    const shimDir = join(root, ".claude", "commands", "nd");
+    expect(readdirSync(shimDir).sort()).toEqual(names);
+    for (const file of names) {
+      expect(readFileSync(join(shimDir, file), "utf8")).toContain(`nahel/workflows/${file}`);
+    }
+  });
+});

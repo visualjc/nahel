@@ -6,7 +6,8 @@
     "id": "codex-n84xbpew"
   },
   "lane": "direct",
-  "phase": "green",
-  "status": "active",
-  "started": "2026-08-08T23:03:56Z"
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-08T23:03:56Z",
+  "ended": "2026-08-08T23:12:53Z"
 }

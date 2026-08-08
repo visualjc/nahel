@@ -1,8 +1,10 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CANONICAL_WORKFLOWS } from "../../src/install/canonical-workflows";
 import type { Env } from "../../src/schema/env";
 import { generateId } from "../../src/schema/id";
+import { workflowsDir, type StoreLayout } from "../../src/store/layout";
 import type {
   Config,
   ObservationFrontmatter,
@@ -38,6 +40,21 @@ export function seededEnv(
 /** Fresh real temp directory for a test; caller may rm it in afterEach. */
 export async function makeTempDir(prefix = "nahel-store-"): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
+}
+
+/**
+ * Lay down the canonical workflow docs exactly as `nahel init` does (v0.4.1,
+ * bug mcm4ak0e). Fixtures that scaffold a store through `ensureLayout` rather
+ * than through the init command would otherwise be a store no init ever
+ * touched — which `workflows.missing` reports, correctly. Seeding here keeps
+ * every fixture the thing it claims to be: a real, initialized store.
+ */
+export async function seedCanonicalWorkflows(layout: StoreLayout): Promise<void> {
+  const dir = workflowsDir(layout);
+  await mkdir(dir, { recursive: true });
+  for (const workflow of CANONICAL_WORKFLOWS) {
+    await writeFile(join(dir, `${workflow.name}.md`), workflow.body, "utf8");
+  }
 }
 
 /** A valid config record for tests. */

@@ -75,6 +75,27 @@ const WATCHDOG_TOOLS = ["bash", "perl", "sleep", "cat", "printf"];
 /** TERM->KILL grace the watchdog promises. */
 const KILL_AFTER_SECONDS = 2;
 
+/**
+ * The watchdog window the TERM-ignoring-child cases give their child before
+ * TERM lands. It has to exceed that child's *startup* latency: the child is a
+ * perl interpreter, and it is only TERM-ignoring — and has only written its
+ * pid file — once it is actually up. If the cap fires first, TERM kills a
+ * still-starting perl outright, the group drains at the cap with no KILL
+ * escalation, and the pid file is never written: the case then dies on ENOENT
+ * reading the pid file rather than on any assertion of its own.
+ *
+ * chore wsyxm6bp (test-suite-load-flakiness): 1s was under that latency. This
+ * exact fixture's ready-latency measures median 168ms / max 253ms idle, but
+ * median 1345ms / max 1479ms with 8 concurrent `bun test` processes on a
+ * 12-core host — 10 of 12 samples past 1s. "waits for the whole group to
+ * drain" duly failed on the ENOENT in 2 of 2 full-suite runs under that load,
+ * at 1075ms and 1072ms (it takes ~3s when healthy), and never in isolation.
+ * 4s clears the measured worst case by 2.7x. Every assertion below is
+ * unchanged and stays expressed relative to this cap, so widening the window
+ * the child gets to become TERM-ignoring proves exactly what it proved before.
+ */
+const TERM_IGNORING_CAP_SECONDS = 4;
+
 /** Pids that must not survive a test; killed in afterEach so a red run leaks nothing. */
 const strayPids: number[] = [];
 
@@ -199,13 +220,16 @@ describe("with-timeout.sh — the watchdog", () => {
     const { path, pidFile } = await termIgnoringScript();
 
     const started = Date.now();
-    const result = await runWithPath(`with_timeout 1 ${path}; echo "rc=$?"`, bin);
+    const result = await runWithPath(
+      `with_timeout ${TERM_IGNORING_CAP_SECONDS} ${path}; echo "rc=$?"`,
+      bin,
+    );
     const elapsed = Date.now() - started;
 
     expect(result.stdout.trim()).toBe("rc=124");
     expect(await died(await readPid(pidFile))).toBe(true);
-    // 1s cap + the grace, not the child's 60s sleep.
-    expect(elapsed).toBeLessThan((1 + KILL_AFTER_SECONDS + 6) * 1000);
+    // The cap + the grace, not the child's 60s sleep.
+    expect(elapsed).toBeLessThan((TERM_IGNORING_CAP_SECONDS + KILL_AFTER_SECONDS + 6) * 1000);
   }, 30000);
 
   test("waits for the whole group to drain, not just the direct child", async () => {
@@ -218,7 +242,7 @@ describe("with-timeout.sh — the watchdog", () => {
     // surviving descendant fails the assertion instead of wedging the pipe.
     const started = Date.now();
     const result = await runWithPath(
-      `with_timeout 1 bash -c '${path} >/dev/null 2>&1 & wait'; echo "rc=$?"`,
+      `with_timeout ${TERM_IGNORING_CAP_SECONDS} bash -c '${path} >/dev/null 2>&1 & wait'; echo "rc=$?"`,
       bin,
     );
     const elapsed = Date.now() - started;
@@ -226,7 +250,9 @@ describe("with-timeout.sh — the watchdog", () => {
     expect(result.stdout.trim()).toBe("rc=124");
     expect(await died(await readPid(pidFile))).toBe(true);
     // The KILL escalation must have been charged: TERM alone never stops it.
-    expect(elapsed).toBeGreaterThanOrEqual((1 + KILL_AFTER_SECONDS) * 1000 - 500);
+    expect(elapsed).toBeGreaterThanOrEqual(
+      (TERM_IGNORING_CAP_SECONDS + KILL_AFTER_SECONDS) * 1000 - 500,
+    );
   }, 30000);
 
   test("kills the whole process tree, so descendants do not outlive the timeout", async () => {
@@ -237,6 +263,12 @@ describe("with-timeout.sh — the watchdog", () => {
 
     // The direct child is bash; `sleep` is its grandchild. Signalling only the
     // direct pid reaps bash and orphans the sleep.
+    //
+    // This one keeps the 1s cap on purpose (chore wsyxm6bp): its pid file is
+    // written by bash from `$!`, known the instant the fork returns, so there
+    // is no interpreter startup to outrun — unlike the TERM-ignoring perl
+    // child above, which is why that fixture needs the wider window and this
+    // one does not.
     const result = await runWithPath(
       `with_timeout 1 bash -c 'sleep 60 & echo $! > "$DESCFILE"; wait'; echo "rc=$?"`,
       bin,

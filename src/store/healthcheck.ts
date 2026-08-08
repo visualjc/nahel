@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { Contract } from "../schema/records";
 import { MAX_OUTPUT_BYTES } from "./exec";
 
 /**
@@ -67,4 +68,32 @@ export async function runHealthcheck(
     }
     return { ok: false, exitCode: typeof code === "number" ? code : null, timedOut: false };
   }
+}
+
+/** A contract healthcheck as run: the command, the deadline it ran under, and its outcome. */
+export interface ContractHealthcheckRun extends HealthcheckResult {
+  /** The committed command string, safe to echo (no secrets by contract). */
+  command: string;
+  /** The deadline actually applied — the contract's, or the default. */
+  timeoutSeconds: number;
+}
+
+/**
+ * Run the CONTRACT's healthcheck, deadline and all — the one place that knows
+ * how a contract's healthcheck is executed. Two callers need exactly this and
+ * must not drift: `nahel doctor` reports the verdict, and `nahel dispatch`
+ * preflights it before spawning a worker (chore f35q1rax). A contract that
+ * defines no healthcheck answers `undefined` — nothing to run is not a
+ * failure — so each caller phrases "nothing to check" in its own words.
+ */
+export async function runContractHealthcheck(
+  contract: Pick<Contract, "healthcheck" | "healthcheck_timeout_seconds">,
+  cwd: string,
+): Promise<ContractHealthcheckRun | undefined> {
+  const command = contract.healthcheck;
+  if (command === undefined) return undefined;
+  const timeoutSeconds =
+    contract.healthcheck_timeout_seconds ?? DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS;
+  const result = await runHealthcheck(command, cwd, timeoutSeconds);
+  return { ...result, command, timeoutSeconds };
 }

@@ -385,6 +385,39 @@ describe("decision-row reconstruction", () => {
     expect(rows.find((row) => row.ticketId === sameTimeTicket)?.provenance).toEqual(["agent"]);
   });
 
+  test("does not infer human provenance from prose or multiple agent sources", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-proof-negatives-", 932);
+    const { map } = await chart(env, root, "proof-negatives");
+
+    const proseSource = await note(
+      env,
+      root,
+      "Jim chose this; I am only relaying the human decision.",
+      "agent:codex:research",
+    );
+    const proseTicket = await createTicket(env, root, map, "grilling", "prose claim");
+    await resolveTicket(env, root, proseTicket, "Relay the claimed human choice.", [proseSource]);
+    await note(
+      env,
+      root,
+      `Human prose mentions ${proseTicket} but carries no structured ticket link.`,
+      "human:jim:review",
+    );
+
+    const firstAgentSource = await note(env, root, "First agent opinion.", "agent:codex");
+    const secondAgentSource = await note(env, root, "Second agent opinion.", "agent:cursor");
+    const multiAgentTicket = await createTicket(env, root, map, "grilling", "multi-agent claim");
+    await resolveTicket(env, root, multiAgentTicket, "Use the cross-agent recommendation.", [
+      firstAgentSource,
+      secondAgentSource,
+    ]);
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows.find((row) => row.ticketId === proseTicket)?.provenance).toEqual(["agent"]);
+    expect(rows.find((row) => row.ticketId === multiAgentTicket)?.provenance).toEqual(["agent"]);
+  });
+
   test("keeps delegated, ratified, and incomplete badges additive", async () => {
     const { root, layout, env } = await setupStore("nahel-decisions-additive-", 94);
     const { node, map } = await chart(env, root, "additive-provenance");

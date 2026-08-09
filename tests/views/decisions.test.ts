@@ -605,6 +605,50 @@ describe("decision-row reconstruction", () => {
     expect(row).not.toHaveProperty("observationId");
   });
 
+  test("does not substitute a lookalike for the observation embedded in the resolution", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-lookalike-observation-", 254);
+    const { map } = await chart(env, root, "lookalike-observation-feature");
+    const ticket = await createTicket(env, root, map, "grilling", "lookalike observation");
+    await resolveTicket(env, root, ticket, "Keep provenance tied to the canonical observation.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    const canonicalObservation = await observationIdFor(layout, ticket);
+    const humanSource = await note(
+      env,
+      root,
+      "A human source cited only by the lookalike.",
+      "human:jim:planning",
+    );
+    expect(
+      await observeCommand.run(
+        [
+          `decision-${ticket}`,
+          "--data",
+          `sources=["${resolution}","${humanSource}"]`,
+          "--data",
+          "body=Unproved lookalike observation.",
+        ],
+        env,
+        root,
+      ),
+    ).toBe(0);
+    await rm(observationPath(layout, canonicalObservation));
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      resolutionEventId: resolution,
+      resolver: { kind: "agent", id: "claude-code" },
+      citedSourceEventIds: [],
+      sourceEvents: [],
+      missingSourceEventIds: [],
+      missing: ["observation"],
+      incomplete: true,
+      provenance: ["agent", "incomplete"],
+    });
+    expect(row).not.toHaveProperty("observationId");
+  });
+
   test("includes every resolved ticket type across maps and excludes every other state", async () => {
     const { root, layout, env } = await setupStore("nahel-decisions-types-", 303);
     const first = await chart(env, root, "first-feature");

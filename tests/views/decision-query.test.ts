@@ -62,4 +62,28 @@ describe("decision query", () => {
     expect(relative.map((row) => row.ticketId)).toEqual(["ticket02", "ticket03"]);
     expect(absolute).toEqual(relative);
   });
+
+  test("--by accepts kind selectors and exact kind:id[:session] actors", async () => {
+    const store = await layout();
+    const human = datedRow("ticket11", "2026-08-08T09:00:00Z");
+    human.resolver = { kind: "human", id: "jim", session: "review" };
+    human.provenance = ["direct-human"];
+    const agent = datedRow("ticket12", "2026-08-08T10:00:00Z");
+    const sessionAgent = datedRow("ticket13", "2026-08-08T11:00:00Z");
+    sessionAgent.resolver = { kind: "agent", id: "codex", session: "pairing" };
+    const rows = [human, agent, sessionAgent];
+    const ids = async (selector: string) =>
+      (
+        await queryDecisionRows(rows, ["--by", selector], {
+          layout: store,
+          now: NOW,
+        })
+      ).map((row) => row.ticketId);
+
+    expect(await ids("human")).toEqual(["ticket11"]);
+    expect(await ids("agent")).toEqual(["ticket12", "ticket13"]);
+    expect(await ids("human:jim:review")).toEqual(["ticket11"]);
+    expect(await ids("agent:codex")).toEqual(["ticket12"]);
+    expect(await ids("agent:codex:pairing")).toEqual(["ticket13"]);
+  });
 });

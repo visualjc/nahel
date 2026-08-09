@@ -130,6 +130,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     if (delegated) provenance.push("delegated");
     if (ratified) provenance.push("ratified");
     if (validResolution?.actor.kind === "agent" && !delegated) provenance.push("agent");
+    if (missing.length > 0) provenance.push("incomplete");
 
     return {
       ticketId: ticket.id,

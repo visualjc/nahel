@@ -19,6 +19,13 @@ export type DecisionRowMissingJoin =
   | "observation"
   | "source-event";
 
+export type DecisionProvenance =
+  | "direct-human"
+  | "delegated"
+  | "ratified"
+  | "agent"
+  | "incomplete";
+
 export interface DecisionRow {
   ticketId: string;
   ticketType: DecisionTicketType;
@@ -36,6 +43,7 @@ export interface DecisionRow {
   missingSourceEventIds: string[];
   missing: DecisionRowMissingJoin[];
   incomplete: boolean;
+  provenance: DecisionProvenance[];
 }
 
 function resolutionForTicket(
@@ -131,6 +139,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       missingSourceEventIds,
       missing,
       incomplete: missing.length > 0,
+      provenance: validResolution?.actor.kind === "human" ? ["direct-human"] : [],
     };
   });
 }

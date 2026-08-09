@@ -38,6 +38,23 @@ export interface DecisionRow {
   incomplete: boolean;
 }
 
+function resolutionBelongsToTicket(event: JournalEvent | undefined, ticketId: string): boolean {
+  if (event?.type !== CORE_EVENT_TYPES.ticketResolved) return false;
+  const records = event.payload["records"];
+  if (event.payload["target"] !== "sequence" || !Array.isArray(records)) return false;
+  return records.some((entry) => {
+    if (entry === null || typeof entry !== "object") return false;
+    const fields = entry as Record<string, unknown>;
+    if (fields["target"] !== "ticket") return false;
+    const record = fields["record"];
+    return (
+      record !== null &&
+      typeof record === "object" &&
+      (record as Record<string, unknown>)["id"] === ticketId
+    );
+  });
+}
+
 /**
  * Rebuild the decision candidates from current durable store facts. This read
  * has no cache or materialized-row lifecycle: a repaired join is visible on
@@ -63,6 +80,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     const node = map === undefined ? undefined : nodes.get(map.frontmatter.node);
     const resolution =
       ticket.resolution === undefined ? undefined : events.get(ticket.resolution);
+    const hasResolution = resolutionBelongsToTicket(resolution, ticket.id);
     const observation = observations.find(
       ({ frontmatter }) =>
         frontmatter.name === `decision-${ticket.id}` &&
@@ -77,7 +95,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     const missingSourceEventIds = citedSourceEventIds.filter((id) => !events.has(id));
     const missing: DecisionRowMissingJoin[] = [];
     if (ticket.decision === undefined) missing.push("decision");
-    if (resolution?.type !== CORE_EVENT_TYPES.ticketResolved) missing.push("resolution-event");
+    if (!hasResolution) missing.push("resolution-event");
     if (map === undefined) missing.push("map");
     else if (node === undefined) missing.push("node");
     if (observation === undefined) missing.push("observation");
@@ -91,7 +109,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       ...(map === undefined ? {} : { nodeId: map.frontmatter.node }),
       ...(node === undefined ? {} : { nodeName: node.frontmatter.name }),
       ...(ticket.resolution === undefined ? {} : { resolutionEventId: ticket.resolution }),
-      ...(resolution?.type !== CORE_EVENT_TYPES.ticketResolved
+      ...(!hasResolution
         ? {}
         : {
             resolvedAt: resolution.ts,

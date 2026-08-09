@@ -16,6 +16,7 @@ import {
   readTicket,
   roadmapNodePath,
   writeConfig,
+  writeTicket,
   type StoreLayout,
 } from "../../src/store/layout";
 import { reconstructDecisionRows } from "../../src/views/decisions";
@@ -359,6 +360,43 @@ describe("decision-row reconstruction", () => {
       expect(rows[0]).not.toHaveProperty("resolvedAt");
       expect(rows[0]).not.toHaveProperty("resolutionOrder");
     }
+  });
+
+  test("does not borrow resolution facts from another ticket's event", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-wrong-resolution-", 252);
+    const { node, map } = await chart(env, root, "wrong-resolution-feature");
+    const ticket = await createTicket(env, root, map, "research", "original");
+    const otherTicket = await createTicket(env, root, map, "task", "other");
+    await resolveTicket(env, root, ticket, "Keep this ticket's durable decision.");
+    await roadmap(
+      env,
+      root,
+      ["ticket", "resolve", otherTicket, "--decision", "Do not borrow this resolution."],
+      "human:jim:review",
+    );
+    const current = await readTicket(layout, ticket);
+    const otherResolution = (await readTicket(layout, otherTicket)).frontmatter.resolution!;
+    await writeTicket(
+      layout,
+      { ...current.frontmatter, resolution: otherResolution },
+      current.body,
+    );
+
+    const rows = await reconstructDecisionRows(layout);
+    const row = rows.find((candidate) => candidate.ticketId === ticket)!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      decision: "Keep this ticket's durable decision.",
+      mapId: map,
+      nodeId: node,
+      resolutionEventId: otherResolution,
+      missing: ["resolution-event", "observation"],
+      incomplete: true,
+    });
+    expect(row).not.toHaveProperty("resolver");
+    expect(row).not.toHaveProperty("resolvedAt");
+    expect(row).not.toHaveProperty("resolutionOrder");
   });
 
   test("includes every resolved ticket type across maps and excludes every other state", async () => {

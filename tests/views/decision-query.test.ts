@@ -160,4 +160,21 @@ describe("decision query", () => {
     expect(await ids("agent")).toEqual(["ticket33", "ticket34"]);
     expect(await ids("incomplete")).toEqual(["ticket34"]);
   });
+
+  test("--limit keeps the newest positive-N slice and returns it oldest to newest", async () => {
+    const store = await layout();
+    const rows = [
+      datedRow("ticket44", "2026-08-08T11:00:00Z"),
+      datedRow("ticket41", "2026-08-08T08:00:00Z"),
+      datedRow("ticket43", "2026-08-08T10:00:00Z"),
+      datedRow("ticket42", "2026-08-08T09:00:00Z"),
+    ];
+
+    const selected = await queryDecisionRows(rows, ["--limit", "2"], {
+      layout: store,
+      now: NOW,
+    });
+
+    expect(selected.map((row) => row.ticketId)).toEqual(["ticket43", "ticket44"]);
+  });
 });

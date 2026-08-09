@@ -139,7 +139,12 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       missingSourceEventIds,
       missing,
       incomplete: missing.length > 0,
-      provenance: validResolution?.actor.kind === "human" ? ["direct-human"] : [],
+      provenance:
+        validResolution?.actor.kind === "human"
+          ? ["direct-human"]
+          : validResolution?.actor.kind === "agent"
+            ? ["agent"]
+            : [],
     };
   });
 }

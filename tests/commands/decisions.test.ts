@@ -159,6 +159,10 @@ describe("nahel decisions — public CLI rendering", () => {
 
     expect(rendered).toContain("  ticket ticket02 · map map00002");
     expect(rendered).not.toContain("node undefined");
+    expect(rendered).not.toContain("nahel roadmap map show map00002");
+    expect(rendered).toContain("nahel roadmap ticket show ticket02");
+    expect(rendered).toContain("nahel recall ticket02");
+    expect(rendered).toContain("nahel validate");
   });
 
   test("an empty result points only to focused help and fabricates no evidence target", async () => {

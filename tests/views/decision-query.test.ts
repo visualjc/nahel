@@ -261,4 +261,27 @@ describe("decision query", () => {
 
     expect(selected.map((row) => row.ticketId)).toEqual(["ticket51"]);
   });
+
+  test("same-time dated rows order by resolution seq then event id", async () => {
+    const store = await layout();
+    const timestamp = "2026-08-08T11:00:00Z";
+    const seqOneHighId = datedRow("aaaaaa01", timestamp);
+    seqOneHighId.resolutionOrder = { ts: timestamp, seq: 1, id: "zzzzzz01" };
+    const seqZero = datedRow("zzzzzz01", timestamp);
+    seqZero.resolutionOrder = { ts: timestamp, seq: 0, id: "zzzzzz02" };
+    const seqOneLowId = datedRow("mmmmmm01", timestamp);
+    seqOneLowId.resolutionOrder = { ts: timestamp, seq: 1, id: "aaaaaa01" };
+
+    const selected = await queryDecisionRows(
+      [seqOneHighId, seqZero, seqOneLowId],
+      [],
+      { layout: store, now: NOW },
+    );
+
+    expect(selected.map((row) => row.ticketId)).toEqual([
+      "zzzzzz01",
+      "mmmmmm01",
+      "aaaaaa01",
+    ]);
+  });
 });

@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CommandContext } from "../../src/cli";
-import { logCommand } from "../../src/commands/log";
+import { logCommand, type LogCommandContext } from "../../src/commands/log";
 import { observeCommand } from "../../src/commands/observe";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
@@ -191,13 +190,19 @@ async function resolveTicket(
   ]);
 }
 
-async function note(env: Env, root: string, summary: string): Promise<string> {
+async function note(
+  env: Env,
+  root: string,
+  summary: string,
+  actorOverride?: string,
+): Promise<string> {
   const output: string[] = [];
-  const ctx: CommandContext = {
+  const ctx: LogCommandContext = {
     env,
     cwd: root,
     stdout: (text) => output.push(text),
     stderr: (text) => errors.push(text),
+    ...(actorOverride === undefined ? {} : { actorOverride }),
   };
   expect(await logCommand.run(["note", "--data", `summary=${summary}`], ctx)).toBe(0);
   const id = /event ([0-9a-z]{8})/.exec(output.join("\n"))?.[1];
@@ -304,6 +309,27 @@ describe("decision-row reconstruction", () => {
 
     expect(row.resolver).toEqual({ kind: "agent", id: "claude-code" });
     expect(row.provenance).toEqual(["agent"]);
+  });
+
+  test("classifies an agent resolution citing a human-attributed source as delegated", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-delegated-", 92);
+    const { map } = await chart(env, root, "delegated-provenance");
+    const source = await note(
+      env,
+      root,
+      "Delegate this exact decision ticket.",
+      "human:jim:planning",
+    );
+    const ticket = await createTicket(env, root, map, "grilling", "delegated provenance");
+    await resolveTicket(env, root, ticket, "Use the delegated recommendation.", [source]);
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.resolver).toEqual({ kind: "agent", id: "claude-code" });
+    expect(row.sourceEvents.map((event) => event.actor)).toEqual([
+      { kind: "human", id: "jim", session: "planning" },
+    ]);
+    expect(row.provenance).toEqual(["delegated"]);
   });
 
   test("keeps a linked decision incomplete when its resolution actor or time is malformed", async () => {

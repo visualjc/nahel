@@ -355,6 +355,26 @@ describe("decision-row reconstruction", () => {
     expect(row.provenance).toEqual(["ratified", "agent"]);
   });
 
+  test("keeps delegated, ratified, and incomplete badges additive", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-additive-", 94);
+    const { node, map } = await chart(env, root, "additive-provenance");
+    const source = await note(
+      env,
+      root,
+      "Delegate this exact ticket.",
+      "human:jim:planning",
+    );
+    const ticket = await createTicket(env, root, map, "grilling", "additive provenance");
+    await resolveTicket(env, root, ticket, "Use the delegated recommendation.", [source]);
+    await note(env, root, "Ratified after review.", "human:jim:review", ticket);
+    await rm(roadmapNodePath(layout, node));
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.missing).toEqual(["node"]);
+    expect(row.provenance).toEqual(["delegated", "ratified", "incomplete"]);
+  });
+
   test("keeps a linked decision incomplete when its resolution actor or time is malformed", async () => {
     for (const field of ["actor", "ts"] as const) {
       const root = await makeTempDir(`nahel-decisions-missing-${field}-`);

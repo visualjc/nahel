@@ -106,6 +106,9 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       return event === undefined ? [] : [event];
     });
     const missingSourceEventIds = citedSourceEventIds.filter((id) => !events.has(id));
+    const delegated =
+      validResolution?.actor.kind === "agent" &&
+      sourceEvents.some((event) => event.actor.kind === "human");
     const missing: DecisionRowMissingJoin[] = [];
     if (ticket.decision === undefined) missing.push("decision");
     if (validResolution === undefined) missing.push("resolution-event");
@@ -142,7 +145,9 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       provenance:
         validResolution?.actor.kind === "human"
           ? ["direct-human"]
-          : validResolution?.actor.kind === "agent"
+          : delegated
+            ? ["delegated"]
+            : validResolution?.actor.kind === "agent"
             ? ["agent"]
             : [],
     };

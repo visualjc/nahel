@@ -3,7 +3,7 @@ import type { Actor } from "../schema/records";
 import { parseActorSpec } from "../store/actor";
 import { resolveMap, type StoreLayout } from "../store/layout";
 import { resolveSince } from "./standup";
-import type { DecisionRow } from "./decisions";
+import type { DecisionProvenance, DecisionRow } from "./decisions";
 
 export type { DecisionRow } from "./decisions";
 
@@ -11,6 +11,14 @@ export interface DecisionQueryContext {
   layout: StoreLayout;
   now: string;
 }
+
+const PROVENANCE_BADGES: readonly DecisionProvenance[] = [
+  "direct-human",
+  "delegated",
+  "ratified",
+  "agent",
+  "incomplete",
+];
 
 /** Apply the decision ledger's query arguments to reconstructed decision rows. */
 export async function queryDecisionRows(
@@ -24,6 +32,7 @@ export async function queryDecisionRows(
       since: { type: "string" },
       by: { type: "string" },
       map: { type: "string" },
+      provenance: { type: "string" },
     },
     strict: true,
     allowPositionals: true,
@@ -51,6 +60,18 @@ export async function queryDecisionRows(
       );
     }
     selected = selected.filter((row) => row.mapId === map.frontmatter.id);
+  }
+  if (values.provenance !== undefined) {
+    if (!(PROVENANCE_BADGES as readonly string[]).includes(values.provenance)) {
+      throw new Error(
+        `invalid --provenance ${JSON.stringify(values.provenance)} — expected ${PROVENANCE_BADGES.join(
+          ", ",
+        )}`,
+      );
+    }
+    selected = selected.filter((row) =>
+      row.provenance.includes(values.provenance as DecisionProvenance),
+    );
   }
   if (values.since === undefined) return selected;
 

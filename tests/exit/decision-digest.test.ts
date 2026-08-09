@@ -147,6 +147,8 @@ describe("Decision Digest — composed comprehensive exit", () => {
       expect(archived.ticket).toBe(resolved.distilled);
       expect(incomplete.ticket).toBe(provenance.incomplete);
       expect(tie.ticketsInOrder).toHaveLength(2);
+      expect(tie.timestamp).toBe("2026-08-09T11:30:00Z");
+      expect(tie.seq).toBe(0);
 
       const beforeReads = await snapshotTree(root);
       const workflowBytes = subtree(beforeReads, "nahel/workflows/");
@@ -257,7 +259,7 @@ describe("Decision Digest — composed comprehensive exit", () => {
       expect(ticketIds(widened)).toHaveLength(14);
       expect(widened).not.toContain(closures.outOfScope);
       expect(widened).not.toContain(closures.invalidated);
-      expect(widened).toContain(archived.resolutionEvent);
+      expect(ticketIds(widened)).toContain(archived.ticket);
       expect(widened.indexOf(tie.ticketsInOrder[0])).toBeLessThan(
         widened.indexOf(tie.ticketsInOrder[1]),
       );

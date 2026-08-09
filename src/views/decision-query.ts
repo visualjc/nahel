@@ -107,14 +107,20 @@ function collectNewest(rows: readonly DecisionRow[], limit: number): DecisionRow
 }
 
 function compareRows(a: DecisionRow, b: DecisionRow): number {
-  if (a.resolutionOrder !== undefined && b.resolutionOrder !== undefined) {
-    const byTimestamp = a.resolutionOrder.ts.localeCompare(b.resolutionOrder.ts);
+  const aOrder = a.resolutionOrder;
+  const bOrder = b.resolutionOrder;
+  if (aOrder === undefined || bOrder === undefined) {
+    if (aOrder !== undefined) return -1;
+    if (bOrder !== undefined) return 1;
+    return a.ticketId.localeCompare(b.ticketId);
+  }
+  {
+    const byTimestamp = aOrder.ts.localeCompare(bOrder.ts);
     if (byTimestamp !== 0) return byTimestamp;
-    const bySequence = a.resolutionOrder.seq - b.resolutionOrder.seq;
+    const bySequence = aOrder.seq - bOrder.seq;
     if (bySequence !== 0) return bySequence;
-    const byEvent = a.resolutionOrder.id.localeCompare(b.resolutionOrder.id);
+    const byEvent = aOrder.id.localeCompare(bOrder.id);
     if (byEvent !== 0) return byEvent;
   }
-  const byTime = (a.resolvedAt ?? "").localeCompare(b.resolvedAt ?? "");
-  return byTime !== 0 ? byTime : a.ticketId.localeCompare(b.ticketId);
+  return a.ticketId.localeCompare(b.ticketId);
 }

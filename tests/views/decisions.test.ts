@@ -7,6 +7,7 @@ import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
 import { appendEvent, listSegments, newSessionSegmentId } from "../../src/store/journal";
+import { replayPending } from "../../src/store/mutate";
 import {
   ensureLayout,
   listObservations,
@@ -23,6 +24,7 @@ import {
   reconstructDecisionRows,
   type DecisionProvenance,
 } from "../../src/views/decisions";
+import { queryDecisionRows } from "../../src/views/decision-query";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 let dirs: string[] = [];
@@ -805,5 +807,33 @@ describe("decision-row reconstruction", () => {
       incomplete: false,
     });
     expect(after[0]?.resolvedAt).toMatch(/^2026-/);
+  });
+
+  test("the incomplete query matches before durable repair and not after, without duplicates", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-query-repair-", 808);
+    const { map } = await chart(env, root, "query-repair-feature");
+    const ticket = await createTicket(env, root, map, "task", "query repair");
+    await resolveTicket(env, root, ticket, "Repair upgrades this query row in place.");
+    await rm(observationPath(layout, await observationIdFor(layout, ticket)));
+
+    const before = await queryDecisionRows(
+      await reconstructDecisionRows(layout),
+      ["--provenance", "incomplete"],
+      { layout, now: "2026-08-08T12:00:00Z" },
+    );
+    expect(before.map((row) => row.ticketId)).toEqual([ticket]);
+
+    expect((await replayPending(layout)).map((record) => record.target)).toEqual([
+      "observation",
+    ]);
+    const reconstructed = await reconstructDecisionRows(layout);
+    const incompleteAfter = await queryDecisionRows(
+      reconstructed,
+      ["--provenance", "incomplete"],
+      { layout, now: "2026-08-08T12:00:00Z" },
+    );
+
+    expect(incompleteAfter).toEqual([]);
+    expect(reconstructed.map((row) => row.ticketId)).toEqual([ticket]);
   });
 });

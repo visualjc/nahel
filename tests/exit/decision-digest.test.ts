@@ -164,6 +164,12 @@ describe("Decision Digest — composed comprehensive exit", () => {
       expect(ok(await drive(["decisions", "-h"]), "decisions -h").stdout).toBe(decisionsHelp);
       expect(decisionsHelp).toContain("Read-only: writes nothing and journals nothing.");
       expect(decisionsHelp).toContain("nahel decisions --since 30d --limit 50");
+      const mapHelpExample = ok(
+        await drive(["decisions", "--map", "decision-digest"]),
+        "map help example",
+      ).stdout;
+      expect(ticketIds(mapHelpExample).length).toBeGreaterThan(0);
+      expect(mapHelpExample).toContain(`map decision-digest (${maps.primary.map})`);
 
       // Compact default: 14 eligible rows become the newest 10, displayed
       // oldest-to-newest. The only ambiguity is the deliberate timestamp tie,

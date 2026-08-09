@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
-import { ensureLayout, type StoreLayout } from "../../src/store/layout";
+import {
+  ensureLayout,
+  writeMap,
+  writeRoadmapNode,
+  type StoreLayout,
+} from "../../src/store/layout";
 import {
   queryDecisionRows,
   type DecisionRow,
@@ -85,5 +90,49 @@ describe("decision query", () => {
     expect(await ids("human:jim:review")).toEqual(["ticket11"]);
     expect(await ids("agent:codex")).toEqual(["ticket12"]);
     expect(await ids("agent:codex:pairing")).toEqual(["ticket13"]);
+  });
+
+  test("--map accepts a map id or its roadmap node id or slug", async () => {
+    const store = await layout();
+    await writeRoadmapNode(
+      store,
+      {
+        id: "n0de0001",
+        name: "first-feature",
+        kind: "feature",
+        horizon: "now",
+        created: NOW,
+        updated: NOW,
+      },
+      "First feature.",
+    );
+    await writeMap(
+      store,
+      {
+        id: "map00001",
+        node: "n0de0001",
+        destination: "First destination.",
+        fog: [],
+        out_of_scope: [],
+        created: NOW,
+        updated: NOW,
+      },
+      "",
+    );
+    const first = datedRow("ticket21", "2026-08-08T10:00:00Z");
+    const second = datedRow("ticket22", "2026-08-08T11:00:00Z");
+    second.mapId = "map00002";
+    const rows = [first, second];
+    const ids = async (ref: string) =>
+      (
+        await queryDecisionRows(rows, ["--map", ref], {
+          layout: store,
+          now: NOW,
+        })
+      ).map((row) => row.ticketId);
+
+    expect(await ids("map00001")).toEqual(["ticket21"]);
+    expect(await ids("n0de0001")).toEqual(["ticket21"]);
+    expect(await ids("first-feature")).toEqual(["ticket21"]);
   });
 });

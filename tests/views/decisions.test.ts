@@ -531,6 +531,37 @@ describe("decision-row reconstruction", () => {
     }
   });
 
+  test("treats duplicate resolution event ids as ambiguous instead of choosing one", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-duplicate-resolution-", 251);
+    const { map } = await chart(env, root, "duplicate-resolution-feature");
+    const ticket = await createTicket(env, root, map, "task", "duplicate resolution");
+    await resolveTicket(env, root, ticket, "Keep ambiguous resolution facts hidden.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    await appendEvent(layout, env, {
+      id: resolution,
+      type: "roadmap.ticket-resolved",
+      actor: { kind: "human", id: "mallory" },
+      payload: {
+        target: "sequence",
+        records: [{ target: "ticket", record: { id: ticket } }],
+      },
+      session: newSessionSegmentId(env),
+    });
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      resolutionEventId: resolution,
+      missing: ["resolution-event"],
+      incomplete: true,
+      provenance: ["incomplete"],
+    });
+    expect(row).not.toHaveProperty("resolver");
+    expect(row).not.toHaveProperty("resolvedAt");
+    expect(row).not.toHaveProperty("resolutionOrder");
+  });
+
   test("does not borrow resolution facts from another ticket's event", async () => {
     const { root, layout, env } = await setupStore("nahel-decisions-wrong-resolution-", 252);
     const { node, map } = await chart(env, root, "wrong-resolution-feature");

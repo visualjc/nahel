@@ -19,7 +19,10 @@ import {
   writeTicket,
   type StoreLayout,
 } from "../../src/store/layout";
-import { reconstructDecisionRows } from "../../src/views/decisions";
+import {
+  reconstructDecisionRows,
+  type DecisionProvenance,
+} from "../../src/views/decisions";
 import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
 
 let dirs: string[] = [];
@@ -436,6 +439,24 @@ describe("decision-row reconstruction", () => {
 
     expect(row.missing).toEqual(["node"]);
     expect(row.provenance).toEqual(["delegated", "ratified", "incomplete"]);
+  });
+
+  test("exposes typed additive badges for later exact provenance filtering", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-filter-seam-", 95);
+    const { map } = await chart(env, root, "provenance-filter-seam");
+    const source = await note(env, root, "Delegate one ticket.", "human:jim");
+    const delegatedTicket = await createTicket(env, root, map, "task", "delegated filter");
+    await resolveTicket(env, root, delegatedTicket, "Delegated decision.", [source]);
+    const agentTicket = await createTicket(env, root, map, "task", "agent filter");
+    await resolveTicket(env, root, agentTicket, "Agent decision.");
+
+    const selectedBadge: DecisionProvenance = "delegated";
+    const selected = (await reconstructDecisionRows(layout)).filter((row) =>
+      row.provenance.includes(selectedBadge),
+    );
+
+    expect(selected.map((row) => row.ticketId)).toEqual([delegatedTicket]);
+    expect(selected[0]?.provenance).toEqual(["delegated"]);
   });
 
   test("keeps a linked decision incomplete when its resolution actor or time is malformed", async () => {

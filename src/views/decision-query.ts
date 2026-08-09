@@ -34,19 +34,16 @@ export class DecisionQueryUsageError extends Error {
   readonly help = DECISION_QUERY_HELP;
 }
 
-/** Apply the decision ledger's query arguments to reconstructed decision rows. */
-export async function queryDecisionRows(
-  rows: readonly DecisionRow[],
-  argv: readonly string[],
-  context: DecisionQueryContext,
-): Promise<DecisionRow[]> {
-  let values: {
-    since?: string;
-    by?: string;
-    map?: string;
-    provenance?: string;
-    limit?: string;
-  };
+interface DecisionQueryFlags {
+  since?: string;
+  by?: string;
+  map?: string;
+  provenance?: string;
+  limit?: string;
+}
+
+function parseFlags(argv: readonly string[]): DecisionQueryFlags {
+  let values: DecisionQueryFlags;
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
@@ -71,19 +68,43 @@ export async function queryDecisionRows(
   if (positionals.length > 0) {
     throw new DecisionQueryUsageError(`unexpected extra arguments: ${positionals.join(" ")}`);
   }
+  return values;
+}
+
+function parseActorSelector(spec: string): Actor["kind"] | Actor {
+  if (spec === "human" || spec === "agent") return spec;
+  try {
+    return parseActorSpec(spec);
+  } catch (error) {
+    throw new DecisionQueryUsageError(
+      `invalid --by ${JSON.stringify(spec)} — ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function parseLimit(spec: string | undefined): number {
+  if (spec === undefined) return 10;
+  const limit = Number(spec);
+  if (!/^[0-9]+$/.test(spec) || limit < 1 || !Number.isSafeInteger(limit)) {
+    throw new DecisionQueryUsageError(
+      `invalid --limit ${JSON.stringify(spec)} — expected a positive safe integer`,
+    );
+  }
+  return limit;
+}
+
+/** Apply the decision ledger's query arguments to reconstructed decision rows. */
+export async function queryDecisionRows(
+  rows: readonly DecisionRow[],
+  argv: readonly string[],
+  context: DecisionQueryContext,
+): Promise<DecisionRow[]> {
+  const values = parseFlags(argv);
   let selected = [...rows];
   if (values.by !== undefined) {
-    let selector: Actor["kind"] | Actor;
-    try {
-      selector =
-        values.by === "human" || values.by === "agent" ? values.by : parseActorSpec(values.by);
-    } catch (error) {
-      throw new DecisionQueryUsageError(
-        `invalid --by ${JSON.stringify(values.by)} — ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    const selector = parseActorSelector(values.by);
     selected = selected.filter((row) => {
       if (row.resolver === undefined) return false;
       if (typeof selector === "string") return row.resolver.kind === selector;
@@ -127,21 +148,7 @@ export async function queryDecisionRows(
     );
   }
 
-  let limit = 10;
-  if (values.limit !== undefined) {
-    const parsedLimit = Number(values.limit);
-    if (
-      !/^[0-9]+$/.test(values.limit) ||
-      parsedLimit < 1 ||
-      !Number.isSafeInteger(parsedLimit)
-    ) {
-      throw new DecisionQueryUsageError(
-        `invalid --limit ${JSON.stringify(values.limit)} — expected a positive safe integer`,
-      );
-    }
-    limit = parsedLimit;
-  }
-  return collectNewest(selected, limit);
+  return collectNewest(selected, parseLimit(values.limit));
 }
 
 /** Retain at most N rows while scanning, kept in ascending render order. */
@@ -164,13 +171,11 @@ function compareRows(a: DecisionRow, b: DecisionRow): number {
     if (bOrder !== undefined) return 1;
     return a.ticketId.localeCompare(b.ticketId);
   }
-  {
-    const byTimestamp = aOrder.ts.localeCompare(bOrder.ts);
-    if (byTimestamp !== 0) return byTimestamp;
-    const bySequence = aOrder.seq - bOrder.seq;
-    if (bySequence !== 0) return bySequence;
-    const byEvent = aOrder.id.localeCompare(bOrder.id);
-    if (byEvent !== 0) return byEvent;
-  }
+  const byTimestamp = aOrder.ts.localeCompare(bOrder.ts);
+  if (byTimestamp !== 0) return byTimestamp;
+  const bySequence = aOrder.seq - bOrder.seq;
+  if (bySequence !== 0) return bySequence;
+  const byEvent = aOrder.id.localeCompare(bOrder.id);
+  if (byEvent !== 0) return byEvent;
   return a.ticketId.localeCompare(b.ticketId);
 }

@@ -87,12 +87,14 @@ export function renderDecisionRows(
     lines.push(`  ticket ${row.ticketId} · ${mapIdentity}`);
     if (proof.length > 0) lines.push(`  ${proof.join(" · ")}`);
   }
-  const first = rows[0]!;
+  const zoomRow = rows.find((row) => !row.missing.includes("map")) ?? rows[0]!;
   lines.push(
     "",
-    `↳ nahel roadmap ticket show ${first.ticketId}  — inspect the question and decision`,
-    `↳ nahel roadmap map show ${first.mapId}  — inspect the map and nearby decisions`,
-    `↳ nahel recall ${first.ticketId}  — inspect the decision observation and source events`,
+    `↳ nahel roadmap ticket show ${zoomRow.ticketId}  — inspect the question and decision`,
+    ...(zoomRow.missing.includes("map")
+      ? []
+      : [`↳ nahel roadmap map show ${zoomRow.mapId}  — inspect the map and nearby decisions`]),
+    `↳ nahel recall ${zoomRow.ticketId}  — inspect the decision observation and source events`,
     ...(rows.some((row) => row.incomplete)
       ? ["↳ nahel validate  — inspect or repair incomplete store links"]
       : []),

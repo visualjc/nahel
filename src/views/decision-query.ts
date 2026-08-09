@@ -20,29 +20,70 @@ const PROVENANCE_BADGES: readonly DecisionProvenance[] = [
   "incomplete",
 ];
 
+export const DECISION_QUERY_USAGE =
+  "usage: nahel decisions [--since <7d|24h|ISO>] [--by <human|agent|kind:id[:session]>] " +
+  "[--map <map-id|node-id|node-slug>] " +
+  "[--provenance <direct-human|delegated|ratified|agent|incomplete>] " +
+  "[--limit <positive-integer>]";
+
+export const DECISION_QUERY_HELP = "run `nahel decisions --help` for details";
+
+/** Structured refusal metadata for the later CLI adapter to render. */
+export class DecisionQueryUsageError extends Error {
+  readonly usage = DECISION_QUERY_USAGE;
+  readonly help = DECISION_QUERY_HELP;
+}
+
 /** Apply the decision ledger's query arguments to reconstructed decision rows. */
 export async function queryDecisionRows(
   rows: readonly DecisionRow[],
   argv: readonly string[],
   context: DecisionQueryContext,
 ): Promise<DecisionRow[]> {
-  const { values, positionals } = parseArgs({
-    args: [...argv],
-    options: {
-      since: { type: "string" },
-      by: { type: "string" },
-      map: { type: "string" },
-      provenance: { type: "string" },
-      limit: { type: "string" },
-    },
-    strict: true,
-    allowPositionals: true,
-  });
-  if (positionals.length > 0) throw new Error(`unexpected extra arguments: ${positionals.join(" ")}`);
+  let values: {
+    since?: string;
+    by?: string;
+    map?: string;
+    provenance?: string;
+    limit?: string;
+  };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: [...argv],
+      options: {
+        since: { type: "string" },
+        by: { type: "string" },
+        map: { type: "string" },
+        provenance: { type: "string" },
+        limit: { type: "string" },
+      },
+      strict: true,
+      allowPositionals: true,
+    }));
+  } catch (error) {
+    throw new DecisionQueryUsageError(
+      `invalid decisions query ${JSON.stringify(argv.join(" "))} — ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (positionals.length > 0) {
+    throw new DecisionQueryUsageError(`unexpected extra arguments: ${positionals.join(" ")}`);
+  }
   let selected = [...rows];
   if (values.by !== undefined) {
-    const selector: Actor["kind"] | Actor =
-      values.by === "human" || values.by === "agent" ? values.by : parseActorSpec(values.by);
+    let selector: Actor["kind"] | Actor;
+    try {
+      selector =
+        values.by === "human" || values.by === "agent" ? values.by : parseActorSpec(values.by);
+    } catch (error) {
+      throw new DecisionQueryUsageError(
+        `invalid --by ${JSON.stringify(values.by)} — ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     selected = selected.filter((row) => {
       if (row.resolver === undefined) return false;
       if (typeof selector === "string") return row.resolver.kind === selector;
@@ -56,7 +97,7 @@ export async function queryDecisionRows(
   if (values.map !== undefined) {
     const map = await resolveMap(context.layout, values.map);
     if (map === null) {
-      throw new Error(
+      throw new DecisionQueryUsageError(
         `invalid --map ${JSON.stringify(values.map)} — expected a map id or its roadmap node id/slug`,
       );
     }
@@ -64,7 +105,7 @@ export async function queryDecisionRows(
   }
   if (values.provenance !== undefined) {
     if (!(PROVENANCE_BADGES as readonly string[]).includes(values.provenance)) {
-      throw new Error(
+      throw new DecisionQueryUsageError(
         `invalid --provenance ${JSON.stringify(values.provenance)} — expected ${PROVENANCE_BADGES.join(
           ", ",
         )}`,
@@ -77,7 +118,9 @@ export async function queryDecisionRows(
   if (values.since !== undefined) {
     const resolved = resolveSince(values.since, context.now);
     if ("error" in resolved) {
-      throw new Error(`invalid --since ${JSON.stringify(values.since)} — ${resolved.error}`);
+      throw new DecisionQueryUsageError(
+        `invalid --since ${JSON.stringify(values.since)} — ${resolved.error}`,
+      );
     }
     selected = selected.filter(
       (row) => row.resolvedAt === undefined || row.resolvedAt >= resolved.since,
@@ -86,10 +129,17 @@ export async function queryDecisionRows(
 
   let limit = 10;
   if (values.limit !== undefined) {
-    if (!/^[0-9]+$/.test(values.limit) || Number(values.limit) < 1) {
-      throw new Error(`invalid --limit ${JSON.stringify(values.limit)} — expected a positive integer`);
+    const parsedLimit = Number(values.limit);
+    if (
+      !/^[0-9]+$/.test(values.limit) ||
+      parsedLimit < 1 ||
+      !Number.isSafeInteger(parsedLimit)
+    ) {
+      throw new DecisionQueryUsageError(
+        `invalid --limit ${JSON.stringify(values.limit)} — expected a positive safe integer`,
+      );
     }
-    limit = Number(values.limit);
+    limit = parsedLimit;
   }
   return collectNewest(selected, limit);
 }

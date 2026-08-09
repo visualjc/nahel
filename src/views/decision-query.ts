@@ -33,6 +33,7 @@ export async function queryDecisionRows(
       by: { type: "string" },
       map: { type: "string" },
       provenance: { type: "string" },
+      limit: { type: "string" },
     },
     strict: true,
     allowPositionals: true,
@@ -73,13 +74,39 @@ export async function queryDecisionRows(
       row.provenance.includes(values.provenance as DecisionProvenance),
     );
   }
-  if (values.since === undefined) return selected;
-
-  const resolved = resolveSince(values.since, context.now);
-  if ("error" in resolved) {
-    throw new Error(`invalid --since ${JSON.stringify(values.since)} — ${resolved.error}`);
+  if (values.since !== undefined) {
+    const resolved = resolveSince(values.since, context.now);
+    if ("error" in resolved) {
+      throw new Error(`invalid --since ${JSON.stringify(values.since)} — ${resolved.error}`);
+    }
+    selected = selected.filter(
+      (row) => row.resolvedAt !== undefined && row.resolvedAt >= resolved.since,
+    );
   }
-  return selected.filter(
-    (row) => row.resolvedAt !== undefined && row.resolvedAt >= resolved.since,
-  );
+
+  let limit = selected.length;
+  if (values.limit !== undefined) {
+    if (!/^[0-9]+$/.test(values.limit) || Number(values.limit) < 1) {
+      throw new Error(`invalid --limit ${JSON.stringify(values.limit)} — expected a positive integer`);
+    }
+    limit = Number(values.limit);
+  }
+  return collectNewest(selected, limit);
+}
+
+/** Retain at most N rows while scanning, kept in ascending render order. */
+function collectNewest(rows: readonly DecisionRow[], limit: number): DecisionRow[] {
+  const kept: DecisionRow[] = [];
+  for (const row of rows) {
+    const index = kept.findIndex((candidate) => compareRows(row, candidate) < 0);
+    if (index === -1) kept.push(row);
+    else kept.splice(index, 0, row);
+    if (kept.length > limit) kept.shift();
+  }
+  return kept;
+}
+
+function compareRows(a: DecisionRow, b: DecisionRow): number {
+  const byTime = (a.resolvedAt ?? "").localeCompare(b.resolvedAt ?? "");
+  return byTime !== 0 ? byTime : a.ticketId.localeCompare(b.ticketId);
 }

@@ -7,6 +7,9 @@ import {
   type StoreLayout,
 } from "../../src/store/layout";
 import {
+  DECISION_QUERY_HELP,
+  DECISION_QUERY_USAGE,
+  DecisionQueryUsageError,
   queryDecisionRows,
   type DecisionRow,
 } from "../../src/views/decision-query";
@@ -333,5 +336,38 @@ describe("decision query", () => {
     );
 
     expect(selected.map((row) => row.ticketId)).toEqual(["hyman001", "hyman002"]);
+  });
+
+  test("invalid inputs return focused reusable usage and help-pointer errors", async () => {
+    const store = await layout();
+    const invalid: Array<{ args: string[]; names: string[] }> = [
+      { args: ["--since", "yesterday"], names: ["--since", "yesterday"] },
+      { args: ["--by", "wizard"], names: ["--by", "wizard"] },
+      { args: ["--map", "missing-feature"], names: ["--map", "missing-feature"] },
+      {
+        args: ["--provenance", "cross-agent-grilled"],
+        names: ["--provenance", "cross-agent-grilled"],
+      },
+      { args: ["--ticket-type", "task"], names: ["--ticket-type"] },
+      ...["0", "-1", "1.5", "9007199254740992"].map((value) => ({
+        args: ["--limit", value],
+        names: ["--limit", value],
+      })),
+    ];
+
+    for (const { args, names } of invalid) {
+      let refusal: unknown;
+      try {
+        await queryDecisionRows([], args, { layout: store, now: NOW });
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(DecisionQueryUsageError);
+      const usageError = refusal as DecisionQueryUsageError;
+      for (const name of names) expect(usageError.message).toContain(name);
+      expect(usageError.usage).toBe(DECISION_QUERY_USAGE);
+      expect(usageError.help).toBe(DECISION_QUERY_HELP);
+      expect(usageError.help).toContain("nahel decisions --help");
+    }
   });
 });

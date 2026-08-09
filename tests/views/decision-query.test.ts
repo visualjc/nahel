@@ -308,4 +308,30 @@ describe("decision query", () => {
       "zzzzzz02",
     ]);
   });
+
+  test("filters apply before the default limit", async () => {
+    const store = await layout();
+    const matching = [
+      datedRow("hyman001", "2026-08-07T08:00:00Z"),
+      datedRow("hyman002", "2026-08-07T09:00:00Z"),
+    ];
+    for (const row of matching) {
+      row.resolver = { kind: "human", id: "jim" };
+      row.provenance = ["direct-human"];
+    }
+    const newerNonmatching = Array.from({ length: 12 }, (_, index) =>
+      datedRow(
+        `agn${String(index).padStart(5, "0")}`,
+        `2026-08-08T${String(index).padStart(2, "0")}:00:00Z`,
+      ),
+    );
+
+    const selected = await queryDecisionRows(
+      [...newerNonmatching, ...matching],
+      ["--by", "human"],
+      { layout: store, now: NOW },
+    );
+
+    expect(selected.map((row) => row.ticketId)).toEqual(["hyman001", "hyman002"]);
+  });
 });

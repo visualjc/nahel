@@ -109,6 +109,15 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     const delegated =
       validResolution?.actor.kind === "agent" &&
       sourceEvents.some((event) => event.actor.kind === "human");
+    const ratified =
+      validResolution !== undefined &&
+      [...events.values()].some(
+        (event) =>
+          event.type === CORE_EVENT_TYPES.note &&
+          event.actor.kind === "human" &&
+          event.payload["ticket"] === ticket.id &&
+          event.ts > validResolution.ts,
+      );
     const missing: DecisionRowMissingJoin[] = [];
     if (ticket.decision === undefined) missing.push("decision");
     if (validResolution === undefined) missing.push("resolution-event");
@@ -116,6 +125,11 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     else if (node === undefined) missing.push("node");
     if (observation === undefined) missing.push("observation");
     if (missingSourceEventIds.length > 0) missing.push("source-event");
+    const provenance: DecisionProvenance[] = [];
+    if (validResolution?.actor.kind === "human") provenance.push("direct-human");
+    if (delegated) provenance.push("delegated");
+    if (ratified) provenance.push("ratified");
+    if (validResolution?.actor.kind === "agent" && !delegated) provenance.push("agent");
 
     return {
       ticketId: ticket.id,
@@ -142,14 +156,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       missingSourceEventIds,
       missing,
       incomplete: missing.length > 0,
-      provenance:
-        validResolution?.actor.kind === "human"
-          ? ["direct-human"]
-          : delegated
-            ? ["delegated"]
-            : validResolution?.actor.kind === "agent"
-            ? ["agent"]
-            : [],
+      provenance,
     };
   });
 }

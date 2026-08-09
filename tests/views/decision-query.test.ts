@@ -46,6 +46,17 @@ function datedRow(ticketId: string, resolvedAt: string): DecisionRow {
   };
 }
 
+function undatedRow(ticketId: string): DecisionRow {
+  const row = datedRow(ticketId, NOW);
+  delete row.resolvedAt;
+  delete row.resolutionOrder;
+  delete row.resolver;
+  row.missing = ["resolution-event"];
+  row.incomplete = true;
+  row.provenance = ["incomplete"];
+  return row;
+}
+
 describe("decision query", () => {
   test("--since accepts relative whole-hour and equivalent ISO UTC windows", async () => {
     const store = await layout();
@@ -198,5 +209,56 @@ describe("decision query", () => {
     expect(await ids(rows.slice(0, 1))).toEqual(["tick0000"]);
     expect(await ids(rows.slice(0, 10))).toEqual(rows.slice(0, 10).map((row) => row.ticketId));
     expect(await ids([...rows].reverse())).toEqual(rows.slice(2).map((row) => row.ticketId));
+  });
+
+  test("filters intersect while an incomplete undated row remains eligible", async () => {
+    const store = await layout();
+    await writeRoadmapNode(
+      store,
+      {
+        id: "n0de0002",
+        name: "intersection-feature",
+        kind: "feature",
+        horizon: "now",
+        created: NOW,
+        updated: NOW,
+      },
+      "Intersection feature.",
+    );
+    await writeMap(
+      store,
+      {
+        id: "map00002",
+        node: "n0de0002",
+        destination: "Intersection destination.",
+        fog: [],
+        out_of_scope: [],
+        created: NOW,
+        updated: NOW,
+      },
+      "",
+    );
+    const target = undatedRow("ticket51");
+    target.mapId = "map00002";
+    const wrongMap = undatedRow("ticket52");
+    const wrongProvenance = datedRow("ticket53", "2026-08-08T11:00:00Z");
+    wrongProvenance.mapId = "map00002";
+
+    const selected = await queryDecisionRows(
+      [wrongMap, wrongProvenance, target],
+      [
+        "--since",
+        "2h",
+        "--map",
+        "intersection-feature",
+        "--provenance",
+        "incomplete",
+        "--limit",
+        "1",
+      ],
+      { layout: store, now: NOW },
+    );
+
+    expect(selected.map((row) => row.ticketId)).toEqual(["ticket51"]);
   });
 });

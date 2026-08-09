@@ -3,6 +3,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandContext } from "../../src/cli";
 import { logCommand } from "../../src/commands/log";
+import { observeCommand } from "../../src/commands/observe";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
@@ -397,6 +398,43 @@ describe("decision-row reconstruction", () => {
     expect(row).not.toHaveProperty("resolver");
     expect(row).not.toHaveProperty("resolvedAt");
     expect(row).not.toHaveProperty("resolutionOrder");
+  });
+
+  test("does not choose between multiple observations citing the resolution", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-ambiguous-observation-", 253);
+    const { map } = await chart(env, root, "ambiguous-observation-feature");
+    const ticket = await createTicket(env, root, map, "research", "ambiguous-observation");
+    await resolveTicket(env, root, ticket, "Keep ambiguous observation facts hidden.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    const extraSource = await note(env, root, "A source only one observation cites.");
+    expect(
+      await observeCommand.run(
+        [
+          `decision-${ticket}`,
+          "--data",
+          `sources=["${resolution}","${extraSource}"]`,
+          "--data",
+          "body=Conflicting duplicate observation.",
+        ],
+        env,
+        root,
+      ),
+    ).toBe(0);
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      decision: "Keep ambiguous observation facts hidden.",
+      resolutionEventId: resolution,
+      resolver: { kind: "agent", id: "claude-code" },
+      citedSourceEventIds: [],
+      sourceEvents: [],
+      missingSourceEventIds: [],
+      missing: ["observation"],
+      incomplete: true,
+    });
+    expect(row).not.toHaveProperty("observationId");
   });
 
   test("includes every resolved ticket type across maps and excludes every other state", async () => {

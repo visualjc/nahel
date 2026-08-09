@@ -294,6 +294,18 @@ describe("decision-row reconstruction", () => {
     });
   });
 
+  test("classifies an exact agent resolver with no proved delegation as agent", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-agent-", 91);
+    const { map } = await chart(env, root, "agent-provenance");
+    const ticket = await createTicket(env, root, map, "task", "agent provenance");
+    await resolveTicket(env, root, ticket, "Keep the resolver's exact identity.");
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.resolver).toEqual({ kind: "agent", id: "claude-code" });
+    expect(row.provenance).toEqual(["agent"]);
+  });
+
   test("keeps a linked decision incomplete when its resolution actor or time is malformed", async () => {
     for (const field of ["actor", "ts"] as const) {
       const root = await makeTempDir(`nahel-decisions-missing-${field}-`);

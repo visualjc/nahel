@@ -599,12 +599,25 @@ describe("decision-row reconstruction", () => {
     expect(row).not.toHaveProperty("resolutionOrder");
   });
 
-  test("does not choose between multiple observations citing the resolution", async () => {
+  test("uses the embedded observation when a lookalike also cites the resolution", async () => {
     const { root, layout, env } = await setupStore("nahel-decisions-ambiguous-observation-", 253);
     const { map } = await chart(env, root, "ambiguous-observation-feature");
     const ticket = await createTicket(env, root, map, "research", "ambiguous-observation");
-    await resolveTicket(env, root, ticket, "Keep ambiguous observation facts hidden.");
+    const humanSource = await note(
+      env,
+      root,
+      "Human delegation belongs to the embedded observation.",
+      "human:jim:planning",
+    );
+    await resolveTicket(
+      env,
+      root,
+      ticket,
+      "Keep canonical observation facts visible.",
+      [humanSource],
+    );
     const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    const canonicalObservation = await observationIdFor(layout, ticket);
     const extraSource = await note(env, root, "A source only one observation cites.");
     expect(
       await observeCommand.run(
@@ -624,16 +637,19 @@ describe("decision-row reconstruction", () => {
 
     expect(row).toMatchObject({
       ticketId: ticket,
-      decision: "Keep ambiguous observation facts hidden.",
+      decision: "Keep canonical observation facts visible.",
       resolutionEventId: resolution,
       resolver: { kind: "agent", id: "claude-code" },
-      citedSourceEventIds: [],
-      sourceEvents: [],
+      observationId: canonicalObservation,
+      citedSourceEventIds: [humanSource],
       missingSourceEventIds: [],
-      missing: ["observation"],
-      incomplete: true,
+      missing: [],
+      incomplete: false,
+      provenance: ["delegated"],
     });
-    expect(row).not.toHaveProperty("observationId");
+    expect(row.sourceEvents.map((event) => event.actor)).toEqual([
+      { kind: "human", id: "jim", session: "planning" },
+    ]);
   });
 
   test("does not substitute a lookalike for the observation embedded in the resolution", async () => {

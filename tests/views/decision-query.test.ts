@@ -135,4 +135,29 @@ describe("decision query", () => {
     expect(await ids("n0de0001")).toEqual(["ticket21"]);
     expect(await ids("first-feature")).toEqual(["ticket21"]);
   });
+
+  test("--provenance matches each of the five settled additive badges", async () => {
+    const store = await layout();
+    const direct = datedRow("ticket31", "2026-08-08T08:00:00Z");
+    direct.provenance = ["direct-human"];
+    const delegated = datedRow("ticket32", "2026-08-08T09:00:00Z");
+    delegated.provenance = ["delegated", "ratified"];
+    const agent = datedRow("ticket33", "2026-08-08T10:00:00Z");
+    const incomplete = datedRow("ticket34", "2026-08-08T11:00:00Z");
+    incomplete.provenance = ["agent", "incomplete"];
+    const rows = [direct, delegated, agent, incomplete];
+    const ids = async (badge: string) =>
+      (
+        await queryDecisionRows(rows, ["--provenance", badge], {
+          layout: store,
+          now: NOW,
+        })
+      ).map((row) => row.ticketId);
+
+    expect(await ids("direct-human")).toEqual(["ticket31"]);
+    expect(await ids("delegated")).toEqual(["ticket32"]);
+    expect(await ids("ratified")).toEqual(["ticket32"]);
+    expect(await ids("agent")).toEqual(["ticket33", "ticket34"]);
+    expect(await ids("incomplete")).toEqual(["ticket34"]);
+  });
 });

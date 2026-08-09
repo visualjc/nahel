@@ -96,6 +96,8 @@ describe("decision-row reconstruction", () => {
     const rows = await reconstructDecisionRows(layout);
 
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.resolutionEventId).toMatch(ID_PATTERN);
+    expect(rows[0]?.observationId).toMatch(ID_PATTERN);
     expect(rows[0]).toEqual({
       ticketId: ticket,
       ticketType: "research",
@@ -103,15 +105,15 @@ describe("decision-row reconstruction", () => {
       mapId: map,
       nodeId: node,
       nodeName: "durable-decisions",
-      resolutionEventId: expect.stringMatching(ID_PATTERN),
-      resolvedAt: "2026-08-08T12:00:03Z",
+      resolutionEventId: rows[0]?.resolutionEventId,
+      resolvedAt: "2026-08-08T12:00:10Z",
       resolutionOrder: {
-        ts: "2026-08-08T12:00:03Z",
+        ts: "2026-08-08T12:00:10Z",
         seq: 0,
-        id: expect.stringMatching(ID_PATTERN),
+        id: rows[0]?.resolutionEventId,
       },
       resolver: { kind: "human", id: "jim", session: "planning" },
-      observationId: expect.stringMatching(ID_PATTERN),
+      observationId: rows[0]?.observationId,
       citedSourceEventIds: [],
       sourceEvents: [],
       missingSourceEventIds: [],

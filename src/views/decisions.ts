@@ -122,6 +122,26 @@ function resolutionForTicket(
   return belongs ? event : undefined;
 }
 
+function observationIdForResolution(
+  event: JournalEvent,
+  ticketId: string,
+): string | undefined {
+  const records = event.payload["records"];
+  if (!Array.isArray(records)) return undefined;
+  const ids = records.flatMap((entry) => {
+    if (entry === null || typeof entry !== "object") return [];
+    const fields = entry as Record<string, unknown>;
+    if (fields["target"] !== "observation") return [];
+    const record = fields["record"];
+    if (record === null || typeof record !== "object") return [];
+    const observation = record as Record<string, unknown>;
+    if (observation["name"] !== `decision-${ticketId}`) return [];
+    const id = observation["id"];
+    return typeof id === "string" ? [id] : [];
+  });
+  return ids.length === 1 ? ids[0] : undefined;
+}
+
 /**
  * Rebuild the decision candidates from current durable store facts. This read
  * has no cache or materialized-row lifecycle: a repaired join is visible on
@@ -141,6 +161,9 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
   const observations = await Promise.all(
     (await listObservations(layout)).map((id) => readObservation(layout, id)),
   );
+  const observationsById = new Map(
+    observations.map((observation) => [observation.frontmatter.id, observation]),
+  );
 
   return tickets.map(({ frontmatter: ticket }) => {
     const map = maps.get(ticket.map);
@@ -153,7 +176,23 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
         frontmatter.name === `decision-${ticket.id}` &&
         (ticket.resolution === undefined || frontmatter.sources.includes(ticket.resolution)),
     );
-    const observation = matchingObservations.length === 1 ? matchingObservations[0] : undefined;
+    const embeddedObservationId =
+      validResolution === undefined
+        ? undefined
+        : observationIdForResolution(validResolution, ticket.id);
+    const embeddedObservation =
+      embeddedObservationId === undefined ? undefined : observationsById.get(embeddedObservationId);
+    const observation =
+      validResolution === undefined
+        ? matchingObservations.length === 1
+          ? matchingObservations[0]
+          : undefined
+        : matchingObservations.length === 1 &&
+            embeddedObservation?.frontmatter.name === `decision-${ticket.id}` &&
+            ticket.resolution !== undefined &&
+            embeddedObservation.frontmatter.sources.includes(ticket.resolution)
+          ? embeddedObservation
+          : undefined;
     const citedSourceEventIds =
       observation?.frontmatter.sources.filter((id) => id !== ticket.resolution) ?? [];
     const sourceEvents = citedSourceEventIds.flatMap((id) => {

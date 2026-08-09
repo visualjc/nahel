@@ -6,7 +6,7 @@ import { observeCommand } from "../../src/commands/observe";
 import { roadmapCommand } from "../../src/commands/roadmap";
 import type { Env } from "../../src/schema/env";
 import { ID_PATTERN } from "../../src/schema/id";
-import { listSegments } from "../../src/store/journal";
+import { appendEvent, listSegments, newSessionSegmentId } from "../../src/store/journal";
 import {
   ensureLayout,
   listObservations,
@@ -353,6 +353,36 @@ describe("decision-row reconstruction", () => {
     const row = (await reconstructDecisionRows(layout))[0]!;
 
     expect(row.provenance).toEqual(["ratified", "agent"]);
+  });
+
+  test("does not ratify from a same-time or earlier human note", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-ratify-boundary-", 931);
+    const { map } = await chart(env, root, "ratification-boundary");
+
+    const earlierTicket = await createTicket(env, root, map, "grilling", "earlier note");
+    await note(env, root, "Thinking before resolution.", "human:jim", earlierTicket);
+    await resolveTicket(env, root, earlierTicket, "Resolve after the note.");
+
+    const sameTimeTicket = await createTicket(env, root, map, "grilling", "same-time note");
+    await resolveTicket(env, root, sameTimeTicket, "Resolve at the boundary.");
+    const sameTimeResolution = (await reconstructDecisionRows(layout)).find(
+      (row) => row.ticketId === sameTimeTicket,
+    )!;
+    await appendEvent(
+      layout,
+      { now: () => sameTimeResolution.resolvedAt!, random: env.random },
+      {
+        type: "note",
+        actor: { kind: "human", id: "jim" },
+        payload: { ticket: sameTimeTicket, summary: "Same-time note." },
+        session: newSessionSegmentId(env),
+      },
+    );
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows.find((row) => row.ticketId === earlierTicket)?.provenance).toEqual(["agent"]);
+    expect(rows.find((row) => row.ticketId === sameTimeTicket)?.provenance).toEqual(["agent"]);
   });
 
   test("keeps delegated, ratified, and incomplete badges additive", async () => {

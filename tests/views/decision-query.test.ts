@@ -177,4 +177,26 @@ describe("decision query", () => {
 
     expect(selected.map((row) => row.ticketId)).toEqual(["ticket43", "ticket44"]);
   });
+
+  test("defaults to newest 10 for 0, 1, 10, and more than 10 candidates", async () => {
+    const store = await layout();
+    const rows = Array.from({ length: 12 }, (_, index) =>
+      datedRow(
+        `tick${String(index).padStart(4, "0")}`,
+        `2026-08-08T${String(index).padStart(2, "0")}:00:00Z`,
+      ),
+    );
+    const ids = async (candidates: DecisionRow[]) =>
+      (
+        await queryDecisionRows(candidates, [], {
+          layout: store,
+          now: NOW,
+        })
+      ).map((row) => row.ticketId);
+
+    expect(await ids([])).toEqual([]);
+    expect(await ids(rows.slice(0, 1))).toEqual(["tick0000"]);
+    expect(await ids(rows.slice(0, 10))).toEqual(rows.slice(0, 10).map((row) => row.ticketId));
+    expect(await ids([...rows].reverse())).toEqual(rows.slice(2).map((row) => row.ticketId));
+  });
 });

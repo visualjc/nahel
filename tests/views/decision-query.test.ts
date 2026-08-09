@@ -77,9 +77,18 @@ describe("decision query", () => {
       layout: store,
       now: NOW,
     });
+    const wholeDay = await queryDecisionRows(rows, ["--since", "1d"], {
+      layout: store,
+      now: NOW,
+    });
 
     expect(relative.map((row) => row.ticketId)).toEqual(["ticket02", "ticket03"]);
     expect(absolute).toEqual(relative);
+    expect(wholeDay.map((row) => row.ticketId)).toEqual([
+      "ticket01",
+      "ticket02",
+      "ticket03",
+    ]);
   });
 
   test("--by accepts kind selectors and exact kind:id[:session] actors", async () => {

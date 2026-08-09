@@ -102,19 +102,8 @@ export async function queryDecisionRows(
   context: DecisionQueryContext,
 ): Promise<DecisionRow[]> {
   const values = parseFlags(argv);
-  let selected = [...rows];
-  if (values.by !== undefined) {
-    const selector = parseActorSelector(values.by);
-    selected = selected.filter((row) => {
-      if (row.resolver === undefined) return false;
-      if (typeof selector === "string") return row.resolver.kind === selector;
-      return (
-        row.resolver.kind === selector.kind &&
-        row.resolver.id === selector.id &&
-        row.resolver.session === selector.session
-      );
-    });
-  }
+  const actor = values.by === undefined ? undefined : parseActorSelector(values.by);
+  let mapId: string | undefined;
   if (values.map !== undefined) {
     const map = await resolveMap(context.layout, values.map);
     if (map === null) {
@@ -122,8 +111,9 @@ export async function queryDecisionRows(
         `invalid --map ${JSON.stringify(values.map)} — expected a map id or its roadmap node id/slug`,
       );
     }
-    selected = selected.filter((row) => row.mapId === map.frontmatter.id);
+    mapId = map.frontmatter.id;
   }
+  let provenance: DecisionProvenance | undefined;
   if (values.provenance !== undefined) {
     if (!(PROVENANCE_BADGES as readonly string[]).includes(values.provenance)) {
       throw new DecisionQueryUsageError(
@@ -132,10 +122,9 @@ export async function queryDecisionRows(
         )}`,
       );
     }
-    selected = selected.filter((row) =>
-      row.provenance.includes(values.provenance as DecisionProvenance),
-    );
+    provenance = values.provenance as DecisionProvenance;
   }
+  let since: string | undefined;
   if (values.since !== undefined) {
     const resolved = resolveSince(values.since, context.now);
     if ("error" in resolved) {
@@ -143,18 +132,38 @@ export async function queryDecisionRows(
         `invalid --since ${JSON.stringify(values.since)} — ${resolved.error}`,
       );
     }
-    selected = selected.filter(
-      (row) => row.resolvedAt === undefined || row.resolvedAt >= resolved.since,
-    );
+    since = resolved.since;
   }
 
-  return collectNewest(selected, parseLimit(values.limit));
+  return collectNewest(rows, parseLimit(values.limit), (row) => {
+    if (!matchesActor(row, actor)) return false;
+    if (mapId !== undefined && row.mapId !== mapId) return false;
+    if (provenance !== undefined && !row.provenance.includes(provenance)) return false;
+    if (since !== undefined && row.resolvedAt !== undefined && row.resolvedAt < since) return false;
+    return true;
+  });
 }
 
-/** Retain at most N rows while scanning, kept in ascending render order. */
-function collectNewest(rows: readonly DecisionRow[], limit: number): DecisionRow[] {
+function matchesActor(row: DecisionRow, selector: Actor["kind"] | Actor | undefined): boolean {
+  if (selector === undefined) return true;
+  if (row.resolver === undefined) return false;
+  if (typeof selector === "string") return row.resolver.kind === selector;
+  return (
+    row.resolver.kind === selector.kind &&
+    row.resolver.id === selector.id &&
+    row.resolver.session === selector.session
+  );
+}
+
+/** Filter while scanning and retain at most N rows, kept in ascending render order. */
+function collectNewest(
+  rows: readonly DecisionRow[],
+  limit: number,
+  eligible: (row: DecisionRow) => boolean,
+): DecisionRow[] {
   const kept: DecisionRow[] = [];
   for (const row of rows) {
+    if (!eligible(row)) continue;
     const index = kept.findIndex((candidate) => compareRows(row, candidate) < 0);
     if (index === -1) kept.push(row);
     else kept.splice(index, 0, row);

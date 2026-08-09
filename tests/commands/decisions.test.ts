@@ -365,7 +365,7 @@ describe("nahel decisions — focused help", () => {
       "Bare `nahel decisions` selects the newest 10 matching decisions, then displays that retained slice oldest to newest.",
       "",
       "Flags:",
-      "  --since <7d|24h|ISO>  include decisions at or after a relative whole-hour/day or ISO UTC time",
+      "  --since <7d|24h|ISO>  include dated decisions at or after the time; undated incomplete rows remain eligible",
       "  --by <human|agent|kind:id[:session]>  match a resolver kind or exact actor",
       "  --map <map-id|node-id|node-slug>  narrow to one current map",
       "  --provenance <direct-human|delegated|ratified|agent|incomplete>  require a proved badge",

@@ -196,8 +196,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
         ? matchingObservations.length === 1
           ? matchingObservations[0]
           : undefined
-        : matchingObservations.length === 1 &&
-            embeddedObservation?.frontmatter.name === `decision-${ticket.id}` &&
+        : embeddedObservation?.frontmatter.name === `decision-${ticket.id}` &&
             ticket.resolution !== undefined &&
             embeddedObservation.frontmatter.sources.includes(ticket.resolution)
           ? embeddedObservation

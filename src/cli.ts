@@ -9,6 +9,7 @@
 import { homedir } from "node:os";
 import { briefCommand } from "./commands/brief";
 import { configCommand } from "./commands/config";
+import { decisionsCommand } from "./commands/decisions";
 import { dispatchCommand } from "./commands/dispatch";
 import { distillCommand } from "./commands/distill";
 import { doctorCommand } from "./commands/doctor";
@@ -105,6 +106,7 @@ export const COMMANDS: Record<string, Command> = {
   brief: briefCommand,
   claim: adapt(claimCommand),
   config: adapt(configCommand),
+  decisions: decisionsCommand,
   dispatch: adapt(dispatchCommand),
   distill: adapt(distillCommand),
   doctor: doctorCommand,

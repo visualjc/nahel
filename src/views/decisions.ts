@@ -46,6 +46,61 @@ export interface DecisionRow {
   provenance: DecisionProvenance[];
 }
 
+function formatActor(actor: Actor): string {
+  const base = `${actor.kind}:${actor.id}`;
+  return actor.session === undefined ? base : `${base}:${actor.session}`;
+}
+
+/** Render the compact human ledger after selection has fixed its row order. */
+export function renderDecisionRows(
+  rows: readonly DecisionRow[],
+  summary: { matching: number; limit: number } = { matching: rows.length, limit: 10 },
+): string {
+  const omitted = summary.matching - rows.length;
+  const omission = omitted === 0 ? "none omitted" : `${omitted} older omitted`;
+  if (rows.length === 0) {
+    return [
+      `decisions: no decisions matched · limit ${summary.limit} · oldest → newest · ${omission}`,
+      "",
+      "↳ nahel decisions --help  — filter or widen this ledger",
+    ].join("\n");
+  }
+  const lines = [
+    `decisions: ${summary.matching} matching · showing ${rows.length} · limit ${summary.limit} · oldest → newest · ${omission}`,
+  ];
+  for (const row of rows) {
+    const heading = [row.resolvedAt, row.decision].filter((part) => part !== undefined).join("  ");
+    const mapIdentity =
+      row.nodeName !== undefined
+        ? `map ${row.nodeName} (${row.mapId}) · node ${row.nodeId}`
+        : row.nodeId !== undefined
+          ? `map ${row.mapId} · node ${row.nodeId}`
+          : `map ${row.mapId}`;
+    const proof = [
+      ...(row.resolver === undefined ? [] : [`resolver ${formatActor(row.resolver)}`]),
+      ...(row.provenance.length === 0
+        ? []
+        : [`badges ${row.provenance.map((badge) => `[${badge}]`).join(" ")}`]),
+    ];
+    lines.push("");
+    if (heading !== "") lines.push(heading);
+    lines.push(`  ticket ${row.ticketId} · ${mapIdentity}`);
+    if (proof.length > 0) lines.push(`  ${proof.join(" · ")}`);
+  }
+  const first = rows[0]!;
+  lines.push(
+    "",
+    `↳ nahel roadmap ticket show ${first.ticketId}  — inspect the question and decision`,
+    `↳ nahel roadmap map show ${first.mapId}  — inspect the map and nearby decisions`,
+    `↳ nahel recall ${first.ticketId}  — inspect the decision observation and source events`,
+    ...(rows.some((row) => row.incomplete)
+      ? ["↳ nahel validate  — inspect or repair incomplete store links"]
+      : []),
+    "↳ nahel decisions --help  — filter or widen this ledger",
+  );
+  return lines.join("\n");
+}
+
 function resolutionForTicket(
   event: JournalEvent | undefined,
   ticketId: string,

@@ -12,6 +12,12 @@ export interface DecisionQueryContext {
   now: string;
 }
 
+export interface DecisionQueryResult {
+  rows: DecisionRow[];
+  matching: number;
+  limit: number;
+}
+
 const PROVENANCE_BADGES: readonly DecisionProvenance[] = [
   "direct-human",
   "delegated",
@@ -101,6 +107,15 @@ export async function queryDecisionRows(
   argv: readonly string[],
   context: DecisionQueryContext,
 ): Promise<DecisionRow[]> {
+  return (await queryDecisionRowsWithSummary(rows, argv, context)).rows;
+}
+
+/** Query rows while retaining the counts the CLI summary must disclose. */
+export async function queryDecisionRowsWithSummary(
+  rows: readonly DecisionRow[],
+  argv: readonly string[],
+  context: DecisionQueryContext,
+): Promise<DecisionQueryResult> {
   const values = parseFlags(argv);
   const actor = values.by === undefined ? undefined : parseActorSelector(values.by);
   let mapId: string | undefined;
@@ -135,13 +150,15 @@ export async function queryDecisionRows(
     since = resolved.since;
   }
 
-  return collectNewest(rows, parseLimit(values.limit), (row) => {
+  const limit = parseLimit(values.limit);
+  const selected = collectNewest(rows, limit, (row) => {
     if (!matchesActor(row, actor)) return false;
     if (mapId !== undefined && row.mapId !== mapId) return false;
     if (provenance !== undefined && !row.provenance.includes(provenance)) return false;
     if (since !== undefined && row.resolvedAt !== undefined && row.resolvedAt < since) return false;
     return true;
   });
+  return { rows: selected.rows, matching: selected.matching, limit };
 }
 
 function matchesActor(row: DecisionRow, selector: Actor["kind"] | Actor | undefined): boolean {
@@ -160,16 +177,18 @@ function collectNewest(
   rows: readonly DecisionRow[],
   limit: number,
   eligible: (row: DecisionRow) => boolean,
-): DecisionRow[] {
+): { rows: DecisionRow[]; matching: number } {
   const kept: DecisionRow[] = [];
+  let matching = 0;
   for (const row of rows) {
     if (!eligible(row)) continue;
+    matching += 1;
     const index = kept.findIndex((candidate) => compareRows(row, candidate) < 0);
     if (index === -1) kept.push(row);
     else kept.splice(index, 0, row);
     if (kept.length > limit) kept.shift();
   }
-  return kept;
+  return { rows: kept, matching };
 }
 
 function compareRows(a: DecisionRow, b: DecisionRow): number {

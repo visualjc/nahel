@@ -155,9 +155,16 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
   const nodes = new Map(
     (await readRoadmapNodes(layout)).map((record) => [record.frontmatter.id, record]),
   );
-  const events = new Map(
-    (await scanSegments(layout)).flatMap(({ events }) => events.map((event) => [event.id, event])),
-  );
+  const events = new Map<string, JournalEvent>();
+  const ambiguousEventIds = new Set<string>();
+  for (const event of (await scanSegments(layout)).flatMap((segment) => segment.events)) {
+    if (events.has(event.id) || ambiguousEventIds.has(event.id)) {
+      events.delete(event.id);
+      ambiguousEventIds.add(event.id);
+    } else {
+      events.set(event.id, event);
+    }
+  }
   const observations = await Promise.all(
     (await listObservations(layout)).map((id) => readObservation(layout, id)),
   );

@@ -1,7 +1,7 @@
 import { CORE_EVENT_TYPES } from "../schema/events";
 import type { DecisionTicketType } from "../schema/enums";
 import type { Actor, JournalEvent } from "../schema/records";
-import { readJournal } from "../store/journal";
+import { scanSegments } from "../store/journal";
 import {
   listObservations,
   readMaps,
@@ -52,7 +52,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     (await readRoadmapNodes(layout)).map((record) => [record.frontmatter.id, record]),
   );
   const events = new Map(
-    (await Array.fromAsync(readJournal(layout))).map((event) => [event.id, event]),
+    (await scanSegments(layout)).flatMap(({ events }) => events.map((event) => [event.id, event])),
   );
   const observations = await Promise.all(
     (await listObservations(layout)).map((id) => readObservation(layout, id)),

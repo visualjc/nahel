@@ -195,6 +195,7 @@ async function note(
   root: string,
   summary: string,
   actorOverride?: string,
+  ticket?: string,
 ): Promise<string> {
   const output: string[] = [];
   const ctx: LogCommandContext = {
@@ -204,7 +205,17 @@ async function note(
     stderr: (text) => errors.push(text),
     ...(actorOverride === undefined ? {} : { actorOverride }),
   };
-  expect(await logCommand.run(["note", "--data", `summary=${summary}`], ctx)).toBe(0);
+  expect(
+    await logCommand.run(
+      [
+        "note",
+        "--data",
+        `summary=${summary}`,
+        ...(ticket === undefined ? [] : ["--data", `ticket=${ticket}`]),
+      ],
+      ctx,
+    ),
+  ).toBe(0);
   const id = /event ([0-9a-z]{8})/.exec(output.join("\n"))?.[1];
   expect(id).toMatch(ID_PATTERN);
   return id!;
@@ -330,6 +341,18 @@ describe("decision-row reconstruction", () => {
       { kind: "human", id: "jim", session: "planning" },
     ]);
     expect(row.provenance).toEqual(["delegated"]);
+  });
+
+  test("adds ratified when a strictly later human note names the exact ticket", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-ratified-", 93);
+    const { map } = await chart(env, root, "ratified-provenance");
+    const ticket = await createTicket(env, root, map, "grilling", "ratified provenance");
+    await resolveTicket(env, root, ticket, "Use the agent recommendation.");
+    await note(env, root, "Ratified after review.", "human:jim:review", ticket);
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.provenance).toEqual(["ratified", "agent"]);
   });
 
   test("keeps a linked decision incomplete when its resolution actor or time is malformed", async () => {

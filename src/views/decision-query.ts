@@ -80,7 +80,7 @@ export async function queryDecisionRows(
       throw new Error(`invalid --since ${JSON.stringify(values.since)} — ${resolved.error}`);
     }
     selected = selected.filter(
-      (row) => row.resolvedAt !== undefined && row.resolvedAt >= resolved.since,
+      (row) => row.resolvedAt === undefined || row.resolvedAt >= resolved.since,
     );
   }
 

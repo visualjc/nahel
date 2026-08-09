@@ -290,6 +290,7 @@ describe("decision-row reconstruction", () => {
       missingSourceEventIds: [],
       missing: [],
       incomplete: false,
+      provenance: ["direct-human"],
     });
   });
 

@@ -284,4 +284,28 @@ describe("decision query", () => {
       "aaaaaa01",
     ]);
   });
+
+  test("multiple undated rows follow dated rows, tie by ticket id, and survive the default boundary", async () => {
+    const store = await layout();
+    const dated = Array.from({ length: 10 }, (_, index) =>
+      datedRow(
+        `date${String(index).padStart(4, "0")}`,
+        `2026-08-08T${String(index).padStart(2, "0")}:00:00Z`,
+      ),
+    );
+    const laterId = undatedRow("zzzzzz02");
+    const earlierId = undatedRow("aaaaaa02");
+
+    const selected = await queryDecisionRows(
+      [laterId, ...dated, earlierId],
+      [],
+      { layout: store, now: NOW },
+    );
+
+    expect(selected.map((row) => row.ticketId)).toEqual([
+      ...dated.slice(2).map((row) => row.ticketId),
+      "aaaaaa02",
+      "zzzzzz02",
+    ]);
+  });
 });

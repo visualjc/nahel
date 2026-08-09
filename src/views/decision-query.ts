@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import type { Actor } from "../schema/records";
 import { parseActorSpec } from "../store/actor";
-import type { StoreLayout } from "../store/layout";
+import { resolveMap, type StoreLayout } from "../store/layout";
 import { resolveSince } from "./standup";
 import type { DecisionRow } from "./decisions";
 
@@ -20,7 +20,11 @@ export async function queryDecisionRows(
 ): Promise<DecisionRow[]> {
   const { values, positionals } = parseArgs({
     args: [...argv],
-    options: { since: { type: "string" }, by: { type: "string" } },
+    options: {
+      since: { type: "string" },
+      by: { type: "string" },
+      map: { type: "string" },
+    },
     strict: true,
     allowPositionals: true,
   });
@@ -38,6 +42,15 @@ export async function queryDecisionRows(
         row.resolver.session === selector.session
       );
     });
+  }
+  if (values.map !== undefined) {
+    const map = await resolveMap(context.layout, values.map);
+    if (map === null) {
+      throw new Error(
+        `invalid --map ${JSON.stringify(values.map)} — expected a map id or its roadmap node id/slug`,
+      );
+    }
+    selected = selected.filter((row) => row.mapId === map.frontmatter.id);
   }
   if (values.since === undefined) return selected;
 

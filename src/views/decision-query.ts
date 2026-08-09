@@ -84,7 +84,7 @@ export async function queryDecisionRows(
     );
   }
 
-  let limit = selected.length;
+  let limit = 10;
   if (values.limit !== undefined) {
     if (!/^[0-9]+$/.test(values.limit) || Number(values.limit) < 1) {
       throw new Error(`invalid --limit ${JSON.stringify(values.limit)} — expected a positive integer`);

@@ -38,11 +38,14 @@ export interface DecisionRow {
   incomplete: boolean;
 }
 
-function resolutionBelongsToTicket(event: JournalEvent | undefined, ticketId: string): boolean {
-  if (event?.type !== CORE_EVENT_TYPES.ticketResolved) return false;
+function resolutionForTicket(
+  event: JournalEvent | undefined,
+  ticketId: string,
+): JournalEvent | undefined {
+  if (event?.type !== CORE_EVENT_TYPES.ticketResolved) return undefined;
   const records = event.payload["records"];
-  if (event.payload["target"] !== "sequence" || !Array.isArray(records)) return false;
-  return records.some((entry) => {
+  if (event.payload["target"] !== "sequence" || !Array.isArray(records)) return undefined;
+  const belongs = records.some((entry) => {
     if (entry === null || typeof entry !== "object") return false;
     const fields = entry as Record<string, unknown>;
     if (fields["target"] !== "ticket") return false;
@@ -53,6 +56,7 @@ function resolutionBelongsToTicket(event: JournalEvent | undefined, ticketId: st
       (record as Record<string, unknown>)["id"] === ticketId
     );
   });
+  return belongs ? event : undefined;
 }
 
 /**
@@ -80,12 +84,13 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     const node = map === undefined ? undefined : nodes.get(map.frontmatter.node);
     const resolution =
       ticket.resolution === undefined ? undefined : events.get(ticket.resolution);
-    const hasResolution = resolutionBelongsToTicket(resolution, ticket.id);
-    const observation = observations.find(
+    const validResolution = resolutionForTicket(resolution, ticket.id);
+    const matchingObservations = observations.filter(
       ({ frontmatter }) =>
         frontmatter.name === `decision-${ticket.id}` &&
         (ticket.resolution === undefined || frontmatter.sources.includes(ticket.resolution)),
     );
+    const observation = matchingObservations.length === 1 ? matchingObservations[0] : undefined;
     const citedSourceEventIds =
       observation?.frontmatter.sources.filter((id) => id !== ticket.resolution) ?? [];
     const sourceEvents = citedSourceEventIds.flatMap((id) => {
@@ -95,7 +100,7 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
     const missingSourceEventIds = citedSourceEventIds.filter((id) => !events.has(id));
     const missing: DecisionRowMissingJoin[] = [];
     if (ticket.decision === undefined) missing.push("decision");
-    if (!hasResolution) missing.push("resolution-event");
+    if (validResolution === undefined) missing.push("resolution-event");
     if (map === undefined) missing.push("map");
     else if (node === undefined) missing.push("node");
     if (observation === undefined) missing.push("observation");
@@ -109,12 +114,16 @@ export async function reconstructDecisionRows(layout: StoreLayout): Promise<Deci
       ...(map === undefined ? {} : { nodeId: map.frontmatter.node }),
       ...(node === undefined ? {} : { nodeName: node.frontmatter.name }),
       ...(ticket.resolution === undefined ? {} : { resolutionEventId: ticket.resolution }),
-      ...(!hasResolution
+      ...(validResolution === undefined
         ? {}
         : {
-            resolvedAt: resolution.ts,
-            resolutionOrder: { ts: resolution.ts, seq: resolution.seq, id: resolution.id },
-            resolver: resolution.actor,
+            resolvedAt: validResolution.ts,
+            resolutionOrder: {
+              ts: validResolution.ts,
+              seq: validResolution.seq,
+              id: validResolution.id,
+            },
+            resolver: validResolution.actor,
           }),
       ...(observation === undefined ? {} : { observationId: observation.frontmatter.id }),
       citedSourceEventIds,

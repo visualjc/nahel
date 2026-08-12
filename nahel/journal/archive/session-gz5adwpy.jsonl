@@ -1,0 +1,2 @@
+{"id":"9gszpm4n","ts":"2026-08-08T23:47:26Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"ticket":"qgpkxfj2","constraint":"r87mstej","summary":"Human compact-first/query-more constraint applies: the output contract must keep the first response compact while preserving query and zoom paths for deeper inspection; machine-output choice remains open."}}
+{"id":"3x7n2kdf","ts":"2026-08-08T23:47:26Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

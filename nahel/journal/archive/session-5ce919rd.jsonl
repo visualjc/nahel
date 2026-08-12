@@ -1,0 +1,2 @@
+{"id":"37vzwgzx","ts":"2026-08-09T16:49:02Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex"},"item":"9qskgzv1","payload":{"summary":"review verdict: request-changes — corrupt joins can fabricate proof-backed provenance, and a supported incomplete row can print a failing map zoom.","head":"561d9df6958c4c55912bd8f10307f9876002faf0","round":1,"verdict":"request-changes"}}
+{"id":"9g1cws9d","ts":"2026-08-09T16:49:02Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex"},"payload":{}}

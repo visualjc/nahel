@@ -1,0 +1,2 @@
+{"id":"617vfk9x","ts":"2026-08-09T00:59:37Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-prd"},"item":"9qskgzv1","payload":{"summary":"Parses docs/prds/decision-digest.md (authored by plan item 4318wy9h)","approval_event":"vmzpeegb"}}
+{"id":"96xvv8es","ts":"2026-08-09T00:59:37Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-prd"},"payload":{}}

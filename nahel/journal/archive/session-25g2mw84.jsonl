@@ -1,0 +1,2 @@
+{"id":"bcyf6haj","ts":"2026-08-09T16:40:59Z","seq":0,"type":"note","actor":{"kind":"agent","id":"cursor-agent"},"item":"9qskgzv1","payload":{"summary":"review verdict: request-changes — ratified badge ignores canonical compareEvents order used by validate, so same-ts ratification proof is wrong","head":"561d9df6958c4c55912bd8f10307f9876002faf0","round":1,"verdict":"request-changes"}}
+{"id":"9ae2gdva","ts":"2026-08-09T16:40:59Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"cursor-agent"},"payload":{}}

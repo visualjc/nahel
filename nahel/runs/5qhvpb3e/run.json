@@ -1,0 +1,13 @@
+{
+  "id": "5qhvpb3e",
+  "item": "b9w9r8s9",
+  "actor": {
+    "kind": "agent",
+    "id": "codex"
+  },
+  "lane": "direct",
+  "phase": "failure",
+  "status": "ended",
+  "started": "2026-08-09T01:19:43Z",
+  "ended": "2026-08-09T01:19:44Z"
+}

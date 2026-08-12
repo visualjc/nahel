@@ -1,0 +1,2 @@
+{"id":"vcd6nxpa","ts":"2026-08-09T16:18:33Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"9qskgzv1","payload":{"summary":"Resumed only for human-authorized branch export and draft PR creation; implementation remains verified at 561d9df and the item will return to blocked after PR verification because cross-vendor review routing is still absent."}}
+{"id":"yyvbjghm","ts":"2026-08-09T16:18:33Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

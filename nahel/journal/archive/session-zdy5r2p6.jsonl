@@ -1,0 +1,2 @@
+{"id":"3qgk7h9p","ts":"2026-08-09T03:19:43Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"sge408aj","payload":{"summary":"parked: dependency t71vpsjs is blocked behind the dnj87rfb journal-integrity gate, so the modular exit test cannot begin without violating completion-then-dispatch"}}
+{"id":"ahz38t2t","ts":"2026-08-09T03:19:43Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

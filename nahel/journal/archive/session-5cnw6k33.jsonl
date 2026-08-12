@@ -1,0 +1,2 @@
+{"id":"j4gyn5dx","ts":"2026-08-09T17:44:50Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"9qskgzv1","payload":{"target":"item","record":{"id":"9qskgzv1","name":"decision-digest","type":"feature","status":"in-review","lane":"full","depends_on":[],"external_refs":[],"prd":"docs/prds/decision-digest.md","created":"2026-08-09T00:59:33Z","updated":"2026-08-09T17:44:50Z"},"body":""}}
+{"id":"tkmm83ge","ts":"2026-08-09T17:44:50Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"26r5q16q","ts":"2026-08-09T14:54:26Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"codex"},"item":"sge408aj","payload":{"target":"item","record":{"id":"sge408aj","name":"decision-digest-exit-test","type":"qa","status":"in-review","lane":"direct","parent":"9qskgzv1","depends_on":["t71vpsjs","mkysa1y8"],"external_refs":[],"created":"2026-08-09T01:00:08Z","updated":"2026-08-09T14:54:26Z"},"body":""}}
+{"id":"2rht3q8a","ts":"2026-08-09T14:54:26Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex"},"payload":{}}

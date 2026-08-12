@@ -1,0 +1,2 @@
+{"id":"7kq5fve8","ts":"2026-08-09T16:35:48Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"9qskgzv1","payload":{"summary":"Resumed for human-authorized diagnostic review round on existing draft PR #35; routing now resolves cursor-agent for slot 1 and codex for slot 2, with exact reviewed HEAD fixed at 561d9df6958c4c55912bd8f10307f9876002faf0."}}
+{"id":"vaqk087h","ts":"2026-08-09T16:35:48Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

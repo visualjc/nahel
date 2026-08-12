@@ -1,0 +1,2 @@
+{"id":"w7mjw4sc","ts":"2026-08-08T23:47:33Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"ticket":"cykaxggr","constraint":"r87mstej","summary":"Human compact-first/query-more constraint applies: provenance presentation should keep the first row compact and expose deeper chain detail through zoom; category and precedence choices remain open."}}
+{"id":"yd8x29jp","ts":"2026-08-08T23:47:33Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

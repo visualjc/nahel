@@ -1,0 +1,2 @@
+{"id":"rs7ft7z9","ts":"2026-08-08T23:47:25Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"ticket":"y509q4e5","constraint":"r87mstej","summary":"Human compact-first/query-more constraint applies: filters are the intended path to more detail, so filter design must support narrow follow-up queries without flooding initial context; ticket remains open."}}
+{"id":"c4t940ag","ts":"2026-08-08T23:47:25Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

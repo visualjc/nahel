@@ -1,0 +1,2 @@
+{"id":"wwvdqxr7","ts":"2026-08-08T23:47:26Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"ticket":"kq1k56ey","constraint":"r87mstej","summary":"Human compact-first/query-more constraint applies: ordering should optimize a compact first read and allow deeper historical traversal; ordering choice remains open pending convention research."}}
+{"id":"9phb30f8","ts":"2026-08-08T23:47:26Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

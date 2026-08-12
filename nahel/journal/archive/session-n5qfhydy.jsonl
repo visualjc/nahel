@@ -1,0 +1,2 @@
+{"id":"eh92n5hy","ts":"2026-08-09T03:19:42Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"t71vpsjs","payload":{"summary":"parked: dependency dnj87rfb cannot satisfy the AFK validation gate because live journal segment run-gyhmmwnt has duplicate seq=3; CLI/render/help dispatch is forbidden until the store-integrity recovery is chosen and dnj87rfb returns to verified in-review"}}
+{"id":"qcxrd1cn","ts":"2026-08-09T03:19:42Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

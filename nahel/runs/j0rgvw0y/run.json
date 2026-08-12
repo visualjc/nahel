@@ -1,0 +1,13 @@
+{
+  "id": "j0rgvw0y",
+  "item": "9qskgzv1",
+  "actor": {
+    "kind": "agent",
+    "id": "cursor-agent"
+  },
+  "lane": "full",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-09T17:55:17Z",
+  "ended": "2026-08-09T17:56:59Z"
+}

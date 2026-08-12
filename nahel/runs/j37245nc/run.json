@@ -1,0 +1,13 @@
+{
+  "id": "j37245nc",
+  "item": "9qskgzv1",
+  "actor": {
+    "kind": "agent",
+    "id": "codex-decision-digest-afk"
+  },
+  "lane": "full",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-12T21:31:04Z",
+  "ended": "2026-08-12T21:35:13Z"
+}

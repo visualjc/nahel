@@ -1,0 +1,2 @@
+{"id":"be7a8pb9","ts":"2026-08-08T23:54:11Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"ticket":"tkbbn029","summary":"Agent transcription of explicit human product decision: expose decision-digest as the top-level nahel decisions command, not as a roadmap subcommand.","decision":"top-level-nahel-decisions","source_thread":"019fe388-9b02-7d40-903a-ab1b3156ea64"}}
+{"id":"1sw15fpg","ts":"2026-08-08T23:54:11Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"gxynqdjc","ts":"2026-08-09T01:19:20Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"b9w9r8s9","payload":{"summary":"unblocked: human selected Codex for routing.implementation; live schema permits model omission, routing now records agent=codex with the CLI default model, and constitution/doctor/tier gates pass"}}
+{"id":"58wmyqfh","ts":"2026-08-09T01:19:20Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

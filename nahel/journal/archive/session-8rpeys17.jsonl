@@ -1,0 +1,2 @@
+{"id":"q81h9g58","ts":"2026-08-09T14:28:49Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"t71vpsjs","payload":{"summary":"Dependency-ready after dnj87rfb recovery and completion evidence; queued for AFK implementation only after runner re-verifies the query leaf and gates remain healthy."}}
+{"id":"4bn957z0","ts":"2026-08-09T14:28:49Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

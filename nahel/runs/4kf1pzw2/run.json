@@ -1,0 +1,13 @@
+{
+  "id": "4kf1pzw2",
+  "item": "9qskgzv1",
+  "actor": {
+    "kind": "agent",
+    "id": "codex-decision-digest-afk"
+  },
+  "lane": "full",
+  "phase": "failure",
+  "status": "ended",
+  "started": "2026-08-09T16:35:56Z",
+  "ended": "2026-08-09T16:51:42Z"
+}

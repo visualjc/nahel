@@ -1,0 +1,13 @@
+{
+  "id": "v46h5cf8",
+  "item": "mkysa1y8",
+  "actor": {
+    "kind": "agent",
+    "id": "codex-decision-digest-review"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-09T02:12:15Z",
+  "ended": "2026-08-09T02:12:31Z"
+}

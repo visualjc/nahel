@@ -1,0 +1,2 @@
+{"id":"2237hshw","ts":"2026-08-09T01:16:37Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"b9w9r8s9","payload":{"target":"item","record":{"id":"b9w9r8s9","name":"decision-row-reconstruction","type":"feature","status":"blocked","lane":"direct","parent":"9qskgzv1","depends_on":[],"external_refs":[],"created":"2026-08-09T00:59:48Z","updated":"2026-08-09T01:16:37Z"},"body":""}}
+{"id":"6x30psjj","ts":"2026-08-09T01:16:37Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

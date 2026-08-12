@@ -1,0 +1,2 @@
+{"id":"apz95m16","ts":"2026-08-08T23:47:05Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"ticket":"16h326qp","summary":"Agent transcription of explicit human product decision: include the small quoted-phrase usage hint for nahel recall inside the decision-digest delta.","decision":"include","source_thread":"019fe388-9b02-7d40-903a-ab1b3156ea64"}}
+{"id":"9ngj76sy","ts":"2026-08-08T23:47:05Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

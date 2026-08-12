@@ -1,0 +1,2 @@
+{"id":"nrk51w8b","ts":"2026-08-09T01:14:40Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"b9w9r8s9","payload":{"summary":"lane direct: bounded reconstruction core with an approved ownership contract and focused public-interface TDD; full-lane discovery is already complete in the parent PRD and lower prototype lane is inappropriate for production durable-store behavior"}}
+{"id":"m1047tqf","ts":"2026-08-09T01:14:40Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

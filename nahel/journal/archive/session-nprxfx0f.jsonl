@@ -1,0 +1,2 @@
+{"id":"4aqbeda0","ts":"2026-08-09T14:42:54Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"sge408aj","payload":{"summary":"Unblocked: dependencies t71vpsjs and mkysa1y8 are in-review with verification evidence. Authorized to implement only the comprehensive modular Decision Digest exit test; focused F1-F8 rule tests remain owned by predecessor leaves."}}
+{"id":"dczfxgdw","ts":"2026-08-09T14:42:54Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

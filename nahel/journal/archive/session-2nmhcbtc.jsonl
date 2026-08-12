@@ -1,0 +1,2 @@
+{"id":"zmhg5y48","ts":"2026-08-09T16:19:26Z","seq":0,"type":"note","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"item":"9qskgzv1","payload":{"summary":"qa not scheduled: Decision Digest already includes the approved comprehensive modular exit test and focused F1-F8 suites; no additional post-merge sweep is justified before review feedback or real usage evidence.","qa":"not-scheduled"}}
+{"id":"hjks85vh","ts":"2026-08-09T16:19:26Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-afk"},"payload":{}}

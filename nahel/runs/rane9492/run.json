@@ -1,0 +1,13 @@
+{
+  "id": "rane9492",
+  "item": "dnj87rfb",
+  "actor": {
+    "kind": "agent",
+    "id": "codex-decision-digest-afk"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-09T14:29:21Z",
+  "ended": "2026-08-09T14:29:21Z"
+}

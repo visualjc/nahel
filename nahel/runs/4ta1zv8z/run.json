@@ -1,0 +1,13 @@
+{
+  "id": "4ta1zv8z",
+  "item": "t71vpsjs",
+  "actor": {
+    "kind": "agent",
+    "id": "codex"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-09T14:29:55Z",
+  "ended": "2026-08-09T14:40:52Z"
+}

@@ -1,0 +1,2 @@
+{"id":"hrjascmq","ts":"2026-08-08T23:43:49Z","seq":0,"type":"roadmap.ticket-updated","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{"target":"ticket","record":{"id":"kq1k56ey","map":"0ty003v6","type":"grilling","state":"open","blockers":["t7rhbg53"],"created":"2026-08-08T23:43:39Z","updated":"2026-08-08T23:43:49Z"},"body":"Should ledger rows render newest-first or in chronological decision order?\n"}}
+{"id":"0hq17jfd","ts":"2026-08-08T23:43:49Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex-decision-digest-map"},"payload":{}}

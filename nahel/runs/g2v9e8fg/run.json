@@ -1,0 +1,13 @@
+{
+  "id": "g2v9e8fg",
+  "item": "b9w9r8s9",
+  "actor": {
+    "kind": "agent",
+    "id": "codex-decision-digest-review"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-09T02:11:39Z",
+  "ended": "2026-08-09T02:12:05Z"
+}

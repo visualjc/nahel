@@ -1,0 +1,2 @@
+{"id":"bzjnyw2e","ts":"2026-08-09T03:15:07Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"codex"},"item":"6hpzv8za","payload":{"target":"item","record":{"id":"6hpzv8za","name":"dispatch-process-group-test-missing-pgid","type":"bug","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-09T03:15:07Z","updated":"2026-08-09T03:15:07Z"},"body":""}}
+{"id":"4zfb6b6j","ts":"2026-08-09T03:15:07Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"codex"},"payload":{}}

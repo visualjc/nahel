@@ -16,7 +16,7 @@ export const DECISIONS_HELP = [
   "Bare `nahel decisions` selects the newest 10 matching decisions, then displays that retained slice oldest to newest.",
   "",
   "Flags:",
-  "  --since <7d|24h|ISO>  include dated decisions at or after the time; undated incomplete rows remain eligible",
+  "  --since <nd|nh|ISO>  include dated decisions at or after the time; whole-number examples: 2h, 30d; undated incomplete rows remain eligible",
   "  --by <human|agent|kind:id[:session]>  match a resolver kind or exact actor",
   "  --map <map-id|node-id|node-slug>  narrow to one current map",
   "  --provenance <direct-human|delegated|ratified|agent|incomplete>  require a proved badge",

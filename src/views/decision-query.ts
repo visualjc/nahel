@@ -27,7 +27,7 @@ const PROVENANCE_BADGES: readonly DecisionProvenance[] = [
 ];
 
 export const DECISION_QUERY_USAGE =
-  "usage: nahel decisions [--since <7d|24h|ISO>] [--by <human|agent|kind:id[:session]>] " +
+  "usage: nahel decisions [--since <nd|nh|ISO>] [--by <human|agent|kind:id[:session]>] " +
   "[--map <map-id|node-id|node-slug>] " +
   "[--provenance <direct-human|delegated|ratified|agent|incomplete>] " +
   "[--limit <positive-integer>]";
@@ -201,8 +201,8 @@ function compareRows(a: DecisionRow, b: DecisionRow): number {
   }
   const byTimestamp = aOrder.ts.localeCompare(bOrder.ts);
   if (byTimestamp !== 0) return byTimestamp;
-  const bySequence = aOrder.seq - bOrder.seq;
-  if (bySequence !== 0) return bySequence;
+  if (aOrder.seq < bOrder.seq) return -1;
+  if (aOrder.seq > bOrder.seq) return 1;
   const byEvent = aOrder.id.localeCompare(bOrder.id);
   if (byEvent !== 0) return byEvent;
   return a.ticketId.localeCompare(b.ticketId);

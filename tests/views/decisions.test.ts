@@ -1,0 +1,930 @@
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { logCommand, type LogCommandContext } from "../../src/commands/log";
+import { observeCommand } from "../../src/commands/observe";
+import { roadmapCommand } from "../../src/commands/roadmap";
+import type { Env } from "../../src/schema/env";
+import { ID_PATTERN } from "../../src/schema/id";
+import { appendEvent, listSegments, newSessionSegmentId } from "../../src/store/journal";
+import { replayPending } from "../../src/store/mutate";
+import {
+  ensureLayout,
+  listObservations,
+  mapPath,
+  observationPath,
+  readObservation,
+  readTicket,
+  roadmapNodePath,
+  writeConfig,
+  writeTicket,
+  type StoreLayout,
+} from "../../src/store/layout";
+import {
+  reconstructDecisionRows,
+  type DecisionProvenance,
+} from "../../src/views/decisions";
+import { queryDecisionRows } from "../../src/views/decision-query";
+import { makeConfig, makeTempDir, seededEnv } from "../store/helpers";
+
+let dirs: string[] = [];
+let logs: string[] = [];
+let errors: string[] = [];
+let logSpy: { mockRestore(): void };
+let errorSpy: { mockRestore(): void };
+
+beforeEach(() => {
+  logs = [];
+  errors = [];
+  logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    logs.push(args.join(" "));
+  });
+  errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    errors.push(args.join(" "));
+  });
+});
+
+afterEach(async () => {
+  logSpy.mockRestore();
+  errorSpy.mockRestore();
+  for (const dir of dirs) await rm(dir, { recursive: true, force: true });
+  dirs = [];
+});
+
+async function roadmap(env: Env, root: string, args: string[], actor?: string): Promise<string[]> {
+  const before = logs.length;
+  expect(await roadmapCommand.run(args, env, root, actor)).toBe(0);
+  expect(errors).toEqual([]);
+  return logs.slice(before);
+}
+
+function printedId(output: string[]): string {
+  const id = output.at(-1);
+  expect(id).toMatch(ID_PATTERN);
+  return id!;
+}
+
+async function removeEventField(
+  layout: StoreLayout,
+  eventId: string,
+  field: "actor" | "ts",
+): Promise<void> {
+  const segments = await listSegments(layout);
+  const paths = [
+    ...segments.active.map((name) => join(layout.journalDir, name)),
+    ...segments.archived.map((name) => join(layout.journalArchiveDir, name)),
+  ];
+  for (const path of paths) {
+    const lines = (await readFile(path, "utf8")).trimEnd().split("\n");
+    let found = false;
+    const rewritten = lines.map((line) => {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (event.id !== eventId) return line;
+      found = true;
+      delete event[field];
+      return JSON.stringify(event);
+    });
+    if (found) {
+      await writeFile(path, `${rewritten.join("\n")}\n`, "utf8");
+      return;
+    }
+  }
+  throw new Error(`event ${eventId} not found`);
+}
+
+interface DetachedEvent {
+  path: string;
+  index: number;
+  line: string;
+}
+
+async function detachEvent(layout: StoreLayout, eventId: string): Promise<DetachedEvent> {
+  const segments = await listSegments(layout);
+  const paths = [
+    ...segments.active.map((name) => join(layout.journalDir, name)),
+    ...segments.archived.map((name) => join(layout.journalArchiveDir, name)),
+  ];
+  for (const path of paths) {
+    const lines = (await readFile(path, "utf8")).trimEnd().split("\n");
+    const index = lines.findIndex(
+      (line) => (JSON.parse(line) as { id?: string }).id === eventId,
+    );
+    if (index === -1) continue;
+    const [line] = lines.splice(index, 1);
+    await writeFile(path, `${lines.join("\n")}\n`, "utf8");
+    return { path, index, line: line! };
+  }
+  throw new Error(`event ${eventId} not found`);
+}
+
+async function restoreEvent(detached: DetachedEvent): Promise<void> {
+  const lines = (await readFile(detached.path, "utf8")).trimEnd().split("\n");
+  lines.splice(detached.index, 0, detached.line);
+  await writeFile(detached.path, `${lines.join("\n")}\n`, "utf8");
+}
+
+async function setupStore(prefix: string, seed: number) {
+  const root = await makeTempDir(prefix);
+  dirs.push(root);
+  const layout = await ensureLayout(root);
+  await writeConfig(layout, makeConfig());
+  return { root, layout, env: seededEnv({ seed, tickSeconds: 1 }) };
+}
+
+async function chart(env: Env, root: string, name: string) {
+  const node = printedId(
+    await roadmap(env, root, [
+      "node",
+      "new",
+      "feature",
+      name,
+      "--horizon",
+      "now",
+      "--intent",
+      `Intent for ${name}.`,
+    ]),
+  );
+  const map = printedId(
+    await roadmap(env, root, [
+      "map",
+      "new",
+      "--node",
+      node,
+      "--destination",
+      `destination for ${name}`,
+    ]),
+  );
+  return { node, map };
+}
+
+async function createTicket(
+  env: Env,
+  root: string,
+  map: string,
+  type: "research" | "prototype" | "grilling" | "task",
+  label: string,
+): Promise<string> {
+  return printedId(
+    await roadmap(env, root, [
+      "ticket",
+      "new",
+      "--map",
+      map,
+      "--type",
+      type,
+      "--question",
+      `Question for ${label}?`,
+    ]),
+  );
+}
+
+async function resolveTicket(
+  env: Env,
+  root: string,
+  ticket: string,
+  decision: string,
+  sources: string[] = [],
+): Promise<void> {
+  await roadmap(env, root, [
+    "ticket",
+    "resolve",
+    ticket,
+    "--decision",
+    decision,
+    ...sources.flatMap((source) => ["--source", source]),
+  ]);
+}
+
+async function note(
+  env: Env,
+  root: string,
+  summary: string,
+  actorOverride?: string,
+  ticket?: string,
+): Promise<string> {
+  const output: string[] = [];
+  const ctx: LogCommandContext = {
+    env,
+    cwd: root,
+    stdout: (text) => output.push(text),
+    stderr: (text) => errors.push(text),
+    ...(actorOverride === undefined ? {} : { actorOverride }),
+  };
+  expect(
+    await logCommand.run(
+      [
+        "note",
+        "--data",
+        `summary=${summary}`,
+        ...(ticket === undefined ? [] : ["--data", `ticket=${ticket}`]),
+      ],
+      ctx,
+    ),
+  ).toBe(0);
+  const id = /event ([0-9a-z]{8})/.exec(output.join("\n"))?.[1];
+  expect(id).toMatch(ID_PATTERN);
+  return id!;
+}
+
+async function observationIdFor(layout: StoreLayout, ticket: string): Promise<string> {
+  for (const id of await listObservations(layout)) {
+    if ((await readObservation(layout, id)).frontmatter.name === `decision-${ticket}`) return id;
+  }
+  throw new Error(`decision observation for ${ticket} not found`);
+}
+
+describe("decision-row reconstruction", () => {
+  test("reconstructs a healthy resolved ticket through the public read interface", async () => {
+    const root = await makeTempDir("nahel-decisions-view-");
+    dirs.push(root);
+    const layout = await ensureLayout(root);
+    await writeConfig(layout, makeConfig());
+    const env = seededEnv({ now: "2026-08-08T12:00:00Z", tickSeconds: 1 });
+
+    const node = printedId(
+      await roadmap(env, root, [
+        "node",
+        "new",
+        "feature",
+        "durable-decisions",
+        "--horizon",
+        "now",
+        "--intent",
+        "Keep decisions durable.",
+      ]),
+    );
+    const map = printedId(
+      await roadmap(env, root, [
+        "map",
+        "new",
+        "--node",
+        node,
+        "--destination",
+        "a durable decision ledger",
+      ]),
+    );
+    const ticket = printedId(
+      await roadmap(env, root, [
+        "ticket",
+        "new",
+        "--map",
+        map,
+        "--type",
+        "research",
+        "--question",
+        "Which records define a decision row?",
+      ]),
+    );
+    await roadmap(
+      env,
+      root,
+      ["ticket", "resolve", ticket, "--decision", "Use current durable store facts."],
+      "human:jim:planning",
+    );
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.resolutionEventId).toMatch(ID_PATTERN);
+    expect(row.observationId).toMatch(ID_PATTERN);
+    const resolutionEventId = row.resolutionEventId!;
+    const observationId = row.observationId!;
+    expect(row).toEqual({
+      ticketId: ticket,
+      ticketType: "research",
+      decision: "Use current durable store facts.",
+      mapId: map,
+      nodeId: node,
+      nodeName: "durable-decisions",
+      resolutionEventId,
+      resolvedAt: "2026-08-08T12:00:10Z",
+      resolutionOrder: {
+        ts: "2026-08-08T12:00:10Z",
+        seq: 0,
+        id: resolutionEventId,
+      },
+      resolver: { kind: "human", id: "jim", session: "planning" },
+      observationId,
+      citedSourceEventIds: [],
+      sourceEvents: [],
+      missingSourceEventIds: [],
+      missing: [],
+      incomplete: false,
+      provenance: ["direct-human"],
+    });
+  });
+
+  test("classifies an exact agent resolver with no proved delegation as agent", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-agent-", 91);
+    const { map } = await chart(env, root, "agent-provenance");
+    const ticket = await createTicket(env, root, map, "task", "agent provenance");
+    await resolveTicket(env, root, ticket, "Keep the resolver's exact identity.");
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.resolver).toEqual({ kind: "agent", id: "claude-code" });
+    expect(row.provenance).toEqual(["agent"]);
+  });
+
+  test("classifies an agent resolution citing a human-attributed source as delegated", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-delegated-", 92);
+    const { map } = await chart(env, root, "delegated-provenance");
+    const source = await note(
+      env,
+      root,
+      "Delegate this exact decision ticket.",
+      "human:jim:planning",
+    );
+    const ticket = await createTicket(env, root, map, "grilling", "delegated provenance");
+    await resolveTicket(env, root, ticket, "Use the delegated recommendation.", [source]);
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.resolver).toEqual({ kind: "agent", id: "claude-code" });
+    expect(row.sourceEvents.map((event) => event.actor)).toEqual([
+      { kind: "human", id: "jim", session: "planning" },
+    ]);
+    expect(row.provenance).toEqual(["delegated"]);
+  });
+
+  test("adds ratified when a strictly later human note names the exact ticket", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-ratified-", 93);
+    const { map } = await chart(env, root, "ratified-provenance");
+    const ticket = await createTicket(env, root, map, "grilling", "ratified provenance");
+    await resolveTicket(env, root, ticket, "Use the agent recommendation.");
+    await note(env, root, "Ratified after review.", "human:jim:review", ticket);
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.provenance).toEqual(["ratified", "agent"]);
+  });
+
+  test("does not ratify from a same-time or earlier human note", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-ratify-boundary-", 931);
+    const { map } = await chart(env, root, "ratification-boundary");
+
+    const earlierTicket = await createTicket(env, root, map, "grilling", "earlier note");
+    await note(env, root, "Thinking before resolution.", "human:jim", earlierTicket);
+    await resolveTicket(env, root, earlierTicket, "Resolve after the note.");
+
+    const sameTimeTicket = await createTicket(env, root, map, "grilling", "same-time note");
+    await resolveTicket(env, root, sameTimeTicket, "Resolve at the boundary.");
+    const sameTimeResolution = (await reconstructDecisionRows(layout)).find(
+      (row) => row.ticketId === sameTimeTicket,
+    )!;
+    await appendEvent(
+      layout,
+      { now: () => sameTimeResolution.resolvedAt!, random: env.random },
+      {
+        type: "note",
+        actor: { kind: "human", id: "jim" },
+        payload: { ticket: sameTimeTicket, summary: "Same-time note." },
+        session: newSessionSegmentId(env),
+      },
+    );
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows.find((row) => row.ticketId === earlierTicket)?.provenance).toEqual(["agent"]);
+    expect(rows.find((row) => row.ticketId === sameTimeTicket)?.provenance).toEqual(["agent"]);
+  });
+
+  test("does not infer human provenance from prose or multiple agent sources", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-proof-negatives-", 932);
+    const { map } = await chart(env, root, "proof-negatives");
+
+    const proseSource = await note(
+      env,
+      root,
+      "Jim chose this; I am only relaying the human decision.",
+      "agent:codex:research",
+    );
+    const proseTicket = await createTicket(env, root, map, "grilling", "prose claim");
+    await resolveTicket(env, root, proseTicket, "Relay the claimed human choice.", [proseSource]);
+    await note(
+      env,
+      root,
+      `Human prose mentions ${proseTicket} but carries no structured ticket link.`,
+      "human:jim:review",
+    );
+
+    const firstAgentSource = await note(env, root, "First agent opinion.", "agent:codex");
+    const secondAgentSource = await note(env, root, "Second agent opinion.", "agent:cursor");
+    const multiAgentTicket = await createTicket(env, root, map, "grilling", "multi-agent claim");
+    await resolveTicket(env, root, multiAgentTicket, "Use the cross-agent recommendation.", [
+      firstAgentSource,
+      secondAgentSource,
+    ]);
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows.find((row) => row.ticketId === proseTicket)?.provenance).toEqual(["agent"]);
+    expect(rows.find((row) => row.ticketId === multiAgentTicket)?.provenance).toEqual(["agent"]);
+  });
+
+  test("keeps delegated, ratified, and incomplete badges additive", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-additive-", 94);
+    const { node, map } = await chart(env, root, "additive-provenance");
+    const source = await note(
+      env,
+      root,
+      "Delegate this exact ticket.",
+      "human:jim:planning",
+    );
+    const ticket = await createTicket(env, root, map, "grilling", "additive provenance");
+    await resolveTicket(env, root, ticket, "Use the delegated recommendation.", [source]);
+    await note(env, root, "Ratified after review.", "human:jim:review", ticket);
+    await rm(roadmapNodePath(layout, node));
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row.missing).toEqual(["node"]);
+    expect(row.provenance).toEqual(["delegated", "ratified", "incomplete"]);
+  });
+
+  test("exposes typed additive badges for later exact provenance filtering", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-filter-seam-", 95);
+    const { map } = await chart(env, root, "provenance-filter-seam");
+    const source = await note(env, root, "Delegate one ticket.", "human:jim");
+    const delegatedTicket = await createTicket(env, root, map, "task", "delegated filter");
+    await resolveTicket(env, root, delegatedTicket, "Delegated decision.", [source]);
+    const agentTicket = await createTicket(env, root, map, "task", "agent filter");
+    await resolveTicket(env, root, agentTicket, "Agent decision.");
+
+    const selectedBadge: DecisionProvenance = "delegated";
+    const selected = (await reconstructDecisionRows(layout)).filter((row) =>
+      row.provenance.includes(selectedBadge),
+    );
+
+    expect(selected.map((row) => row.ticketId)).toEqual([delegatedTicket]);
+    expect(selected[0]?.provenance).toEqual(["delegated"]);
+  });
+
+  test("keeps a linked decision incomplete when its resolution actor or time is malformed", async () => {
+    for (const field of ["actor", "ts"] as const) {
+      const root = await makeTempDir(`nahel-decisions-missing-${field}-`);
+      dirs.push(root);
+      const layout = await ensureLayout(root);
+      await writeConfig(layout, makeConfig());
+      const env = seededEnv({ seed: field === "actor" ? 101 : 202, tickSeconds: 1 });
+      const node = printedId(
+        await roadmap(env, root, [
+          "node",
+          "new",
+          "feature",
+          `missing-${field}`,
+          "--horizon",
+          "now",
+          "--intent",
+          "Keep incomplete decisions visible.",
+        ]),
+      );
+      const map = printedId(
+        await roadmap(env, root, [
+          "map",
+          "new",
+          "--node",
+          node,
+          "--destination",
+          "visible incomplete decisions",
+        ]),
+      );
+      const ticket = printedId(
+        await roadmap(env, root, [
+          "ticket",
+          "new",
+          "--map",
+          map,
+          "--type",
+          "task",
+          "--question",
+          `What if the resolution ${field} is missing?`,
+        ]),
+      );
+      await roadmap(env, root, [
+        "ticket",
+        "resolve",
+        ticket,
+        "--decision",
+        `Preserve the row without an invented ${field}.`,
+      ]);
+      const healthy = (await reconstructDecisionRows(layout))[0]!;
+
+      await removeEventField(layout, healthy.resolutionEventId!, field);
+      const rows = await reconstructDecisionRows(layout);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        ticketId: ticket,
+        decision: `Preserve the row without an invented ${field}.`,
+        mapId: map,
+        nodeId: node,
+        nodeName: `missing-${field}`,
+        resolutionEventId: healthy.resolutionEventId,
+        missing: ["resolution-event"],
+        incomplete: true,
+      });
+      expect(rows[0]).not.toHaveProperty("resolver");
+      expect(rows[0]).not.toHaveProperty("resolvedAt");
+      expect(rows[0]).not.toHaveProperty("resolutionOrder");
+    }
+  });
+
+  test("treats duplicate resolution event ids as ambiguous instead of choosing one", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-duplicate-resolution-", 251);
+    const { map } = await chart(env, root, "duplicate-resolution-feature");
+    const ticket = await createTicket(env, root, map, "task", "duplicate resolution");
+    await resolveTicket(env, root, ticket, "Keep ambiguous resolution facts hidden.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    await appendEvent(layout, env, {
+      id: resolution,
+      type: "roadmap.ticket-resolved",
+      actor: { kind: "human", id: "mallory" },
+      payload: {
+        target: "sequence",
+        records: [{ target: "ticket", record: { id: ticket } }],
+      },
+      session: newSessionSegmentId(env),
+    });
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      resolutionEventId: resolution,
+      missing: ["resolution-event"],
+      incomplete: true,
+      provenance: ["incomplete"],
+    });
+    expect(row).not.toHaveProperty("resolver");
+    expect(row).not.toHaveProperty("resolvedAt");
+    expect(row).not.toHaveProperty("resolutionOrder");
+  });
+
+  test("does not borrow resolution facts from another ticket's event", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-wrong-resolution-", 252);
+    const { node, map } = await chart(env, root, "wrong-resolution-feature");
+    const ticket = await createTicket(env, root, map, "research", "original");
+    const otherTicket = await createTicket(env, root, map, "task", "other");
+    await resolveTicket(env, root, ticket, "Keep this ticket's durable decision.");
+    await roadmap(
+      env,
+      root,
+      ["ticket", "resolve", otherTicket, "--decision", "Do not borrow this resolution."],
+      "human:jim:review",
+    );
+    const current = await readTicket(layout, ticket);
+    const otherResolution = (await readTicket(layout, otherTicket)).frontmatter.resolution!;
+    await writeTicket(
+      layout,
+      { ...current.frontmatter, resolution: otherResolution },
+      current.body,
+    );
+
+    const rows = await reconstructDecisionRows(layout);
+    const row = rows.find((candidate) => candidate.ticketId === ticket)!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      decision: "Keep this ticket's durable decision.",
+      mapId: map,
+      nodeId: node,
+      resolutionEventId: otherResolution,
+      missing: ["resolution-event", "observation"],
+      incomplete: true,
+    });
+    expect(row).not.toHaveProperty("resolver");
+    expect(row).not.toHaveProperty("resolvedAt");
+    expect(row).not.toHaveProperty("resolutionOrder");
+  });
+
+  test("uses the embedded observation when a lookalike also cites the resolution", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-ambiguous-observation-", 253);
+    const { map } = await chart(env, root, "ambiguous-observation-feature");
+    const ticket = await createTicket(env, root, map, "research", "ambiguous-observation");
+    const humanSource = await note(
+      env,
+      root,
+      "Human delegation belongs to the embedded observation.",
+      "human:jim:planning",
+    );
+    await resolveTicket(
+      env,
+      root,
+      ticket,
+      "Keep canonical observation facts visible.",
+      [humanSource],
+    );
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    const canonicalObservation = await observationIdFor(layout, ticket);
+    const extraSource = await note(env, root, "A source only one observation cites.");
+    expect(
+      await observeCommand.run(
+        [
+          `decision-${ticket}`,
+          "--data",
+          `sources=["${resolution}","${extraSource}"]`,
+          "--data",
+          "body=Conflicting duplicate observation.",
+        ],
+        env,
+        root,
+      ),
+    ).toBe(0);
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      decision: "Keep canonical observation facts visible.",
+      resolutionEventId: resolution,
+      resolver: { kind: "agent", id: "claude-code" },
+      observationId: canonicalObservation,
+      citedSourceEventIds: [humanSource],
+      missingSourceEventIds: [],
+      missing: [],
+      incomplete: false,
+      provenance: ["delegated"],
+    });
+    expect(row.sourceEvents.map((event) => event.actor)).toEqual([
+      { kind: "human", id: "jim", session: "planning" },
+    ]);
+  });
+
+  test("does not substitute a lookalike for the observation embedded in the resolution", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-lookalike-observation-", 254);
+    const { map } = await chart(env, root, "lookalike-observation-feature");
+    const ticket = await createTicket(env, root, map, "grilling", "lookalike observation");
+    await resolveTicket(env, root, ticket, "Keep provenance tied to the canonical observation.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    const canonicalObservation = await observationIdFor(layout, ticket);
+    const humanSource = await note(
+      env,
+      root,
+      "A human source cited only by the lookalike.",
+      "human:jim:planning",
+    );
+    expect(
+      await observeCommand.run(
+        [
+          `decision-${ticket}`,
+          "--data",
+          `sources=["${resolution}","${humanSource}"]`,
+          "--data",
+          "body=Unproved lookalike observation.",
+        ],
+        env,
+        root,
+      ),
+    ).toBe(0);
+    await rm(observationPath(layout, canonicalObservation));
+
+    const row = (await reconstructDecisionRows(layout))[0]!;
+
+    expect(row).toMatchObject({
+      ticketId: ticket,
+      resolutionEventId: resolution,
+      resolver: { kind: "agent", id: "claude-code" },
+      citedSourceEventIds: [],
+      sourceEvents: [],
+      missingSourceEventIds: [],
+      missing: ["observation"],
+      incomplete: true,
+      provenance: ["agent", "incomplete"],
+    });
+    expect(row).not.toHaveProperty("observationId");
+  });
+
+  test("includes every resolved ticket type across maps and excludes every other state", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-types-", 303);
+    const first = await chart(env, root, "first-feature");
+    const second = await chart(env, root, "second-feature");
+    const resolved: string[] = [];
+    for (const [index, type] of ["research", "prototype", "grilling", "task"].entries()) {
+      const ticket = await createTicket(
+        env,
+        root,
+        index % 2 === 0 ? first.map : second.map,
+        type as "research" | "prototype" | "grilling" | "task",
+        type,
+      );
+      await resolveTicket(env, root, ticket, `${type} produced a durable decision.`);
+      resolved.push(ticket);
+    }
+    const open = await createTicket(env, root, first.map, "task", "open");
+    const claimed = await createTicket(env, root, first.map, "research", "claimed");
+    await roadmap(env, root, ["ticket", "claim", claimed]);
+    const outOfScope = await createTicket(env, root, first.map, "prototype", "out-of-scope");
+    await roadmap(env, root, [
+      "ticket",
+      "close",
+      outOfScope,
+      "--out-of-scope",
+      "--reason",
+      "Outside this delta.",
+    ]);
+    const invalidated = await createTicket(env, root, second.map, "grilling", "invalidated");
+    await roadmap(env, root, [
+      "ticket",
+      "close",
+      invalidated,
+      "--invalidated-by",
+      resolved[0]!,
+      "--reason",
+      "The research decision answered it.",
+    ]);
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows).toHaveLength(4);
+    expect(rows.map((row) => row.ticketId).sort()).toEqual([...resolved].sort());
+    expect(rows.map((row) => row.ticketType).sort()).toEqual([
+      "grilling",
+      "prototype",
+      "research",
+      "task",
+    ]);
+    for (const excluded of [open, claimed, outOfScope, invalidated]) {
+      expect(rows.some((row) => row.ticketId === excluded)).toBe(false);
+    }
+    expect(new Set(rows.map((row) => row.mapId))).toEqual(new Set([first.map, second.map]));
+  });
+
+  test("survives ticket distillation and archived resolution history", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-durable-", 404);
+    const { node, map } = await chart(env, root, "archived-feature");
+    const ticket = await createTicket(env, root, map, "prototype", "durability");
+    await resolveTicket(env, root, ticket, "Rebuild from the durable graph.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    await roadmap(env, root, ["ticket", "distill", ticket]);
+
+    expect((await readTicket(layout, ticket)).body).toBe("");
+    const archived = await listSegments(layout);
+    expect(archived.archived.length).toBeGreaterThan(0);
+    expect(archived.active).toEqual([]);
+    expect(
+      await Promise.all(
+        archived.archived.map(async (name) =>
+          (await readFile(join(layout.journalArchiveDir, name), "utf8")).includes(resolution),
+        ),
+      ),
+    ).toContain(true);
+    expect(await reconstructDecisionRows(layout)).toEqual([
+      expect.objectContaining({
+        ticketId: ticket,
+        decision: "Rebuild from the durable graph.",
+        mapId: map,
+        nodeId: node,
+        nodeName: "archived-feature",
+        resolutionEventId: resolution,
+        incomplete: false,
+      }),
+    ]);
+  });
+
+  test("preserves proved facts at every missing durable join", async () => {
+    for (const boundary of [
+      "resolution-event",
+      "map",
+      "node",
+      "observation",
+      "source-event",
+    ] as const) {
+      const { root, layout, env } = await setupStore(
+        `nahel-decisions-missing-${boundary}-`,
+        500 + boundary.length,
+      );
+      const { node, map } = await chart(env, root, `boundary-${boundary}`);
+      const source = await note(env, root, `Source for ${boundary}.`);
+      const ticket = await createTicket(env, root, map, "research", boundary);
+      await resolveTicket(env, root, ticket, `Keep ${boundary} failures visible.`, [source]);
+      const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+      const observation = await observationIdFor(layout, ticket);
+
+      if (boundary === "resolution-event") await detachEvent(layout, resolution);
+      if (boundary === "map") await rm(mapPath(layout, map));
+      if (boundary === "node") await rm(roadmapNodePath(layout, node));
+      if (boundary === "observation") await rm(observationPath(layout, observation));
+      if (boundary === "source-event") await detachEvent(layout, source);
+
+      const rows = await reconstructDecisionRows(layout);
+      const row = rows[0]!;
+      expect(rows).toHaveLength(1);
+      expect(row).toMatchObject({
+        ticketId: ticket,
+        decision: `Keep ${boundary} failures visible.`,
+        mapId: map,
+        resolutionEventId: resolution,
+        missing: [boundary],
+        incomplete: true,
+      });
+      if (boundary === "map") {
+        expect(row).not.toHaveProperty("nodeId");
+        expect(row).not.toHaveProperty("nodeName");
+      } else {
+        expect(row.nodeId).toBe(node);
+        if (boundary === "node") expect(row).not.toHaveProperty("nodeName");
+        else expect(row.nodeName).toBe(`boundary-${boundary}`);
+      }
+      if (boundary === "resolution-event") {
+        expect(row).not.toHaveProperty("resolver");
+        expect(row).not.toHaveProperty("resolvedAt");
+      }
+      if (boundary === "observation") {
+        expect(row).not.toHaveProperty("observationId");
+        expect(row.citedSourceEventIds).toEqual([]);
+      }
+      if (boundary === "source-event") {
+        expect(row.citedSourceEventIds).toEqual([source]);
+        expect(row.sourceEvents).toEqual([]);
+        expect(row.missingSourceEventIds).toEqual([source]);
+      }
+    }
+  });
+
+  test("an incomplete row does not hide a healthy row from the same read", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-mixed-", 606);
+    const { map } = await chart(env, root, "mixed-feature");
+    const healthyTicket = await createTicket(env, root, map, "research", "healthy");
+    const incompleteTicket = await createTicket(env, root, map, "task", "incomplete");
+    await resolveTicket(env, root, healthyTicket, "Healthy evidence stays healthy.");
+    await resolveTicket(env, root, incompleteTicket, "Incomplete evidence stays visible.");
+    await rm(observationPath(layout, await observationIdFor(layout, incompleteTicket)));
+
+    const rows = await reconstructDecisionRows(layout);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.ticketId === healthyTicket)).toMatchObject({
+      missing: [],
+      incomplete: false,
+    });
+    expect(rows.find((row) => row.ticketId === incompleteTicket)).toMatchObject({
+      missing: ["observation"],
+      incomplete: true,
+    });
+  });
+
+  test("a repaired join upgrades the same ticket row on the next call without a duplicate", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-repair-", 707);
+    const { node, map } = await chart(env, root, "repair-feature");
+    const ticket = await createTicket(env, root, map, "grilling", "repair");
+    await resolveTicket(env, root, ticket, "Read current durable state on every call.");
+    const resolution = (await readTicket(layout, ticket)).frontmatter.resolution!;
+    const detached = await detachEvent(layout, resolution);
+
+    const before = await reconstructDecisionRows(layout);
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatchObject({
+      ticketId: ticket,
+      mapId: map,
+      nodeId: node,
+      resolutionEventId: resolution,
+      missing: ["resolution-event"],
+      incomplete: true,
+    });
+    expect(before[0]).not.toHaveProperty("resolver");
+
+    await restoreEvent(detached);
+    const after = await reconstructDecisionRows(layout);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      ticketId: ticket,
+      mapId: map,
+      nodeId: node,
+      resolutionEventId: resolution,
+      resolver: { kind: "agent", id: "claude-code" },
+      missing: [],
+      incomplete: false,
+    });
+    expect(after[0]?.resolvedAt).toMatch(/^2026-/);
+  });
+
+  test("the incomplete query matches before durable repair and not after, without duplicates", async () => {
+    const { root, layout, env } = await setupStore("nahel-decisions-query-repair-", 808);
+    const { map } = await chart(env, root, "query-repair-feature");
+    const ticket = await createTicket(env, root, map, "task", "query repair");
+    await resolveTicket(env, root, ticket, "Repair upgrades this query row in place.");
+    await rm(observationPath(layout, await observationIdFor(layout, ticket)));
+
+    const before = await queryDecisionRows(
+      await reconstructDecisionRows(layout),
+      ["--provenance", "incomplete"],
+      { layout, now: "2026-08-08T12:00:00Z" },
+    );
+    expect(before.map((row) => row.ticketId)).toEqual([ticket]);
+
+    expect((await replayPending(layout)).map((record) => record.target)).toEqual([
+      "observation",
+    ]);
+    const reconstructed = await reconstructDecisionRows(layout);
+    const incompleteAfter = await queryDecisionRows(
+      reconstructed,
+      ["--provenance", "incomplete"],
+      { layout, now: "2026-08-08T12:00:00Z" },
+    );
+
+    expect(incompleteAfter).toEqual([]);
+    expect(reconstructed.map((row) => row.ticketId)).toEqual([ticket]);
+  });
+});

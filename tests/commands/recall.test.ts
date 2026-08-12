@@ -136,6 +136,34 @@ describe("nahel recall — ranking and determinism", () => {
 });
 
 describe("nahel recall — edges", () => {
+  test("help shows an executable quoted-phrase example that finds a decision observation", async () => {
+    const { root, layout, env } = await setup();
+    const decision = await seedObservation(
+      layout,
+      env,
+      { name: "decision-ledger-source", tags: ["decision"] },
+      "Decision Digest is a read-only ledger.\n",
+    );
+
+    const help = await runRecall(["--help"], root);
+    expect(help).toEqual({
+      code: 0,
+      stdout: [
+        "usage: nahel recall <term> [<term>...]",
+        "",
+        "Quote a phrase to narrow results to that exact word sequence.",
+        'Example: nahel recall "decision digest"',
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await runRecall(["decision digest"], root);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(decision.id);
+    expect(result.stdout).toContain("Decision Digest is a read-only ledger.");
+  });
+
   test("no matches reports cleanly with exit 0", async () => {
     const { root, layout, env } = await setup();
     await seedObservation(layout, env, { name: "something" }, "else\n");

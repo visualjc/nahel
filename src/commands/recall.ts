@@ -14,6 +14,12 @@ import { UsageError } from "./item";
  */
 
 const USAGE = "usage: nahel recall <term> [<term>...]";
+const HELP = [
+  USAGE,
+  "",
+  "Quote a phrase to narrow results to that exact word sequence.",
+  'Example: nahel recall "decision digest"',
+].join("\n");
 
 function parseTerms(argv: string[]): string[] {
   let positionals: string[];
@@ -74,6 +80,10 @@ function renderMatch(match: RecallMatch): string[] {
 
 async function runRecall(argv: string[], ctx: CommandContext): Promise<number> {
   try {
+    if (argv.includes("--help") || argv.includes("-h")) {
+      ctx.stdout(HELP);
+      return 0;
+    }
     const terms = parseTerms(argv);
     const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`

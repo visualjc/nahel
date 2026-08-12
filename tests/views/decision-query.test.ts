@@ -61,9 +61,10 @@ function undatedRow(ticketId: string): DecisionRow {
 }
 
 describe("decision query", () => {
-  test("--since accepts relative whole-hour and equivalent ISO UTC windows", async () => {
+  test("--since accepts broad whole-hour, whole-day, and equivalent ISO UTC windows", async () => {
     const store = await layout();
     const rows = [
+      datedRow("ticket00", "2026-07-09T11:59:59Z"),
       datedRow("ticket01", "2026-08-08T09:59:59Z"),
       datedRow("ticket02", "2026-08-08T10:00:00Z"),
       datedRow("ticket03", "2026-08-08T11:00:00Z"),
@@ -81,10 +82,19 @@ describe("decision query", () => {
       layout: store,
       now: NOW,
     });
+    const thirtyDays = await queryDecisionRows(rows, ["--since", "30d"], {
+      layout: store,
+      now: NOW,
+    });
 
     expect(relative.map((row) => row.ticketId)).toEqual(["ticket02", "ticket03"]);
     expect(absolute).toEqual(relative);
     expect(wholeDay.map((row) => row.ticketId)).toEqual([
+      "ticket01",
+      "ticket02",
+      "ticket03",
+    ]);
+    expect(thirtyDays.map((row) => row.ticketId)).toEqual([
       "ticket01",
       "ticket02",
       "ticket03",
@@ -294,6 +304,36 @@ describe("decision query", () => {
       "zzzzzz01",
       "mmmmmm01",
       "aaaaaa01",
+    ]);
+  });
+
+  test("same-time rows with equal extreme sequences preserve canonical event-id ordering", async () => {
+    const store = await layout();
+    const timestamp = "2026-08-08T11:00:00Z";
+    const finite = datedRow("ticket-finite", timestamp);
+    finite.resolutionOrder = { ts: timestamp, seq: 5, id: "event-finite" };
+    const highId = datedRow("ticket-high", timestamp);
+    highId.resolutionOrder = {
+      ts: timestamp,
+      seq: Number.POSITIVE_INFINITY,
+      id: "event-z",
+    };
+    const lowId = datedRow("ticket-low", timestamp);
+    lowId.resolutionOrder = {
+      ts: timestamp,
+      seq: Number.POSITIVE_INFINITY,
+      id: "event-a",
+    };
+
+    const selected = await queryDecisionRows([highId, finite, lowId], [], {
+      layout: store,
+      now: NOW,
+    });
+
+    expect(selected.map((row) => row.ticketId)).toEqual([
+      "ticket-finite",
+      "ticket-low",
+      "ticket-high",
     ]);
   });
 

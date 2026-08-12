@@ -358,14 +358,14 @@ describe("nahel decisions — focused help", () => {
 
   test("--help and -h are byte-identical, store-independent, and explain the complete read path", async () => {
     const expected = [
-      "usage: nahel decisions [--since <7d|24h|ISO>] [--by <human|agent|kind:id[:session]>] [--map <map-id|node-id|node-slug>] [--provenance <direct-human|delegated|ratified|agent|incomplete>] [--limit <positive-integer>]",
+      "usage: nahel decisions [--since <nd|nh|ISO>] [--by <human|agent|kind:id[:session]>] [--map <map-id|node-id|node-slug>] [--provenance <direct-human|delegated|ratified|agent|incomplete>] [--limit <positive-integer>]",
       "",
       "Read-only: writes nothing and journals nothing.",
       "",
       "Bare `nahel decisions` selects the newest 10 matching decisions, then displays that retained slice oldest to newest.",
       "",
       "Flags:",
-      "  --since <7d|24h|ISO>  include dated decisions at or after the time; undated incomplete rows remain eligible",
+      "  --since <nd|nh|ISO>  include dated decisions at or after the time; whole-number examples: 2h, 30d; undated incomplete rows remain eligible",
       "  --by <human|agent|kind:id[:session]>  match a resolver kind or exact actor",
       "  --map <map-id|node-id|node-slug>  narrow to one current map",
       "  --provenance <direct-human|delegated|ratified|agent|incomplete>  require a proved badge",
@@ -425,7 +425,7 @@ describe("nahel decisions — focused help", () => {
     expect(refused.stderr).toContain("--json");
     expect(refused.stderr).toEndWith(
       [
-        "usage: nahel decisions [--since <7d|24h|ISO>] [--by <human|agent|kind:id[:session]>] [--map <map-id|node-id|node-slug>] [--provenance <direct-human|delegated|ratified|agent|incomplete>] [--limit <positive-integer>]",
+        "usage: nahel decisions [--since <nd|nh|ISO>] [--by <human|agent|kind:id[:session]>] [--map <map-id|node-id|node-slug>] [--provenance <direct-human|delegated|ratified|agent|incomplete>] [--limit <positive-integer>]",
         "run `nahel decisions --help` for details",
       ].join("\n"),
     );

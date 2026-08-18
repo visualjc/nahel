@@ -1,0 +1,2 @@
+{"id":"7bpjxns5","ts":"2026-08-18T00:56:18Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"summary":"CONTEXT.md amended under explicit human sign-off: visualjc reviewed the diff in chat 2026-08-17 and authorized the commit. The Work item ID term now distinguishes storage (id only, unchanged) from CLI input (slug or id, ambiguity refused). This is the amendment roadmap node h44hc0j5 was blocked on."}}
+{"id":"tffzhywm","ts":"2026-08-18T00:56:18Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

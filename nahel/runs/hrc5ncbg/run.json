@@ -6,7 +6,8 @@
     "id": "claude-code"
   },
   "lane": "direct",
-  "phase": "starting",
-  "status": "active",
-  "started": "2026-08-18T00:35:16Z"
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-18T00:35:16Z",
+  "ended": "2026-08-18T00:41:43Z"
 }

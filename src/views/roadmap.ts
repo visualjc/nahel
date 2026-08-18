@@ -894,12 +894,19 @@ export function roadmapNodeLine(node: RoadmapNodeFrontmatter): string {
 }
 
 /**
- * The feature children under one node, grouped `now → next → later` (F3). Every
- * bucket prints even when empty, for renderProductStatus's reason: the three
- * horizons are a fixed shape a reader scans down, and a bucket that vanished
- * when it emptied would read as one nobody has decided about. Multiple parallel
- * `now`s are the intended shape (F8) and are rendered as the ordinary case —
- * nothing counts them, nothing warns.
+ * The feature children under one node, grouped `now → next → later` and then
+ * `released` (F3). Every bucket prints even when empty, for
+ * renderProductStatus's reason: the buckets are a fixed shape a reader scans
+ * down, and one that vanished when it emptied would read as one nobody has
+ * decided about. Multiple parallel `now`s are the intended shape (F8) and are
+ * rendered as the ordinary case — nothing counts them, nothing warns.
+ *
+ * `released` is not a horizon: it is the derived exit. A feature whose stage
+ * reads `released` leaves its horizon bucket — its horizon stays stored,
+ * untouched, as the record of where it shipped from — because a shipped
+ * feature rendered on an active shelf reads as work still owed (decided with
+ * Jim, 2026-08-17). The stored horizon field remains human-set intent for
+ * unshipped work only.
  *
  * Within a bucket, features keep the id order readRoadmapNodes returns: ids are
  * unique, so the order is total, and it does not move when a node is renamed.
@@ -909,13 +916,20 @@ function horizonGroups(
   indent: string,
   lines: string[],
 ): void {
+  const active = features.filter(({ status }) => status.stage !== "released");
   for (const horizon of ROADMAP_HORIZONS) {
-    const bucket = features.filter(({ record }) => record.frontmatter.horizon === horizon);
+    const bucket = active.filter(({ record }) => record.frontmatter.horizon === horizon);
     lines.push(`${indent}${horizon} (${bucket.length}):`);
     if (bucket.length === 0) lines.push(`${indent}  (none)`);
     for (const { record, status } of bucket) {
       lines.push(`${indent}  ${featureLine(record, status)}`);
     }
+  }
+  const released = features.filter(({ status }) => status.stage === "released");
+  lines.push(`${indent}released (${released.length}):`);
+  if (released.length === 0) lines.push(`${indent}  (none)`);
+  for (const { record, status } of released) {
+    lines.push(`${indent}  ${featureLine(record, status)}`);
   }
 }
 
@@ -1042,12 +1056,12 @@ export const BRIEF_ROADMAP_NOW_CAP = 10;
 
 /**
  * The block's hard line budget (F4): ten `now` lines, the remainder line, and
- * one summary line each for `next` and `later`. A block that could grow past
- * this would make the brief's 4 KB target a function of roadmap size, and many
- * parallel `now`s are doctrine (F8) — so the block is capped rather than
- * truncated, and no rung of brief's ladder ever touches it.
+ * one summary line each for `next`, `later`, and `released`. A block that
+ * could grow past this would make the brief's 4 KB target a function of
+ * roadmap size, and many parallel `now`s are doctrine (F8) — so the block is
+ * capped rather than truncated, and no rung of brief's ladder ever touches it.
  */
-export const BRIEF_ROADMAP_MAX_LINES = BRIEF_ROADMAP_NOW_CAP + 3;
+export const BRIEF_ROADMAP_MAX_LINES = BRIEF_ROADMAP_NOW_CAP + 4;
 
 /** The node kinds' derived summaries, one call each — F2's two renderers. */
 function nodeSummaryFields(
@@ -1183,13 +1197,20 @@ function nodeCount(count: number): string {
  * The brief's roadmap block (F4): DETERMINISTIC ELISION, never a completeness
  * promise the cap cannot keep. At most ten `now` nodes in horizon-entry order,
  * one line each; the remainder counted on one line naming the verb that shows
- * it; then one summary line each for `next` and `later`.
+ * it; then one summary line each for `next`, `later`, and `released`.
  *
  * Every horizon speaks even at zero — a horizon that vanished when it emptied
  * would read as one nobody has decided about, the rule the roadmap view's
  * buckets and F2's distribution already follow. `now` speaks as `now: none`
  * only when it has nothing to list, because with nodes to name a header would
- * cost the block a fourteenth line.
+ * cost the block a fifteenth line.
+ *
+ * A feature whose derived stage reads `released` leaves the horizon lines and
+ * counts here exactly as it leaves the roadmap view's buckets (see
+ * horizonGroups): a shipped feature named on the brief's hottest shelf is the
+ * lie this block exists to prevent. It is counted once, on the `released`
+ * summary line. Only feature nodes carry a stage, so products and initiatives
+ * are never excluded.
  *
  * Null when the store carries no nodes at all: an archived or never-charted
  * store gets no section, not empty scaffolding (F4's acceptance criterion, and
@@ -1201,8 +1222,13 @@ export function renderBriefRoadmap(
   events: readonly JournalEvent[],
 ): string | null {
   if (nodes.length === 0) return null;
+  const releasedFeature = (record: RoadmapNodeRecord): boolean =>
+    record.frontmatter.kind === "feature" &&
+    featureStatus(record.frontmatter, items, events).stage === "released";
+  const released = nodes.filter(releasedFeature);
+  const active = nodes.filter((record) => !releasedFeature(record));
   const on = (horizon: string): RoadmapNodeRecord[] =>
-    nodes.filter(({ frontmatter }) => frontmatter.horizon === horizon);
+    active.filter(({ frontmatter }) => frontmatter.horizon === horizon);
 
   const now = horizonEntryOrder(on("now"), events);
   const lines =
@@ -1214,7 +1240,11 @@ export function renderBriefRoadmap(
   if (now.length > BRIEF_ROADMAP_NOW_CAP) {
     lines.push(`+${now.length - BRIEF_ROADMAP_NOW_CAP} more — nahel roadmap`);
   }
-  lines.push(`next: ${nodeCount(on("next").length)}`, `later: ${nodeCount(on("later").length)}`);
+  lines.push(
+    `next: ${nodeCount(on("next").length)}`,
+    `later: ${nodeCount(on("later").length)}`,
+    `released: ${nodeCount(released.length)}`,
+  );
   return lines.join("\n");
 }
 

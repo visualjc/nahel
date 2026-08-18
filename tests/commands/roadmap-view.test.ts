@@ -184,6 +184,42 @@ describe("nahel roadmap — the product level (F3)", () => {
     expect(out.slice(out.indexOf("  later (1):"))).toContain(later);
   });
 
+  test("a released feature leaves its horizon bucket and renders under released — the derived exit", async () => {
+    const { root, env } = await setup();
+    const { built, epic } = await product(env, root);
+    await log(env, root, [
+      "release.announced",
+      "--item",
+      epic,
+      "--data",
+      "version=0.3.0",
+      "--data",
+      "channel=git main + local install",
+      "--data",
+      "announcement=https://example.com/pr/1",
+    ]);
+
+    const out = await view(env, root);
+    // The shipped feature is gone from `now` — the shelf stops rendering work
+    // still owed — and the released bucket closes the fixed scan shape.
+    expect(out).toContain("  now (1):");
+    expect(out).toContain("  released (1):");
+    expect(out.indexOf("  later (1):")).toBeLessThan(out.indexOf("  released (1):"));
+    const releasedBlock = out.slice(out.indexOf("  released (1):"));
+    expect(releasedBlock).toContain(built);
+    // The horizon FIELD is untouched: the exit is derived, nothing was re-filed.
+    const zoom = await view(env, root, ["detached-state-repo"]);
+    expect(zoom).toContain("horizon=now");
+  });
+
+  test("with nothing shipped the released bucket still prints — a fixed shape, not a surprise", async () => {
+    const { root, env } = await setup();
+    await product(env, root);
+
+    const out = await view(env, root);
+    expect(out).toContain("  released (0):\n    (none)");
+  });
+
   test("each feature line carries the derived columns verbatim — F2's render-table strings", async () => {
     const { root, env } = await setup();
     const { built, planned, epic } = await product(env, root);

@@ -1439,7 +1439,7 @@ describe("renderBriefRoadmap — the block's presence", () => {
     const block = renderBriefRoadmap([node], [], [created(env, node.frontmatter, at(1))]);
 
     expect(block).not.toBeNull();
-    expect(block!.split("\n")).toEqual(["now: none", "next: none", "later: 1 node"]);
+    expect(block!.split("\n")).toEqual(["now: none", "next: none", "later: 1 node", "released: none"]);
   });
 });
 
@@ -1457,12 +1457,12 @@ describe("renderBriefRoadmap — deterministic elision at the cap", () => {
     return { nodes, events };
   }
 
-  test("40 now nodes → exactly 10 lines, a +30 more line, and the two summaries", () => {
+  test("40 now nodes → exactly 10 lines, a +30 more line, and the three summaries", () => {
     const { nodes, events } = manyNow(40);
 
     const lines = renderBriefRoadmap(nodes, [], events)!.split("\n");
 
-    expect(lines.length).toBe(13);
+    expect(lines.length).toBe(14);
     expect(lines.length).toBeLessThanOrEqual(BRIEF_ROADMAP_MAX_LINES);
     expect(lines.slice(0, 10).map((line) => line.split("  ")[0])).toEqual([
       "feature-00",
@@ -1479,6 +1479,7 @@ describe("renderBriefRoadmap — deterministic elision at the cap", () => {
     expect(lines[10]).toBe("+30 more — nahel roadmap");
     expect(lines[11]).toBe("next: none");
     expect(lines[12]).toBe("later: none");
+    expect(lines[13]).toBe("released: none");
   });
 
   test("re-rendering after an unrelated mutation returns the same 10 in the same order", () => {
@@ -1503,7 +1504,7 @@ describe("renderBriefRoadmap — deterministic elision at the cap", () => {
 
     const lines = renderBriefRoadmap(nodes, [], events)!.split("\n");
 
-    expect(lines.length).toBe(12);
+    expect(lines.length).toBe(13);
     expect(lines.some((line) => line.includes("more — nahel roadmap"))).toBe(false);
   });
 
@@ -1650,6 +1651,66 @@ describe("renderBriefRoadmap — what each line says", () => {
     )!.split("\n");
 
     expect(lines[0]).toBe(`q3-push  initiative  id=${initiative.frontmatter.id}`);
+  });
+
+  test("a released feature leaves the now lines and is counted on the released line", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const shipped = makeNodeRecord(env, { name: "shipped-feature", epic: epic.id });
+    const active = makeNodeRecord(env, { name: "active-feature" });
+    const release = makeEvent({
+      item: epic.id,
+      type: RELEASE_ANNOUNCED_EVENT_TYPE,
+      payload: { version: "0.3.0", channel: "git main", announcement: "https://example.com/pr/1" },
+    });
+    const events = [
+      created(env, shipped.frontmatter, at(1)),
+      created(env, active.frontmatter, at(2)),
+      release,
+    ];
+
+    const lines = renderBriefRoadmap([shipped, active], items, events)!.split("\n");
+
+    expect(lines.map((line) => line.split("  ")[0])).toEqual([
+      "active-feature",
+      "next: none",
+      "later: none",
+      "released: 1 node",
+    ]);
+  });
+
+  test("an INCOMPLETE release excludes nothing — the stage did not advance, so the shelf holds", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const { epic, items } = epicWith(env, ["done"]);
+    const feature = makeNodeRecord(env, { name: "thin-release", epic: epic.id });
+    const thin = makeEvent({
+      item: epic.id,
+      type: RELEASE_ANNOUNCED_EVENT_TYPE,
+      payload: { version: "0.3.0" },
+    });
+
+    const lines = renderBriefRoadmap(
+      [feature],
+      items,
+      [created(env, feature.frontmatter, at(1)), thin],
+    )!.split("\n");
+
+    expect(lines[0]!.split("  ")[0]).toBe("thin-release");
+    expect(lines[lines.length - 1]).toBe("released: none");
+  });
+
+  test("only features are ever excluded: a product node stays whatever its horizon", () => {
+    const env = seededEnv({ tickSeconds: 1 });
+    const product = makeNodeRecord(env, { name: "nahel", kind: "product" });
+
+    const lines = renderBriefRoadmap(
+      [product],
+      [],
+      [created(env, product.frontmatter, at(1))],
+    )!.split("\n");
+
+    expect(lines[0]!.split("  ")[0]).toBe("nahel");
+    expect(lines[lines.length - 1]).toBe("released: none");
   });
 
   test("the summary lines count the other two horizons, singular and plural", () => {

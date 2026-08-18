@@ -1,0 +1,12 @@
+---
+id: 9cytvt5f
+name: constitution-amendment-verb
+kind: feature
+horizon: later
+parent: kyeb086y
+adrs: []
+features: []
+created: 2026-08-18T23:44:48Z
+updated: 2026-08-18T23:44:48Z
+---
+A guided CLI act for amending the constitution, shaped like 'git commit': 'nahel constitution edit' opens PRODUCT.md in $EDITOR (vim, nano, whatever the shell names; a sane fallback when it names nothing), and on save walks the whole amendment ritual — show the diff for confirmation, require the Change log entry PRODUCT.md's own rules demand (every change recorded with the human sign-off that authorized it), commit under the human's own git identity, and re-record the signature in config (inception.constitution_signed_by) so the recorded state carries the amendment rather than pointing at a stale signing date. Today the ritual is four manual steps a human must assemble by hand from an agent's instructions — edit the file, git add/commit/push, then a long 'nahel config set inception' invocation whose exact shape is easy to get wrong — and without an IDE open it is genuinely painful. Observed twice in real use, most recently amending the speed-count-game constitution's constraint 1 (default table rules S17/DAS -> H17/DAS, 2026-08-18). HARD REQUIREMENT: this verb is human-only in every governance mode and must REFUSE under any agent:* actor — the constitution is human-owned and agents may propose amendments as observations but never edit it, so a convenience that let an agent drive the editor would break the one rule the document exists to hold. Consider whether the same walk-through should cover CONTEXT.md, the glossary, which carries the same human-sign-off requirement and the same hand-assembled ritual.

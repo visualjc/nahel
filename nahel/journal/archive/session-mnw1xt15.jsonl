@@ -1,0 +1,2 @@
+{"id":"f6178jj5","ts":"2026-08-18T04:18:23Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"dg4v3f28","payload":{"target":"item","record":{"id":"dg4v3f28","name":"roadmap-released-retirement","type":"feature","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-18T04:18:13Z","updated":"2026-08-18T04:18:23Z"},"body":""}}
+{"id":"mzb71twz","ts":"2026-08-18T04:18:23Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

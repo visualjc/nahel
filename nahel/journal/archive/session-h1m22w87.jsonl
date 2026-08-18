@@ -1,0 +1,2 @@
+{"id":"pwsdrdzb","ts":"2026-08-18T04:18:23Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"2tng9bww","payload":{"target":"item","record":{"id":"2tng9bww","name":"decision-digest-release-backfill","type":"chore","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-18T04:18:13Z","updated":"2026-08-18T04:18:23Z"},"body":""}}
+{"id":"h5xphkmn","ts":"2026-08-18T04:18:23Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

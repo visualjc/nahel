@@ -1,0 +1,2 @@
+{"id":"w5fwpnr9","ts":"2026-08-18T00:40:58Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"item":"2xtxgmqy","summary":"verified by driving the source CLI: 'progress --since 7d' exits 0 and renders the window, '--since 24h --limit 2' composes, an ISO timestamp still selects, 'yesterday' is refused naming both accepted forms, and 2026-02-30T00:00:00Z is refused as naming no real instant."}}
+{"id":"bzxt28df","ts":"2026-08-18T00:40:58Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

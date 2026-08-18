@@ -339,7 +339,7 @@ describe("nahel decisions — focused help", () => {
         "  observe    distill one durable observation (a fact with provenance journal event ids) into nahel/observations/",
         "  pause      suspend an active run (status becomes paused; hot state follows)",
         "  plan       render the planning briefing for a roadmap node: what moved since your last session, the decisions so far, the frontier, the fog, and what the partner may settle here (plan [ref])",
-        "  progress   show the journal timeline, newest last (--item covers the subtree; --since, --limit)",
+        "  progress   show the journal timeline, newest last (--item covers the subtree; --since 7d|24h|ISO, --limit)",
         "  prototype  run the prototype lane: spawn variant worktrees, promote a winner, dispose of the rest",
         "  recall     keyword-search observation records (name/body/tags, ranked by hits then recency; cites provenance event ids)",
         "  roadmap    read the roadmap and zoom into it, and create or update its nodes — the intent layer above work items (roadmap [ref], roadmap node new | update | show, roadmap ack)",

@@ -1,0 +1,12 @@
+{
+  "id": "hrc5ncbg",
+  "item": "2xtxgmqy",
+  "actor": {
+    "kind": "agent",
+    "id": "claude-code"
+  },
+  "lane": "direct",
+  "phase": "starting",
+  "status": "active",
+  "started": "2026-08-18T00:35:16Z"
+}

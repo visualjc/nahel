@@ -1,0 +1,2 @@
+{"id":"066csb14","ts":"2026-08-08T21:12:36Z","seq":0,"type":"note","actor":{"kind":"human","id":"maintainer"},"payload":{"ticket":"6dw2kyjg","summary":"ratified: my ruling, relayed by claude-code during the planning-partner grill and PRD review (2026-08-04 through 08-06), reconfirmed at PR #27 approval"}}
+{"id":"mct2amwa","ts":"2026-08-08T21:12:36Z","seq":1,"type":"session.closed","actor":{"kind":"human","id":"maintainer"},"payload":{}}

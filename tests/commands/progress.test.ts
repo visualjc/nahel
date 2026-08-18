@@ -29,11 +29,15 @@ interface CommandResult {
   stderr: string;
 }
 
-async function runProgress(args: string[], root: string): Promise<CommandResult> {
+async function runProgress(
+  args: string[],
+  root: string,
+  env = seededEnv(),
+): Promise<CommandResult> {
   const out: string[] = [];
   const err: string[] = [];
   const ctx: CommandContext = {
-    env: seededEnv(),
+    env,
     cwd: root,
     stdout: (text) => out.push(text),
     stderr: (text) => err.push(text),
@@ -44,6 +48,12 @@ async function runProgress(args: string[], root: string): Promise<CommandResult>
 
 async function allEvents(store: PopulatedStore): Promise<JournalEvent[]> {
   return Array.fromAsync(readJournal(store.layout));
+}
+
+/** A journal timestamp moved forward whole hours — the clock reading a relative
+ * window is measured back from. */
+function shiftHours(ts: string, hours: number): string {
+  return `${new Date(Date.parse(ts) + hours * 3_600_000).toISOString().slice(0, 19)}Z`;
 }
 
 describe("nahel progress — the full timeline", () => {
@@ -180,13 +190,31 @@ describe("nahel progress — argument validation", () => {
     expect(result.stderr).toContain("zzzzzzzz");
   });
 
-  test("--since must be an ISO-8601 UTC second-precision timestamp", async () => {
+  test("--since refuses what is neither a window nor a timestamp, naming both forms", async () => {
     const store = await buildPopulatedStore(tempDirs);
-    for (const bad of ["yesterday", "2026-07-16", "2026-07-16 12:00:00"]) {
+    for (const bad of ["yesterday", "2026-07-16", "2026-07-16 12:00:00", "7", "d7", "7w"]) {
       const result = await runProgress(["--since", bad], store.root);
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("--since");
+      // The refusal has to teach the flag's language, not just the half this
+      // command used to accept — that omission is what made `7d` look unsupported.
+      expect(result.stderr).toContain("7d");
+      expect(result.stderr).toContain("2026-07-26T09:15:00Z");
     }
+  });
+
+  test("a timestamp shaped right but naming no instant is refused as such", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    const result = await runProgress(["--since", "2026-02-30T00:00:00Z"], store.root);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("names no real instant");
+  });
+
+  test("the usage line advertises the window forms, not just ISO", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    const result = await runProgress(["--since", "yesterday"], store.root);
+    expect(result.stderr).toContain("usage: nahel progress");
+    expect(result.stderr).toMatch(/--since <7d\|24h\|ISO/);
   });
 
   test("--limit must be a positive integer", async () => {
@@ -221,6 +249,70 @@ describe("nahel progress — argument validation", () => {
     expect(typeof progressCommand.description).toBe("string");
     expect(progressCommand.description.length).toBeGreaterThan(0);
     expect(typeof progressCommand.run).toBe("function");
+  });
+});
+
+describe("nahel progress — --since speaks the shared window language", () => {
+  test("accepts a relative window, exactly as standup and decisions do", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    for (const window of ["7d", "24h", "2h", "30d"]) {
+      const result = await runProgress(["--since", window], store.root);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+    }
+  });
+
+  test("a relative window is resolved against env.now(), not the wall clock", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    const events = await allEvents(store);
+    const pivot = events.find((event) => event.type === "run.ended")!;
+    // A clock reading exactly one hour after the pivot makes `--since 1h` name
+    // the pivot instant itself — so the two spellings must select identically.
+    const frozen = seededEnv({ now: shiftHours(pivot.ts, 1) });
+
+    const relative = await runProgress(["--since", "1h"], store.root, frozen);
+    const absolute = await runProgress(["--since", pivot.ts], store.root, frozen);
+    expect(relative.code).toBe(0);
+    expect(relative.stdout).toBe(absolute.stdout);
+
+    // And it genuinely cuts: the events before the pivot are gone.
+    const lines = relative.stdout.split("\n");
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain("run.ended");
+    expect(lines[lines.length - 1]).toContain("item.claimed");
+  });
+
+  test("a window reaching past every event keeps the whole timeline", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    const full = await runProgress([], store.root);
+    const wide = await runProgress(["--since", "3650d"], store.root);
+    expect(wide.code).toBe(0);
+    expect(wide.stdout).toBe(full.stdout);
+  });
+
+  test("a window reaching outside the representable calendar is refused, not clamped", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    const result = await runProgress(["--since", "9999999d"], store.root);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--since");
+    expect(result.stdout).toBe("");
+  });
+
+  test("filters still compose with a relative window", async () => {
+    const store = await buildPopulatedStore(tempDirs);
+    const events = await allEvents(store);
+    const pivot = events.find((event) => event.type === "run.updated")!;
+    const frozen = seededEnv({ now: shiftHours(pivot.ts, 1) });
+    const result = await runProgress(
+      ["--item", store.epicId, "--since", "1h", "--limit", "2"],
+      store.root,
+      frozen,
+    );
+    expect(result.code).toBe(0);
+    const lines = result.stdout.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("test.failed");
+    expect(lines[1]).toContain("item.claimed");
   });
 });
 

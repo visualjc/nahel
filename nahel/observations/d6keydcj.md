@@ -1,0 +1,15 @@
+---
+id: d6keydcj
+name: nahel-actor-misattribution-hazard
+created: 2026-08-18T00:29:20Z
+tags:
+  - actor
+  - provenance
+  - journal
+  - hazard
+sources:
+  - qt9e68b4
+  - zghv8bb0
+  - bmfek7ct
+---
+Changing NAHEL_ACTOR for a drive silently mis-attributes everything journaled afterwards, and the journal is append-only so it cannot be corrected in place. During the Decision Digest review a Cursor probe wrote events 25h56myf and r07fem2d as human:review-probe; they were not human acts and had to be excluded from the round's counts by a later correcting note, with the finding re-journaled under a correct agent actor. The correction is the only remedy: journal a note naming the mis-attributed event ids. Agents must set NAHEL_ACTOR=agent:<id> before the first CLI call of a session — an unset actor falls back to the config default (human:maintainer in this store), which manufactures fake human provenance.

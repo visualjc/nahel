@@ -1,9 +1,9 @@
 import { parseArgs } from "node:util";
 import type { Command, CommandContext } from "../cli";
-import { journalEventSchema } from "../schema/records";
 import { itemExists, openStore, readConfig } from "../store/layout";
 import { collectProgress, renderProgress, type ProgressQuery } from "../views/progress";
 import { descendantIds, loadSnapshot } from "../views/snapshot";
+import { resolveSince } from "../views/standup";
 import { UsageError } from "./item";
 
 /**
@@ -11,11 +11,15 @@ import { UsageError } from "./item";
  * STRICTLY a view — a thin wrapper over the streaming collector and the pure
  * renderer; every output token comes off a journal event. `--item` covers the
  * item's whole subtree (descendants included) plus run-scoped events of the
- * subtree's runs; `--since` cuts by the journal's own timestamp format;
- * `--limit` keeps the newest n while streaming (never a full-journal load).
+ * subtree's runs; `--since` cuts by a window in the CLI's one window language
+ * (`7d`, `24h` or an ISO timestamp — the same `resolveSince` standup and
+ * decisions use, resolved HERE from `ctx.env.now()` so the view never sees a
+ * clock); `--limit` keeps the newest n while streaming (never a full-journal
+ * load).
  */
 
-const USAGE = "usage: nahel progress [--item <id>] [--since <iso>] [--limit <n>]";
+const USAGE =
+  "usage: nahel progress [--item <id>] [--since <7d|24h|ISO timestamp>] [--limit <n>]";
 
 interface ProgressFlags {
   item?: string;
@@ -54,15 +58,6 @@ function parseFlags(argv: string[]): ProgressFlags {
     limit = Number(values.limit);
   }
 
-  if (values.since !== undefined) {
-    // The journal's own ts format is the filter's contract — reuse its schema.
-    const parsed = journalEventSchema.shape.ts.safeParse(values.since);
-    if (!parsed.success) {
-      const reason = parsed.error.issues[0]?.message ?? parsed.error.message;
-      throw new UsageError(`invalid --since ${JSON.stringify(values.since)} — ${reason}`);
-    }
-  }
-
   return {
     ...(values.item === undefined ? {} : { item: values.item }),
     ...(values.since === undefined ? {} : { since: values.since }),
@@ -73,13 +68,26 @@ function parseFlags(argv: string[]): ProgressFlags {
 async function runProgress(argv: string[], ctx: CommandContext): Promise<number> {
   try {
     const flags = parseFlags(argv);
+    // Resolved BEFORE the store is opened, the standup way: a spec that names
+    // no instant is refused with the reason it names none, and nothing is read
+    // or printed on the way. The view downstream only ever sees the resolved
+    // absolute cutoff, so `--since 7d` and its equivalent timestamp select the
+    // same events under a fixed Env.
+    let since: string | undefined;
+    if (flags.since !== undefined) {
+      const resolved = resolveSince(flags.since, ctx.env.now());
+      if ("error" in resolved) {
+        throw new UsageError(`invalid --since ${JSON.stringify(flags.since)} — ${resolved.error}`);
+      }
+      since = resolved.since;
+    }
     const layout = await openStore(ctx.cwd);
     // Initialized-repo gate: a missing config errors with the `nahel init`
     // pointer instead of rendering a misleadingly empty timeline.
     await readConfig(layout);
 
     const query: ProgressQuery = {
-      ...(flags.since === undefined ? {} : { since: flags.since }),
+      ...(since === undefined ? {} : { since }),
       ...(flags.limit === undefined ? {} : { limit: flags.limit }),
     };
     if (flags.item !== undefined) {
@@ -109,6 +117,6 @@ async function runProgress(argv: string[], ctx: CommandContext): Promise<number>
 
 export const progressCommand: Command = {
   description:
-    "show the journal timeline, newest last (--item covers the subtree; --since, --limit)",
+    "show the journal timeline, newest last (--item covers the subtree; --since 7d|24h|ISO, --limit)",
   run: runProgress,
 };

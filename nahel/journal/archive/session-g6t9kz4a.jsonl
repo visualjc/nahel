@@ -1,0 +1,2 @@
+{"id":"v9hgr9ar","ts":"2026-08-18T00:35:16Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"2xtxgmqy","payload":{"target":"item","record":{"id":"2xtxgmqy","name":"since-relative-windows","type":"bug","status":"in-progress","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-18T00:32:29Z","updated":"2026-08-18T00:35:16Z"},"body":""}}
+{"id":"2fje4f2a","ts":"2026-08-18T00:35:16Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

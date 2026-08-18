@@ -1,0 +1,14 @@
+---
+id: 479bnfnn
+name: journal-read-cost-baseline
+created: 2026-08-18T00:29:52Z
+tags:
+  - performance
+  - journal
+  - measurement
+  - decision-digest
+sources:
+  - wxmx5xby
+  - qknya00f
+---
+Measured baseline for whole-journal reads, Bun 1.2.4 / macOS arm64, 2026-08-09: the live store held 1,267 events across 635 active+archive segments totalling 504,127 bytes, with 21 decision resolutions; a cold 'nahel progress' scan took roughly 0.15s. That is why Decision Digest v1 shipped a whole-store reread as an accepted tradeoff rather than an index — the measured cost did not justify one. Re-measure before treating large-history ergonomics (roadmap node 2p91x87w) as urgent.

@@ -16,7 +16,7 @@ Agentic software development fails not because agents write bad code, but becaus
 
 ## Status
 
-**Pre-alpha — being built in the open, and building itself.** See [docs/roadmap.md](docs/roadmap.md) for the full design and phase plan, and [docs/bootstrap-plan.md](docs/bootstrap-plan.md) for how this repo is being bootstrapped (currently: scaffolded by [CCPM](https://github.com/automazeio/ccpm) + yolo-afk-dev until Nahel can manage itself — see [docs/scaffolding.md](docs/scaffolding.md)).
+**Pre-alpha — being built in the open, and building itself.** New here? [docs/guide.md](docs/guide.md) lists every CLI verb and `/nd:*` workflow command and when to reach for each. See [docs/roadmap.md](docs/roadmap.md) for the full design and phase plan, and [docs/bootstrap-plan.md](docs/bootstrap-plan.md) for how this repo is being bootstrapped (currently: scaffolded by [CCPM](https://github.com/automazeio/ccpm) + yolo-afk-dev until Nahel can manage itself — see [docs/scaffolding.md](docs/scaffolding.md)).
 
 ## Install
 

@@ -25,6 +25,7 @@ import {
 } from "../schema/records";
 import { ID_PATTERN, requireValidId } from "../schema/id";
 import { readFrontmatterFile, writeFileAtomic, writeFrontmatterFile } from "./frontmatter";
+import { RESULT_DOC_FILENAME, TASK_DOC_FILENAME } from "./result";
 
 /**
  * The on-disk layout of a nahel-managed repo (PRD F1): all state machinery
@@ -221,6 +222,19 @@ export function runDir(layout: StoreLayout, id: string): string {
 /** Path of a run record. */
 export function runRecordPath(layout: StoreLayout, id: string): string {
   return join(runDir(layout, id), "run.json");
+}
+
+/**
+ * Path of the task document dispatch hands a worker, beside that run's record
+ * (PRD F4). Id validated by runDir before any join, like every other path here.
+ */
+export function taskDocPath(layout: StoreLayout, id: string): string {
+  return join(runDir(layout, id), TASK_DOC_FILENAME);
+}
+
+/** Path of the result document a worker writes back for a run (PRD F4). */
+export function resultDocPath(layout: StoreLayout, id: string): string {
+  return join(runDir(layout, id), RESULT_DOC_FILENAME);
 }
 
 /** Path of an observation record. The id is validated before any join. */

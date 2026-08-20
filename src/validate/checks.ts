@@ -53,8 +53,14 @@ import {
 } from "../schema/events";
 import { ID_PATTERN } from "../schema/id";
 import { epochSeconds } from "../schema/time";
+import { parseFrontmatter } from "../store/frontmatter";
 import type { HotState } from "../store/hotstate";
 import type { PrototypeRefScan } from "../store/prototype";
+import {
+  RESULT_DOC_FILENAME,
+  RESULT_DOC_STATUSES,
+  resultDocFrontmatterSchema,
+} from "../store/result";
 import {
   compareEvents,
   latestCandidates,
@@ -117,6 +123,14 @@ export interface RawRunRecord {
   /** Parsed hot state, null when state.json is absent, undefined when unreadable. */
   hotState?: HotState | null;
   hotStateError?: string;
+  /** Where this run's worker result document belongs (PRD F4). */
+  resultDocPath: string;
+  /**
+   * The result document's raw text, when the worker left one. Undefined means
+   * ABSENT (or unreadable, which is the same non-document), and absence is
+   * never a finding — see checkResultDocs.
+   */
+  resultDocText?: string;
 }
 
 /** Everything validate checks, collected in one store read pass. */
@@ -3073,6 +3087,96 @@ function checkHotState(state: ParsedState): Finding[] {
   return findings;
 }
 
+/** The result contract as one line, for the findings that judge the whole shape. */
+const RESULT_DOC_SHAPE_FIX =
+  `a result document is YAML frontmatter between \`---\` lines — \`run\`, \`item\`, ` +
+  `\`status\` (${RESULT_DOC_STATUSES.join(" | ")}), \`summary\` — followed by free markdown`;
+
+/** What each contract field must hold, for the per-issue findings. */
+const RESULT_DOC_FIELD_FIX: Record<string, string> = {
+  run: "`run` must be the id of the run directory the document sits in",
+  item: "`item` must be the id of the work item the run is executing",
+  status: `\`status\` must be one of ${RESULT_DOC_STATUSES.join(" | ")}`,
+  summary: "`summary` must be ONE non-empty line — the detail belongs in the body",
+};
+
+/**
+ * Worker result documents (PRD F4): every `nahel/runs/<id>/result.md` that
+ * EXISTS is judged against the result contract — the frontmatter split, the
+ * schema, and the two cross-references it carries.
+ *
+ * Everything here is a WARNING, without exception. A result doc is authored by
+ * a dispatched agent nahel does not control, in a process nobody was watching;
+ * it is a report about the store, never store state nahel wrote. Failing
+ * `nahel validate` on a worker's typo would let an outside process break the
+ * repo's integrity gate, so these findings advise and never fail.
+ *
+ * A run dir WITHOUT result.md produces nothing at all (F4 non-goal: worker
+ * enforcement — dispatch records whether the file appeared, F5). The scope is
+ * result.md alone: a malformed run record or a rogue run-dir name is already
+ * another check's finding and is not re-reported here.
+ */
+function checkResultDocs(state: ParsedState): Finding[] {
+  const findings: Finding[] = [];
+  for (const raw of state.input.runs) {
+    if (raw.resultDocText === undefined) continue;
+    const path = raw.resultDocPath;
+
+    let frontmatter: Record<string, unknown>;
+    try {
+      frontmatter = parseFrontmatter(raw.resultDocText).frontmatter;
+    } catch (error) {
+      findings.push({
+        severity: "warning",
+        check: "run.result-doc",
+        path,
+        message: `run ${raw.id}: ${RESULT_DOC_FILENAME} is not a frontmatter document — ${errorMessage(error)}`,
+        fix: RESULT_DOC_SHAPE_FIX,
+      });
+      continue;
+    }
+
+    // One finding PER ISSUE, not the collapsed `zodIssues` line the store's own
+    // records get (F4 acceptance: each missing required key and a bad status
+    // enum are DISTINCT findings) — the author is an agent that reads findings
+    // one at a time and fixes what each one names.
+    const parsed = resultDocFrontmatterSchema.safeParse(frontmatter);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        const field = issue.path.length === 0 ? "(root)" : issue.path.join(".");
+        findings.push({
+          severity: "warning",
+          check: "run.result-doc",
+          path,
+          message: `run ${raw.id}: ${RESULT_DOC_FILENAME} frontmatter is invalid — ${field}: ${issue.message}`,
+          fix: RESULT_DOC_FIELD_FIX[field] ?? RESULT_DOC_SHAPE_FIX,
+        });
+      }
+      continue;
+    }
+
+    if (parsed.data.run !== raw.id) {
+      findings.push({
+        severity: "warning",
+        check: "run.result-doc",
+        path,
+        message: `run ${raw.id}: ${RESULT_DOC_FILENAME} reports run ${parsed.data.run}, which is not the run directory it sits in`,
+        fix: RESULT_DOC_FIELD_FIX["run"]!,
+      });
+    }
+    if (!state.itemFiles.has(parsed.data.item)) {
+      findings.push({
+        severity: "warning",
+        check: "run.result-doc",
+        path,
+        message: `run ${raw.id}: ${RESULT_DOC_FILENAME} names item ${parsed.data.item}, which does not exist`,
+        fix: `${RESULT_DOC_FIELD_FIX["item"]!} — take it from the run's task document`,
+      });
+    }
+  }
+  return findings;
+}
+
 const COMPACT_FIX =
   "run the compact workflow (nahel/workflows/compact.md): distill facts with `nahel observe`, then mark the covered segments with `nahel distill <segment>...`";
 
@@ -3520,6 +3624,7 @@ export function validate(input: ValidationInput): Finding[] {
     ...checkDivergence(state),
     ...checkArchival(state),
     ...checkHotState(state),
+    ...checkResultDocs(state),
     ...checkMaintenance(state),
     ...checkSkillsDrift(state),
     ...checkWorkflowDrift(state),

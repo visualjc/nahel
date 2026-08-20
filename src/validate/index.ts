@@ -7,6 +7,7 @@ import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
 import { eventDocuments } from "../store/mutate";
 import { scanPrototypeRefs } from "../store/prototype";
+import { RESULT_DOC_FILENAME } from "../store/result";
 import {
   itemPath,
   listDistilledMarkers,
@@ -23,6 +24,7 @@ import {
   readSkillsLockText,
   readSkillsManifestText,
   readTextFile,
+  resultDocPath,
   roadmapNodePath,
   runRecordPath,
   ticketPath,
@@ -372,6 +374,7 @@ export async function collectValidationInput(
         id,
         path: join(layout.runsDir, id, "run.json"),
         hotStatePath: join(layout.runsDir, id, "state.json"),
+        resultDocPath: join(layout.runsDir, id, RESULT_DOC_FILENAME),
         error: `directory name ${JSON.stringify(id)} is not a well-formed nahel id — rename the run directory`,
       });
       continue;
@@ -380,7 +383,18 @@ export async function collectValidationInput(
       id,
       path: runRecordPath(layout, id),
       hotStatePath: hotStatePath(layout, id),
+      resultDocPath: resultDocPath(layout, id),
     };
+    // The worker's result document (PRD F4), read like every other optional
+    // document here: absent is the normal case and never a finding, and an
+    // unreadable path (e.g. the name is taken by a directory) is not a usable
+    // document either — the checks judge only text that is actually there.
+    try {
+      const text = await readTextFile(raw.resultDocPath);
+      if (text !== null) raw.resultDocText = text;
+    } catch {
+      // Not a usable result document.
+    }
     try {
       raw.text = await readRunRecordText(layout, id);
     } catch (error) {

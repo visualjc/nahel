@@ -8,11 +8,12 @@ import { validateCommand } from "../../src/commands/validate";
 import { listSegments } from "../../src/store/journal";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import type { Finding } from "../../src/validate";
-import { itemPath } from "../../src/store/layout";
+import { itemPath, resultDocPath } from "../../src/store/layout";
 import { closeStoreContext, mutate } from "../../src/store/mutate";
 import { makeTempDir, seededEnv } from "../store/helpers";
 import {
   createItem,
+  createRun,
   healItemWrites,
   sabotageItemWrites,
   setupFixture,
@@ -225,6 +226,27 @@ describe("nahel validate — the command", () => {
     expect(output).toContain("compaction.overdue");
     expect(output).toContain("nahel/workflows/compact.md");
     expect(output).toContain("0 error(s), 1 warning(s)");
+  });
+
+  test("a defective worker result.md warns without failing the command: exit 0", async () => {
+    const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
+    const item = await createItem(fixture);
+    const run = await createRun(fixture, item.id);
+    // A worker-authored document that misses the contract: advisory, never a
+    // store-integrity error, so the whole command still succeeds.
+    await writeFile(
+      resultDocPath(fixture.layout, run.id),
+      ["---", `run: ${run.id}`, `item: ${item.id}`, "status: done", "---", "", "body\n"].join("\n"),
+    );
+
+    const result = await runValidate([], fixture.root);
+    expect(result.code).toBe(0);
+    const output = result.stdout.join("\n");
+    expect(output).toContain("run.result-doc");
+    expect(output).toContain(run.id);
+    expect(output).toContain("warning");
+    expect(output).toContain("0 error(s), 2 warning(s)"); // bad status + missing summary
   });
 
   test("--json emits the machine shape: repaired + findings", async () => {

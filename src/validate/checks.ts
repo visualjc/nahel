@@ -127,10 +127,15 @@ export interface RawRunRecord {
   resultDocPath: string;
   /**
    * The result document's raw text, when the worker left one. Undefined means
-   * ABSENT (or unreadable, which is the same non-document), and absence is
-   * never a finding — see checkResultDocs.
+   * ABSENT, and absence is never a finding — see checkResultDocs.
    */
   resultDocText?: string;
+  /**
+   * The path EXISTS but could not be read as a file (e.g. the name is taken
+   * by a directory). Distinct from absence (review round 1): a result that
+   * exists and cannot be read is a finding, not a silent pass.
+   */
+  resultDocUnreadable?: boolean;
 }
 
 /** Everything validate checks, collected in one store read pass. */
@@ -3119,6 +3124,16 @@ const RESULT_DOC_FIELD_FIX: Record<string, string> = {
 function checkResultDocs(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
   for (const raw of state.input.runs) {
+    if (raw.resultDocUnreadable === true) {
+      findings.push({
+        severity: "warning",
+        check: "run.result-doc",
+        path: raw.resultDocPath,
+        message: `run ${raw.id}: ${RESULT_DOC_FILENAME} exists but is not a readable file`,
+        fix: `replace it with a markdown document — ${RESULT_DOC_SHAPE_FIX}`,
+      });
+      continue;
+    }
     if (raw.resultDocText === undefined) continue;
     const path = raw.resultDocPath;
 
@@ -3172,6 +3187,23 @@ function checkResultDocs(state: ParsedState): Finding[] {
         message: `run ${raw.id}: ${RESULT_DOC_FILENAME} names item ${parsed.data.item}, which does not exist`,
         fix: `${RESULT_DOC_FIELD_FIX["item"]!} — take it from the run's task document`,
       });
+    } else {
+      // Misattribution (review round 1): the item exists, but is it THIS
+      // run's item? The run record is the authority. A corrupt run record has
+      // no item to compare against — schema.run reports that, and the doc is
+      // judged on its own terms, so the cross-check silently stands down.
+      const record = state.runs.get(raw.id)?.record;
+      if (record !== undefined && parsed.data.item !== record.item) {
+        findings.push({
+          severity: "warning",
+          check: "run.result-doc",
+          path,
+          message:
+            `run ${raw.id}: ${RESULT_DOC_FILENAME} names item ${parsed.data.item}, but the run ` +
+            `record names ${record.item} — a result attributed to work this run never executed`,
+          fix: `${RESULT_DOC_FIELD_FIX["item"]!} — take it from the run's task document`,
+        });
+      }
     }
   }
   return findings;

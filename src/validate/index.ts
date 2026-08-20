@@ -386,14 +386,16 @@ export async function collectValidationInput(
       resultDocPath: resultDocPath(layout, id),
     };
     // The worker's result document (PRD F4), read like every other optional
-    // document here: absent is the normal case and never a finding, and an
-    // unreadable path (e.g. the name is taken by a directory) is not a usable
-    // document either — the checks judge only text that is actually there.
+    // document here: absent is the normal case and never a finding. An
+    // unreadable PATH is different from an absent one (review round 1): a
+    // directory named result.md "exists" per F4, so swallowing it as absent
+    // would pass validate on a run whose result cannot be read — the flag
+    // carries that state to the check, which owns the finding.
     try {
       const text = await readTextFile(raw.resultDocPath);
       if (text !== null) raw.resultDocText = text;
     } catch {
-      // Not a usable result document.
+      raw.resultDocUnreadable = true;
     }
     try {
       raw.text = await readRunRecordText(layout, id);

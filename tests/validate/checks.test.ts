@@ -2671,6 +2671,44 @@ describe("validate — worker result documents (run.result-doc, F4)", () => {
     expect(findingsFor(findings, "run.result-doc")).toEqual([]);
     expect(findingsFor(findings, "schema.run")).toHaveLength(1);
   });
+
+  test("a result.md that is a DIRECTORY is a finding, never silently absent (review round 1)", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    // A worker (or a tool mishap) can take the result path with a directory:
+    // the document "exists" per F4 but is unreadable as a file — swallowing it
+    // as absent would pass validate on a run whose result cannot be read.
+    await mkdir(resultDocPath(fixture.layout, run.id), { recursive: true });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain("not a readable file");
+  });
+
+  test("a result.md attributing the run to a DIFFERENT existing item warns, naming both items (review round 1)", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    // Both items exist, so the ghost-item check passes — but the run record
+    // names `item`, and a result claiming another item is misattribution.
+    const other = await createItem(fixture, { name: "innocent-bystander" });
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        `item: ${other.id}`,
+        "status: success",
+        "summary: reported against an item this run never executed",
+      ]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(other.id);
+    expect(findings[0]!.message).toContain(item.id);
+    expect(findings[0]!.fix).toContain("item");
+  });
 });
 
 describe("validate — finding shape and determinism", () => {

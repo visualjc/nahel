@@ -1,0 +1,2 @@
+{"id":"efcymjb3","ts":"2026-08-20T17:25:43Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"c9xr9bb2","payload":{"target":"item","record":{"id":"c9xr9bb2","name":"canonize-handoff-prose","type":"chore","status":"in-review","lane":"direct","parent":"8112yg22","depends_on":["nsc0k9xy"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T17:25:43Z"},"body":""}}
+{"id":"40sc108s","ts":"2026-08-20T17:25:43Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

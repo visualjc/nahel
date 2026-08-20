@@ -1,0 +1,13 @@
+{
+  "id": "w3r2g343",
+  "item": "nsc0k9xy",
+  "actor": {
+    "kind": "agent",
+    "id": "opus-dispatch-handoff"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-20T16:59:46Z",
+  "ended": "2026-08-20T17:08:52Z"
+}

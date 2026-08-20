@@ -2,7 +2,7 @@
 id: b0kz7pzd
 name: handoff-exit-test
 type: qa
-status: backlog
+status: in-review
 lane: direct
 parent: 8112yg22
 depends_on:
@@ -10,5 +10,5 @@ depends_on:
   - 3zka6zmz
 external_refs: []
 created: 2026-08-20T16:37:36Z
-updated: 2026-08-20T16:37:36Z
+updated: 2026-08-20T17:33:29Z
 ---

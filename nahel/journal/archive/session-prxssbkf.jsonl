@@ -1,0 +1,2 @@
+{"id":"9zrrp49w","ts":"2026-08-20T17:33:29Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"opus-exit-test"},"item":"b0kz7pzd","payload":{"target":"item","record":{"id":"b0kz7pzd","name":"handoff-exit-test","type":"qa","status":"in-review","lane":"direct","parent":"8112yg22","depends_on":["nsc0k9xy","3zka6zmz"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T17:33:29Z"},"body":""}}
+{"id":"hpz549ry","ts":"2026-08-20T17:33:29Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"opus-exit-test"},"payload":{}}

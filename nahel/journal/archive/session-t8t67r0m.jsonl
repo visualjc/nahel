@@ -1,0 +1,2 @@
+{"id":"hmk3wt1g","ts":"2026-08-20T16:40:04Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"opus-result-doc"},"item":"9akby10d","payload":{"target":"item","record":{"id":"9akby10d","name":"result-doc-contract","type":"feature","status":"in-progress","lane":"direct","parent":"8112yg22","depends_on":[],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T16:40:04Z"},"body":""}}
+{"id":"fkvk8vyk","ts":"2026-08-20T16:40:04Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"opus-result-doc"},"payload":{}}

@@ -1,4 +1,6 @@
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { renderTaskDoc } from "../dispatch/handoff";
 import {
   composeInvocation,
   resolveAgent,
@@ -17,9 +19,18 @@ import { DISPATCH_ENDED_EVENT_TYPE, DISPATCH_STARTED_EVENT_TYPE } from "../schem
 import type { Env } from "../schema/env";
 import type { Config, Run } from "../schema/records";
 import { spawnDispatch } from "../store/dispatch";
+import { writeFileAtomic } from "../store/frontmatter";
 import { runContractHealthcheck } from "../store/healthcheck";
 import { appendEvent } from "../store/journal";
-import { readConfig, readItem, readRun } from "../store/layout";
+import {
+  readConfig,
+  readItem,
+  readRun,
+  readTextFile,
+  resultDocPath,
+  taskDocPath,
+} from "../store/layout";
+import { resultDocRelativePath, taskDocRelativePath } from "../store/result";
 import { closeStoreContext, type StoreContext } from "../store/mutate";
 import { commandContext, execute, requireExistingItem, UsageError, type Command } from "./item";
 import { endRun, startRun } from "./run";
@@ -40,9 +51,17 @@ import { endRun, startRun } from "./run";
  * Ordering is deliberate. EVERY refusal — routing, agent kind, and the
  * compose-time ones (a model the agent spec has no flag for) — happens before
  * a single byte of state changes, so a misrouted dispatch journals nothing and
- * leaves no ghost run; the run then opens and the invocation is journaled
- * BEFORE the spawn (write-ahead), so a crash mid-run leaves the intent
- * provable; the run is closed with the worker's exit status.
+ * leaves no ghost run — the task file, read at parse time, is refused there
+ * with the rest; the run then opens, the handoff document is written to the
+ * run dir, and the invocation is journaled BEFORE the spawn (write-ahead), so
+ * a crash mid-run leaves the intent provable and every pointer resolvable;
+ * the run is closed with the worker's exit status.
+ *
+ * The task itself never travels in argv (PRD F1/F3): it is written to
+ * `nahel/runs/<run-id>/task.md` and the worker is handed a pointer prompt, so
+ * a brief of any size spawns the same bounded command line. The journal
+ * records the two document PATHS — the task doc on the way in, the worker's
+ * result doc on the way out when it left one — never their content (F5).
  *
  * Closing is conditional, though (PRD F6): the run and item records are re-read
  * AFTER the worker exits, because a human's `nahel pause` or `nahel claim`
@@ -76,11 +95,18 @@ type PreflightVerdict = "passed" | "skipped" | "none";
 
 const USAGE = `usage:
   nahel dispatch <responsibility> [--slot 2] --item <id> -- <task args...>
+  nahel dispatch <responsibility> [--slot 2] --item <id> --task-file <path>
     Spawn the agent CLI the routing map assigns to <responsibility>
     (${ROUTING_RESPONSIBILITIES.join(" | ")}), with the mapped model, the
     worker's own NAHEL_ACTOR identity, and an orientation preamble telling it
-    to run \`nahel brief\` before acting. Everything after \`--\` is the task
-    prompt, passed through untouched.
+    to run \`nahel brief\` before acting.
+    The task travels as a DOCUMENT, never as argv: it is written to
+    nahel/runs/<run-id>/task.md and the worker is handed a pointer to it,
+    so a brief of any size dispatches the same bounded command line.
+    Give the task exactly one way — everything after \`--\`, or
+    --task-file <path> (read once, relative to the current directory, and
+    copied into the run dir; the copy is the record). Both, or neither, is a
+    usage error.
     --item is required: every dispatch belongs to a work item, and the
     dispatch opens and closes a run record for it.
     --slot <${REVIEW_SLOTS.join("|")}> applies to \`review\` only: it names which
@@ -100,6 +126,7 @@ const USAGE = `usage:
 interface DispatchArgs {
   responsibility: RoutingResponsibility;
   item: string;
+  /** The task body, from whichever of the two sources supplied it (F2). */
   task: string;
   /** Reviewer slot to fill (`review` only); undefined is the plain route. */
   slot?: ReviewSlot;
@@ -167,13 +194,36 @@ function requireSlot(value: string, responsibility: RoutingResponsibility): Revi
   return slot;
 }
 
-function parseDispatchArgs(argv: string[]): DispatchArgs {
+/**
+ * Read the `--task-file` brief (F2). Caller-side input, so the path resolves
+ * against the CWD the human stood in, not the store root — and it is read
+ * HERE, with the rest of the refusals, so an unreadable path leaves the store
+ * as inert as a misrouted dispatch does. Unreadable for any reason (missing,
+ * a directory, no permission) is one refusal: what the caller has to fix is
+ * the same either way, and the resolved path is named so they can see where
+ * dispatch actually looked.
+ */
+async function readTaskFile(path: string, cwd: string): Promise<string> {
+  const resolved = resolve(cwd, path);
+  const text = await readTextFile(resolved).catch(() => null);
+  if (text === null) {
+    throw new UsageError(
+      `--task-file ${JSON.stringify(path)} could not be read (looked at ${resolved}) — ` +
+        `nothing was dispatched. The task file is read before any state changes, so fix the ` +
+        `path and re-run.`,
+    );
+  }
+  return text;
+}
+
+async function parseDispatchArgs(argv: string[], cwd: string): Promise<DispatchArgs> {
   const { own, task } = splitArgv(argv);
   const { values, positionals } = parseArgs({
     args: own,
     options: {
       item: { type: "string" },
       slot: { type: "string" },
+      "task-file": { type: "string" },
       "no-preflight": { type: "boolean" },
     },
     allowPositionals: true,
@@ -184,10 +234,23 @@ function parseDispatchArgs(argv: string[]): DispatchArgs {
     );
   }
   const responsibility = requireResponsibility(positionals[0]!);
-  if (task.length === 0) {
+  // Exactly one task source (F2). Two sources is an ambiguity nothing can
+  // resolve — which brief did the caller mean? — and zero is a dispatch with
+  // nothing to do; both are refused rather than guessed at.
+  const taskFile = values["task-file"];
+  const inline = task.length === 0 ? undefined : task.join(" ");
+  if (inline !== undefined && taskFile !== undefined) {
     throw new UsageError(
-      "dispatch needs a task: everything after `--` is the prompt handed to the worker " +
-        "(e.g. `nahel dispatch implementation --item <id> -- implement the parser`)",
+      "dispatch takes exactly one task source: the args after `--`, OR --task-file <path> — " +
+        "both were given, and there is no way to tell which brief was meant",
+    );
+  }
+  if (inline === undefined && taskFile === undefined) {
+    throw new UsageError(
+      "dispatch needs a task, given exactly one way: everything after `--` is the brief " +
+        "(e.g. `nahel dispatch implementation --item <id> -- implement the parser`), or " +
+        "--task-file <path> reads it from a file — either way it travels to the worker as " +
+        "the run dir's task.md",
     );
   }
   // Every dispatch belongs to a work item: F1.1's acceptance is a correctly
@@ -205,7 +268,7 @@ function parseDispatchArgs(argv: string[]): DispatchArgs {
   return {
     responsibility,
     item: values.item,
-    task: task.join(" "),
+    task: inline ?? (await readTaskFile(taskFile!, cwd)),
     noPreflight: values["no-preflight"] === true,
     ...(slot === undefined ? {} : { slot }),
   };
@@ -297,6 +360,11 @@ async function journalStart(
       via: route.via,
       // What the environment probe found — or that it was waved through.
       preflight: preflightVerdict,
+      // The handoff document's repo-relative path (F5): the journal records
+      // WHERE the brief is, never the brief itself. Run dirs are committed
+      // store state, so the pointer stays resolvable — and the event stays
+      // the same size whether the task was a sentence or half a megabyte.
+      task_doc: taskDocRelativePath(run.id),
       invocation: {
         binary: invocation.binary,
         args: invocation.args,
@@ -313,12 +381,27 @@ async function journalEnd(
   run: Run,
   outcome: { outcome: string; exit_code?: number; signal?: string; error?: string },
 ): Promise<void> {
+  // Did the worker leave a result document (F5)? PRESENCE only — parsing and
+  // validity are `nahel validate`'s job, and a missing result.md adds nothing
+  // and fails nothing (F4's non-goal: nahel does not enforce worker
+  // compliance). The look is unconditional so both exit paths behave alike:
+  // on the spawn-error path no worker ever ran, so there is simply nothing to
+  // find and the key stays absent — no branch to get wrong.
+  const resultDoc = await readTextFile(resultDocPath(ctx.layout, run.id)).then(
+    (text) => text !== null,
+    () => false,
+  );
   await appendEvent(ctx.layout, ctx.env, {
     type: DISPATCH_ENDED_EVENT_TYPE,
     actor: ctx.actor,
     run: run.id,
     item: args.item,
-    payload: { responsibility: route.responsibility, agent: route.agent, ...outcome },
+    payload: {
+      responsibility: route.responsibility,
+      agent: route.agent,
+      ...outcome,
+      ...(resultDoc ? { result_doc: resultDocRelativePath(run.id) } : {}),
+    },
   });
 }
 
@@ -364,7 +447,7 @@ async function runDispatch(
   cwd: string,
   actorOverride?: string,
 ): Promise<number> {
-  const args = parseDispatchArgs(argv);
+  const args = await parseDispatchArgs(argv, cwd);
 
   // Resolution first: every refusal below happens before a single byte of
   // state changes, so a misrouted dispatch is inert (no run, no events).
@@ -412,6 +495,29 @@ async function runDispatch(
     phase: DISPATCH_PHASE,
   });
 
+  // The handoff document (F1), written the moment the run dir exists and
+  // BEFORE anything points at it: the prompt names task.md, the journal names
+  // task.md, and both are only honest if the file is already on disk. A
+  // failure here closes the run it opened rather than leaving it dangling —
+  // the same honesty the spawn-error path keeps.
+  try {
+    await writeFileAtomic(
+      taskDocPath(ctx.layout, run.id),
+      renderTaskDoc({
+        run: run.id,
+        item: args.item,
+        responsibility: args.responsibility,
+        created: ctx.env.now(),
+        task: args.task,
+      }),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await journalEnd(ctx, args, route, run, { outcome: FAILURE, error: message });
+    await endRun(ctx, run, FAILURE);
+    throw error;
+  }
+
   const invocation = composeInvocation({
     responsibility: args.responsibility,
     agent: route.agent,
@@ -422,7 +528,8 @@ async function runDispatch(
   });
 
   // Write-ahead: the invocation is journaled before the child exists, so the
-  // record of what was dispatched survives any crash during the run.
+  // record of what was dispatched survives any crash during the run — and it
+  // points at a document that already exists.
   await journalStart(ctx, args, route, invocation, run, preflightVerdict);
 
   let result;

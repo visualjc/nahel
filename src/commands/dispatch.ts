@@ -393,7 +393,6 @@ async function runDispatch(
     agent: route.agent,
     model: route.model,
     spec,
-    task: args.task,
   });
 
   await requireExistingItem(ctx.layout, args.item, "--item");
@@ -418,7 +417,6 @@ async function runDispatch(
     agent: route.agent,
     model: route.model,
     spec,
-    task: args.task,
     item: args.item,
     run: run.id,
   });

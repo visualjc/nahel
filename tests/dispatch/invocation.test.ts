@@ -14,7 +14,14 @@ import {
   REVIEW_SLOT_CHAINS,
   UnknownAgentKindError,
 } from "../../src/dispatch/invocation";
+import { renderTaskDoc } from "../../src/dispatch/handoff";
 import type { Routing } from "../../src/schema/records";
+import {
+  RESULT_DOC_CONTRACT,
+  RESULT_DOC_STATUSES,
+  resultDocRelativePath,
+  taskDocRelativePath,
+} from "../../src/store/result";
 
 /**
  * Dispatch invocation composition (PRD F1.1–F1.3, ADR-0015/0016): the PURE
@@ -57,16 +64,18 @@ describe("shipped invocation defaults (F1.3 — real agent CLIs)", () => {
 
   test("every shipped default delivers the prompt as a trailing argument", () => {
     // The composer appends the prompt last for every kind; a default whose
-    // CLI could not take a positional prompt would silently drop the task.
+    // CLI could not take a positional prompt would silently drop the pointer.
     for (const [kind, spec] of Object.entries(DISPATCH_AGENT_DEFAULTS)) {
       const composed = composeInvocation({
         responsibility: "implementation",
         agent: kind,
         model: undefined,
         spec,
-        task: "TASK-MARKER",
+        item: "mb6gxyk4",
+        run: "zdbbkrgp",
       });
-      expect(composed.args[composed.args.length - 1]).toContain("TASK-MARKER");
+      expect(composed.args[composed.args.length - 1]).toBe(composed.prompt);
+      expect(composed.prompt).toContain(taskDocRelativePath("zdbbkrgp"));
     }
   });
 });
@@ -314,9 +323,12 @@ describe("invocation composition (F1.1 — binary, model flag, actor env, orient
       agent: "claude",
       model: "claude-opus-5",
       spec: DISPATCH_AGENT_DEFAULTS.claude,
-      task: "implement the widget",
       ...overrides,
     });
+
+  /** An item-scoped dispatch — the only shape that is ever actually spawned. */
+  const dispatched = (overrides: Partial<Parameters<typeof composeInvocation>[0]> = {}) =>
+    compose({ item: "mb6gxyk4", run: "zdbbkrgp", ...overrides });
 
   test("composes binary, base args, the model flag, and the prompt as the trailing arg", () => {
     const composed = compose();
@@ -350,14 +362,14 @@ describe("invocation composition (F1.1 — binary, model flag, actor env, orient
     expect((error as Error).message).toContain("model_flag");
   });
 
-  test("the orientation preamble directs the worker to `nahel brief` AHEAD of the task prompt", () => {
-    const prompt = compose().prompt;
+  test("the orientation preamble directs the worker to `nahel brief` AHEAD of the task pointer", () => {
+    const prompt = dispatched().prompt;
     console.log("[prompt]\n" + prompt);
     const orientation = prompt.indexOf(ORIENTATION_COMMAND);
-    const task = prompt.indexOf("implement the widget");
+    const pointer = prompt.indexOf(taskDocRelativePath("zdbbkrgp"));
     expect(orientation).toBeGreaterThanOrEqual(0);
-    expect(task).toBeGreaterThanOrEqual(0);
-    expect(orientation).toBeLessThan(task);
+    expect(pointer).toBeGreaterThanOrEqual(0);
+    expect(orientation).toBeLessThan(pointer);
   });
 
   test("the prompt is the trailing argument, so the recorded argv carries the whole contract", () => {
@@ -379,19 +391,107 @@ describe("invocation composition (F1.1 — binary, model flag, actor env, orient
   });
 
   test("without an item, the preamble mentions no item or run at all", () => {
+    // The runless composition is the PROBE the command fires before touching
+    // state (it is never spawned): preamble only, no run dir to point at.
     const prompt = compose().prompt;
     expect(prompt.toLowerCase()).not.toContain("work item:");
     expect(prompt).not.toContain("nahel run update");
+    expect(prompt).not.toContain("task.md");
+    expect(prompt).not.toContain("result.md");
   });
 
   test("composition is deterministic — identical inputs compose byte-identical invocations", () => {
-    expect(JSON.stringify(compose({ item: "mb6gxyk4", run: "zdbbkrgp" }))).toBe(
-      JSON.stringify(compose({ item: "mb6gxyk4", run: "zdbbkrgp" })),
-    );
+    expect(JSON.stringify(dispatched())).toBe(JSON.stringify(dispatched()));
+    // Byte-identity of the prompt itself, not merely a structural match.
+    expect(dispatched().prompt).toBe(dispatched().prompt);
+  });
+});
+
+/**
+ * The pointer prompt (PRD F3): the task no longer travels in argv. The prompt
+ * carries ids, two repo-relative paths, and the fixed result contract — never
+ * task content. That is what makes its size bounded BY CONSTRUCTION, which is
+ * the whole point: a multi-hundred-KB brief inlined into an agent CLI's command
+ * line hung codex in the field (journal nt93edc0).
+ */
+describe("pointer prompt (F3 — the task travels as a document, not as argv)", () => {
+  const RUN = "zdbbkrgp";
+  const ITEM = "mb6gxyk4";
+  const pointer = () =>
+    composeInvocation({
+      responsibility: "implementation",
+      agent: "claude",
+      model: "claude-opus-5",
+      spec: DISPATCH_AGENT_DEFAULTS.claude,
+      item: ITEM,
+      run: RUN,
+    });
+
+  /**
+   * Why a FIXED bound rather than "smaller than the task": the prompt has no
+   * task input at all any more, so the only way it can grow is a future change
+   * re-inlining content into it. 4096 bytes is comfortably above the composed
+   * pointer (~1 KB) and far below anything an argv limit or a CLI's own prompt
+   * handling would struggle with — it fails loudly if content creeps back in.
+   */
+  const PROMPT_BYTE_BOUND = 4096;
+
+  test("the prompt names the run id and both repo-relative document paths", () => {
+    const prompt = pointer().prompt;
+    console.log("[pointer prompt]\n" + prompt);
+    expect(prompt).toContain(RUN);
+    expect(prompt).toContain(ITEM);
+    expect(prompt).toContain(`nahel/runs/${RUN}/task.md`);
+    expect(prompt).toContain(`nahel/runs/${RUN}/result.md`);
+    // Rendered through the store's own path helpers, so prompt and store can
+    // never disagree about where the documents live.
+    expect(prompt).toContain(taskDocRelativePath(RUN));
+    expect(prompt).toContain(resultDocRelativePath(RUN));
   });
 
-  test("multi-word task args arrive as one prompt tail, in order", () => {
-    const composed = compose({ task: "fix the flaky test in tests/store/rotate.test.ts" });
-    expect(composed.prompt).toContain("fix the flaky test in tests/store/rotate.test.ts");
+  test("the prompt tells the worker to read the task document in full and follow it", () => {
+    const prompt = pointer().prompt.toLowerCase();
+    expect(prompt).toContain("read it in full");
+    expect(prompt).toContain("follow it");
+  });
+
+  test("the prompt embeds the result-document contract verbatim, from its single source", () => {
+    // Asserted through the imported const, never a retyped copy: the keys a
+    // worker is told to write and the keys the parser demands are ONE string,
+    // so they cannot drift (the anti-drift design of src/store/result.ts).
+    const prompt = pointer().prompt;
+    expect(prompt).toContain(RESULT_DOC_CONTRACT);
+    for (const key of ["run", "item", "status", "summary"]) {
+      expect(prompt).toContain(`${key}:`);
+    }
+    for (const status of RESULT_DOC_STATUSES) {
+      expect(prompt).toContain(status);
+    }
+  });
+
+  test("a multi-hundred-KB task leaves the prompt untouched and under the fixed byte bound", () => {
+    // The pathological case from the PRD's F3 acceptance. The task exists —
+    // 300 KB of it — but it lives in the handoff document, so the composed
+    // invocation cannot even see it: same bytes as any other dispatch.
+    const task = `${"x".repeat(300_000)}\n`;
+    const doc = renderTaskDoc({
+      run: RUN,
+      item: ITEM,
+      responsibility: "implementation",
+      created: "2026-08-20T17:04:05Z",
+      task,
+    });
+    expect(doc.length).toBeGreaterThan(300_000);
+    const prompt = pointer().prompt;
+    console.log(`[bounds] task doc=${doc.length}B prompt=${Buffer.byteLength(prompt)}B`);
+    expect(prompt).toBe(pointer().prompt);
+    expect(prompt).not.toContain("xxxxxxxxxx");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(PROMPT_BYTE_BOUND);
+  });
+
+  test("every spawned argv stays bounded — the prompt is its only variable-length part", () => {
+    const composed = pointer();
+    const argvBytes = composed.args.reduce((sum, arg) => sum + Buffer.byteLength(arg, "utf8"), 0);
+    expect(argvBytes).toBeLessThan(PROMPT_BYTE_BOUND);
   });
 });

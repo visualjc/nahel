@@ -4,14 +4,19 @@ import {
   type RoutingResponsibility,
 } from "../schema/enums";
 import type { Dispatch, DispatchAgent, Routing } from "../schema/records";
+import {
+  RESULT_DOC_CONTRACT,
+  resultDocRelativePath,
+  taskDocRelativePath,
+} from "../store/result";
 
 /**
  * Dispatch invocation composition (PRD F1.1–F1.3, ADR-0015/0016): the pure
  * half of `nahel dispatch`. Routing resolution, per-agent-CLI invocation
  * knowledge, and the composed argv/prompt are deterministic functions of
- * committed config plus the task args — no I/O, no clock, no LLM call. That
- * purity is what makes the invocation recorded with a dispatch PROVABLE:
- * the same config and task compose the same bytes on every machine.
+ * committed config plus the dispatch's ids — no I/O, no clock, no LLM call.
+ * That purity is what makes the invocation recorded with a dispatch PROVABLE:
+ * the same config and ids compose the same bytes on every machine.
  *
  * The install/agents.ts precedent applies: the table is data, the command
  * owns the I/O.
@@ -233,8 +238,6 @@ export interface ComposeInput {
   agent: string;
   model: string | undefined;
   spec: DispatchAgent;
-  /** The task the worker was dispatched to do (everything after `--`). */
-  task: string;
   /** Work item the dispatch is for, when one was named. */
   item?: string;
   /** Run record opened for this dispatch, when an item was named. */
@@ -248,7 +251,7 @@ export interface ComposedInvocation {
   args: string[];
   /** The one environment addition: the worker's own actor identity. */
   env: { NAHEL_ACTOR: string };
-  /** The prompt (orientation preamble + task); also `args`' final entry. */
+  /** The prompt (orientation preamble + pointer block); `args`' final entry. */
   prompt: string;
 }
 
@@ -257,7 +260,7 @@ export interface ComposedInvocation {
  * contract — run `nahel brief` BEFORE acting, mutate only through the CLI,
  * and (when the dispatch is item-scoped) which item and run to record
  * against. It leads the prompt deliberately: an agent reads top-down, and
- * orientation that trails the task is orientation that arrives too late.
+ * orientation that trails the pointer is orientation that arrives too late.
  * Keeping it here rather than in workflow prose is what makes it
  * unforgettable and auditable.
  */
@@ -280,14 +283,42 @@ export function orientationPreamble(input: ComposeInput, actorSpec: string): str
 }
 
 /**
+ * The pointer block (F3): where the task IS, and where the result goes. The
+ * task itself never appears here — it travels as the run dir's task.md — so
+ * this block's size is fixed by construction no matter how large the brief is.
+ * That bound is the whole feature: a mega-prompt in argv hung codex in the
+ * field, and a pointer-prompt re-dispatch of the same work ran healthy
+ * (journal nt93edc0).
+ *
+ * The result contract is EMBEDDED VERBATIM from the store's own const rather
+ * than restated: prompt and parser are then one string, so what a worker is
+ * told to write cannot drift from what `nahel validate` demands.
+ */
+function pointerBlock(run: string): string {
+  return [
+    `Your task is the document at ${taskDocRelativePath(run)} — read it in full and follow it.`,
+    `When you are finished, write your result document to ${resultDocRelativePath(run)}.`,
+    "",
+    RESULT_DOC_CONTRACT,
+  ].join("\n");
+}
+
+/**
  * Compose the invocation: base args, the model flag when the route names a
  * model, and the prompt as the trailing argument. A route that names a model
  * the agent spec has no flag for is refused rather than silently dropped —
  * dispatching to the wrong model is worse than not dispatching.
+ *
+ * With no run, the prompt is the preamble alone: that composition is the
+ * command's compose-time PROBE, fired before any state changes so a
+ * model-flag refusal leaves the store inert. It is never spawned, and with no
+ * run there is no run dir to point at.
  */
 export function composeInvocation(input: ComposeInput): ComposedInvocation {
   const actorSpec = `agent:${input.agent}`;
-  const prompt = `${orientationPreamble(input, actorSpec)}\n\nTask:\n${input.task}`;
+  const preamble = orientationPreamble(input, actorSpec);
+  const prompt =
+    input.run === undefined ? preamble : `${preamble}\n\n${pointerBlock(input.run)}`;
   const args = [...input.spec.args];
   if (input.model !== undefined) {
     if (input.spec.model_flag === undefined) {

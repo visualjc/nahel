@@ -352,7 +352,7 @@ describe("nahel dispatch — spawns the routed agent CLI and records the run (F1
 });
 
 describe("nahel dispatch — the recorded invocation proves the orientation contract (F1.1 AC)", () => {
-  test("the journaled dispatch record carries the composed invocation, brief preamble ahead of the task", async () => {
+  test("the journaled dispatch record carries the composed invocation, brief preamble ahead of the task pointer", async () => {
     const repo = await setup();
     expect(
       await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "ship the thing"]),
@@ -369,12 +369,18 @@ describe("nahel dispatch — the recorded invocation proves the orientation cont
     expect(invocation.binary).toBe(repo.stubPath);
     expect(invocation.env).toEqual({ NAHEL_ACTOR: "agent:claude" });
 
+    // F3: the task travels as the run dir's task.md, never in argv. What the
+    // recorded prompt must prove is the ORDER of the contract — orient first,
+    // then the pointer at the document — and that no task content leaked in.
+    const run = await onlyRun(repo.layout);
     const prompt = invocation.args[invocation.args.length - 1]!;
     const orientation = prompt.indexOf("nahel brief");
-    const task = prompt.indexOf("ship the thing");
+    const pointer = prompt.indexOf(`nahel/runs/${run.id}/task.md`);
     expect(orientation).toBeGreaterThanOrEqual(0);
-    expect(task).toBeGreaterThanOrEqual(0);
-    expect(orientation).toBeLessThan(task);
+    expect(pointer).toBeGreaterThanOrEqual(0);
+    expect(orientation).toBeLessThan(pointer);
+    expect(prompt).toContain(`nahel/runs/${run.id}/result.md`);
+    expect(prompt).not.toContain("ship the thing");
   });
 
   test("the invocation the worker actually received is the invocation that was journaled", async () => {
@@ -884,9 +890,10 @@ describe("nahel dispatch — usage surface", () => {
         "not-a-flag",
       ]),
     ).toBe(0);
-    const prompt = (await invocationRecord(repo)).argv.at(-1)!;
-    expect(prompt).toContain("--item not-a-flag");
-    // The task's `--item` never displaced nahel's: the run belongs to the real item.
+    // nahel's own parse stopped at `--`: had it consumed the task's `--item`,
+    // the dispatch would have refused (no such item) instead of running, and
+    // the run would not belong to the real one. (That the task TEXT keeps
+    // those flags is proven where the task now lives — the run dir's task.md.)
     expect((await onlyRun(repo.layout)).item).toBe(repo.item.id);
   });
 

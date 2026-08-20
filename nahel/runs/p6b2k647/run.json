@@ -6,7 +6,8 @@
     "id": "claude-code"
   },
   "lane": "epic-lite",
-  "phase": "starting",
-  "status": "active",
-  "started": "2026-08-20T17:38:21Z"
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-20T17:38:21Z",
+  "ended": "2026-08-20T17:50:21Z"
 }

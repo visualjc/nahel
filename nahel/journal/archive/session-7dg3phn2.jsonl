@@ -1,0 +1,2 @@
+{"id":"rnnff9e6","ts":"2026-08-20T17:50:21Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"8112yg22","payload":{"target":"item","record":{"id":"8112yg22","name":"dispatch-handoff","type":"feature","status":"in-review","lane":"epic-lite","depends_on":[],"external_refs":[],"prd":"docs/prds/dispatch-handoff-documents.md","created":"2026-08-20T16:37:25Z","updated":"2026-08-20T17:50:21Z"},"body":""}}
+{"id":"fsfbx5c6","ts":"2026-08-20T17:50:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

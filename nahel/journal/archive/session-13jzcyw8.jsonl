@@ -1,0 +1,2 @@
+{"id":"na35nkcb","ts":"2026-08-20T17:50:21Z","seq":0,"type":"release.announced","actor":{"kind":"agent","id":"claude-code"},"item":"8112yg22","payload":{"version":"0.5.0","channel":"git main + local install","announcement":"merged 49cc155 under Jim's AFK delegation qbhav29g; post-merge verification pending"}}
+{"id":"kfew3sbm","ts":"2026-08-20T17:50:21Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

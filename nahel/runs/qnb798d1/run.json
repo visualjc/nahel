@@ -1,0 +1,13 @@
+{
+  "id": "qnb798d1",
+  "item": "b0kz7pzd",
+  "actor": {
+    "kind": "agent",
+    "id": "opus-exit-test"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-20T17:26:38Z",
+  "ended": "2026-08-20T17:33:29Z"
+}

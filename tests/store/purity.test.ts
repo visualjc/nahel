@@ -18,6 +18,7 @@ const EXPECTED_STORE_FILES = [
   "layout.ts",
   "mutate.ts",
   "prototype.ts",
+  "result.ts",
   "rotate.ts",
   "skills.ts",
 ];

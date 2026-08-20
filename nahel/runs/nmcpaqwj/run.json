@@ -1,0 +1,13 @@
+{
+  "id": "nmcpaqwj",
+  "item": "3zka6zmz",
+  "actor": {
+    "kind": "agent",
+    "id": "opus-validate-result"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-20T17:11:05Z",
+  "ended": "2026-08-20T17:18:19Z"
+}

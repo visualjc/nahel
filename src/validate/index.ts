@@ -7,6 +7,7 @@ import { hotStatePath, readHotStateOrNull } from "../store/hotstate";
 import { scanSegments } from "../store/journal";
 import { eventDocuments } from "../store/mutate";
 import { scanPrototypeRefs } from "../store/prototype";
+import { RESULT_DOC_FILENAME } from "../store/result";
 import {
   itemPath,
   listDistilledMarkers,
@@ -18,11 +19,13 @@ import {
   listTickets,
   mapPath,
   observationPath,
+  pathOccupied,
   readConfigText,
   readRunRecordText,
   readSkillsLockText,
   readSkillsManifestText,
   readTextFile,
+  resultDocPath,
   roadmapNodePath,
   runRecordPath,
   ticketPath,
@@ -372,6 +375,7 @@ export async function collectValidationInput(
         id,
         path: join(layout.runsDir, id, "run.json"),
         hotStatePath: join(layout.runsDir, id, "state.json"),
+        resultDocPath: join(layout.runsDir, id, RESULT_DOC_FILENAME),
         error: `directory name ${JSON.stringify(id)} is not a well-formed nahel id — rename the run directory`,
       });
       continue;
@@ -380,7 +384,26 @@ export async function collectValidationInput(
       id,
       path: runRecordPath(layout, id),
       hotStatePath: hotStatePath(layout, id),
+      resultDocPath: resultDocPath(layout, id),
     };
+    // The worker's result document (PRD F4), read like every other optional
+    // document here: absent is the normal case and never a finding. An
+    // unreadable PATH is different from an absent one (review round 1): a
+    // directory named result.md "exists" per F4, so swallowing it as absent
+    // would pass validate on a run whose result cannot be read — the flag
+    // carries that state to the check, which owns the finding.
+    try {
+      const text = await readTextFile(raw.resultDocPath);
+      if (text !== null) {
+        raw.resultDocText = text;
+      } else if (await pathOccupied(raw.resultDocPath)) {
+        // A dangling symlink: reading followed the link to ENOENT, but the
+        // NAME is taken — exists-but-unreadable, same as the directory case.
+        raw.resultDocUnreadable = true;
+      }
+    } catch {
+      raw.resultDocUnreadable = true;
+    }
     try {
       raw.text = await readRunRecordText(layout, id);
     } catch (error) {

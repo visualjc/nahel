@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import { generateId } from "../../src/schema/id";
@@ -16,6 +16,7 @@ import {
   itemPath,
   observationPath,
   readConfig,
+  resultDocPath,
   runRecordPath,
   writeConfig,
   writeItem,
@@ -2446,6 +2447,283 @@ describe("validate — observation mutations flow through the choke point (PRD F
     const findings = await validateStore(fixture.layout);
     expect(findingsFor(findings, "claims.violation")).toEqual([]);
     expect(findingsFor(findings, "journal.divergence")).toEqual([]);
+  });
+});
+
+describe("validate — worker result documents (run.result-doc, F4)", () => {
+  /** The worker's own write: a raw result.md dropped into an existing run dir. */
+  async function writeResultDoc(
+    fixture: Awaited<ReturnType<typeof setupFixture>>,
+    runId: string,
+    text: string,
+  ): Promise<string> {
+    const path = resultDocPath(fixture.layout, runId);
+    await writeFile(path, text);
+    return path;
+  }
+
+  /** A result document: frontmatter lines, then free markdown body. */
+  function resultDoc(frontmatter: string[], body = "did the thing\n"): string {
+    return ["---", ...frontmatter, "---", "", body].join("\n");
+  }
+
+  /** Fixture with one item and one run, founded and otherwise spotless. */
+  async function fixtureWithRun() {
+    const fixture = await setupFixture(dirs);
+    await signConstitution(fixture);
+    const item = await createItem(fixture);
+    const run = await createRun(fixture, item.id);
+    return { fixture, item, run };
+  }
+
+  test("a conforming result.md produces no finding, and the store stays error-free", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        `item: ${item.id}`,
+        "status: success",
+        "summary: implemented the check and its tests",
+      ]),
+    );
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "run.result-doc")).toEqual([]);
+    expect(findings).toEqual([]);
+  });
+
+  test("a run dir WITHOUT result.md produces no finding (F4 non-goal: worker enforcement)", async () => {
+    const { fixture } = await fixtureWithRun();
+    expect(findingsFor(await validateStore(fixture.layout), "run.result-doc")).toEqual([]);
+  });
+
+  test("a result.md with no frontmatter at all warns once, naming the run dir and the parse error", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    const path = await writeResultDoc(fixture, run.id, "I finished the work.\n");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toBe(path);
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain("frontmatter");
+    expect(findings[0]!.fix).toContain("status");
+  });
+
+  test("unterminated frontmatter and non-mapping frontmatter each warn once", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    await writeResultDoc(fixture, run.id, "---\nrun: nowhere\n\nno closing marker\n");
+    let findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+
+    await writeResultDoc(fixture, run.id, "---\njust a scalar\n---\n\nbody\n");
+    findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+  });
+
+  test("each missing required key and a bad status enum are DISTINCT findings naming the run dir", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    // `item` and `summary` absent, `status` outside the enum: three defects.
+    const path = await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([`run: ${run.id}`, "status: done"]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(3);
+    for (const finding of findings) {
+      expect(finding.severity).toBe("warning");
+      expect(finding.path).toBe(path);
+      expect(finding.message).toContain(run.id);
+      expect(finding.fix!.length).toBeGreaterThan(0);
+    }
+    const messages = findings.map((finding) => finding.message).join("\n");
+    expect(messages).toContain("item");
+    expect(messages).toContain("status");
+    expect(messages).toContain("summary");
+  });
+
+  test("a bad status enum alone is exactly one finding whose fix names the allowed values", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        `item: ${item.id}`,
+        "status: mostly-fine",
+        "summary: it went roughly as planned",
+      ]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain("status");
+    expect(findings[0]!.fix).toContain("success");
+    expect(findings[0]!.fix).toContain("failure");
+    expect(findings[0]!.fix).toContain("partial");
+  });
+
+  test("a result.md whose `run` key is not the run dir's id warns, naming both", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    const other = generateId(fixture.env);
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${other}`,
+        `item: ${item.id}`,
+        "status: success",
+        "summary: reported against the wrong run",
+      ]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain(other);
+    expect(findings[0]!.fix).toContain("run");
+  });
+
+  test("a result.md naming an item that does not exist warns, naming run dir and item", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        "item: zzzzzzzz",
+        "status: partial",
+        "summary: reported against a ghost item",
+      ]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain("zzzzzzzz");
+    expect(findings[0]!.fix).toContain("item");
+  });
+
+  test("a wrong `run` and a ghost `item` in one document are two distinct findings", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        "run: aaaaaaaa",
+        "item: zzzzzzzz",
+        "status: failure",
+        "summary: wrong on both cross-references",
+      ]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(2);
+    expect(findings.every((finding) => finding.severity === "warning")).toBe(true);
+  });
+
+  test("extra unknown frontmatter keys are tolerated — a worker may report more than we asked", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        `item: ${item.id}`,
+        "status: success",
+        "summary: shipped",
+        "tokens_used: 41234",
+        "model: opus-5",
+      ]),
+    );
+
+    expect(findingsFor(await validateStore(fixture.layout), "run.result-doc")).toEqual([]);
+  });
+
+  test("a malformed run DIRECTORY is not double-reported by the result-doc check", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        `item: ${item.id}`,
+        "status: success",
+        "summary: fine document, broken run record",
+      ]),
+    );
+    // The run RECORD is corrupt: schema.run reports that, and the result doc
+    // beside it is judged entirely on its own terms.
+    await writeFile(runRecordPath(fixture.layout, run.id), "{ not json");
+
+    const findings = await validateStore(fixture.layout);
+    expect(findingsFor(findings, "run.result-doc")).toEqual([]);
+    expect(findingsFor(findings, "schema.run")).toHaveLength(1);
+  });
+
+  test("a result.md that is a DIRECTORY is a finding, never silently absent (review round 1)", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    // A worker (or a tool mishap) can take the result path with a directory:
+    // the document "exists" per F4 but is unreadable as a file — swallowing it
+    // as absent would pass validate on a run whose result cannot be read.
+    await mkdir(resultDocPath(fixture.layout, run.id), { recursive: true });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain("not a readable file");
+  });
+
+  test("a DANGLING SYMLINK at result.md is a finding, never silently absent (review round 2)", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    // The name is occupied but reading follows the link to ENOENT — the same
+    // exists-but-unreadable class as the directory case, one rung sneakier.
+    await symlink(
+      join(fixture.layout.runsDir, run.id, "never-written.md"),
+      resultDocPath(fixture.layout, run.id),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain("not a readable file");
+  });
+
+  test("a result.md attributing the run to a DIFFERENT existing item warns, naming both items (review round 1)", async () => {
+    const { fixture, item, run } = await fixtureWithRun();
+    // Both items exist, so the ghost-item check passes — but the run record
+    // names `item`, and a result claiming another item is misattribution.
+    const other = await createItem(fixture, { name: "innocent-bystander" });
+    await writeResultDoc(
+      fixture,
+      run.id,
+      resultDoc([
+        `run: ${run.id}`,
+        `item: ${other.id}`,
+        "status: success",
+        "summary: reported against an item this run never executed",
+      ]),
+    );
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(other.id);
+    expect(findings[0]!.message).toContain(item.id);
+    expect(findings[0]!.fix).toContain("item");
   });
 });
 

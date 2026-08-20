@@ -12,16 +12,20 @@ import type {
   Run,
   WorkItemFrontmatter,
 } from "../../src/schema/records";
+import { parseFrontmatter } from "../../src/store/frontmatter";
 import { readJournal } from "../../src/store/journal";
 import {
   ensureLayout,
   listRuns,
   readItem,
   readRun,
+  resultDocPath,
+  taskDocPath,
   writeConfig,
   writeItem,
   type StoreLayout,
 } from "../../src/store/layout";
+import { parseResultDoc } from "../../src/store/result";
 import { validateStore } from "../../src/validate";
 import { makeConfig, makeFrontmatter, makeTempDir, seededEnv } from "../store/helpers";
 
@@ -96,6 +100,14 @@ interface SetupOptions {
    * still running — exactly what `nahel pause` / `nahel claim` are for.
    */
   workerIntervenes?: "pause" | "claim";
+  /**
+   * Have the stub worker do what a real worker does with a pointer prompt
+   * (PRD F3/F4): find its task document from the prompt ALONE, read it, and
+   * write a conforming result.md beside it. This is the half of the exit test
+   * that proves the handoff round-trips through a worker that was told
+   * nothing but two paths.
+   */
+  workerWritesResult?: boolean;
 }
 
 /**
@@ -120,7 +132,7 @@ async function setup(options: SetupOptions = {}): Promise<Repo> {
     stubPath,
     [
       "#!/usr/bin/env bun",
-      'import { writeFileSync } from "node:fs";',
+      'import { readFileSync, writeFileSync } from "node:fs";',
       `writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify({`,
       "  argv: Bun.argv.slice(2),",
       "  actor: process.env.NAHEL_ACTOR ?? null,",
@@ -159,6 +171,31 @@ async function setup(options: SetupOptions = {}): Promise<Repo> {
       "    console.error(result.stderr.toString());",
       "    process.exit(90);",
       "  }",
+      "}",
+      // A worker that follows its pointer prompt: both document paths come
+      // from the prompt alone (no argument, no env var names them), the task
+      // is read from disk, and the result lands in the run dir.
+      `const writesResult = ${JSON.stringify(options.workerWritesResult === true)};`,
+      "if (writesResult) {",
+      "  const prompt = Bun.argv[Bun.argv.length - 1];",
+      "  const taskPath = /nahel\\/runs\\/\\w+\\/task\\.md/.exec(prompt)?.[0];",
+      "  const resultMatch = /nahel\\/runs\\/(\\w+)\\/result\\.md/.exec(prompt);",
+      "  if (taskPath === undefined || resultMatch === null) process.exit(92);",
+      "  const task = readFileSync(taskPath, 'utf8');",
+      "  writeFileSync(",
+      "    resultMatch[0],",
+      "    [",
+      "      '---',",
+      "      `run: ${resultMatch[1]}`,",
+      "      `item: ${target}`,",
+      "      'status: success',",
+      "      `summary: followed the pointer and read ${task.length} bytes of task`,",
+      "      '---',",
+      "      '',",
+      "      'Did the thing.',",
+      "      '',",
+      "    ].join('\\n'),",
+      "  );",
       "}",
       // A worker dying mid-run rather than exiting: the process kills itself,
       // so dispatch sees a signal death, not an exit status (evqagdsd).
@@ -352,7 +389,7 @@ describe("nahel dispatch — spawns the routed agent CLI and records the run (F1
 });
 
 describe("nahel dispatch — the recorded invocation proves the orientation contract (F1.1 AC)", () => {
-  test("the journaled dispatch record carries the composed invocation, brief preamble ahead of the task", async () => {
+  test("the journaled dispatch record carries the composed invocation, brief preamble ahead of the task pointer", async () => {
     const repo = await setup();
     expect(
       await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "ship the thing"]),
@@ -369,12 +406,18 @@ describe("nahel dispatch — the recorded invocation proves the orientation cont
     expect(invocation.binary).toBe(repo.stubPath);
     expect(invocation.env).toEqual({ NAHEL_ACTOR: "agent:claude" });
 
+    // F3: the task travels as the run dir's task.md, never in argv. What the
+    // recorded prompt must prove is the ORDER of the contract — orient first,
+    // then the pointer at the document — and that no task content leaked in.
+    const run = await onlyRun(repo.layout);
     const prompt = invocation.args[invocation.args.length - 1]!;
     const orientation = prompt.indexOf("nahel brief");
-    const task = prompt.indexOf("ship the thing");
+    const pointer = prompt.indexOf(`nahel/runs/${run.id}/task.md`);
     expect(orientation).toBeGreaterThanOrEqual(0);
-    expect(task).toBeGreaterThanOrEqual(0);
-    expect(orientation).toBeLessThan(task);
+    expect(pointer).toBeGreaterThanOrEqual(0);
+    expect(orientation).toBeLessThan(pointer);
+    expect(prompt).toContain(`nahel/runs/${run.id}/result.md`);
+    expect(prompt).not.toContain("ship the thing");
   });
 
   test("the invocation the worker actually received is the invocation that was journaled", async () => {
@@ -395,6 +438,323 @@ describe("nahel dispatch — the recorded invocation proves the orientation cont
     console.log("[prompt]\n" + prompt);
     expect(prompt).toContain(repo.item.id);
     expect(prompt).toContain(`nahel run update ${run.id}`);
+  });
+});
+
+/**
+ * The handoff document (PRD F1/F2/F5). The task no longer travels in argv: it
+ * is written to `nahel/runs/<run-id>/task.md` after the run opens and before
+ * the worker is spawned, the prompt points at it, and the journal records the
+ * PATHS rather than the content. These tests drive the real command against a
+ * real store, so what they prove is the document on disk — not a renderer's
+ * return value (that is tests/dispatch/handoff.test.ts).
+ */
+describe("nahel dispatch — writes the handoff document (F1)", () => {
+  /** Read a run's task document as it landed on disk. */
+  async function taskDoc(repo: Repo, runId: string): Promise<string> {
+    return readFile(taskDocPath(repo.layout, runId), "utf8");
+  }
+
+  test("the run dir holds task.md with the dispatch's frontmatter and the task body verbatim", async () => {
+    const repo = await setup();
+    expect(
+      await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "build", "the parser"]),
+    ).toBe(0);
+
+    const run = await onlyRun(repo.layout);
+    const doc = await taskDoc(repo, run.id);
+    console.log("[task.md]\n" + doc);
+    const { frontmatter, body } = parseFrontmatter(doc);
+    expect(Object.keys(frontmatter).sort()).toEqual(["created", "item", "responsibility", "run"]);
+    expect(frontmatter["run"]).toBe(run.id);
+    expect(frontmatter["item"]).toBe(repo.item.id);
+    expect(frontmatter["responsibility"]).toBe("implementation");
+    // `created` comes from the INJECTED clock (seededEnv starts in July 2026),
+    // never from an ambient `new Date()` — a real clock would stamp today.
+    expect(frontmatter["created"]).toStartWith("2026-07-16T12:0");
+    // Everything after `--`, joined exactly as the worker's brief.
+    expect(body).toBe("build the parser");
+  });
+
+  test("the document exists BEFORE the worker runs — the worker reads it and writes its result back", async () => {
+    // The exit test's round trip: the stub is told nothing but its prompt, and
+    // from that alone finds task.md, reads it, and writes a conforming
+    // result.md. If the document were written after the spawn, the read fails.
+    const repo = await setup({ workerWritesResult: true });
+    expect(
+      await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "the whole brief"]),
+    ).toBe(0);
+
+    const run = await onlyRun(repo.layout);
+    const result = await readFile(resultDocPath(repo.layout, run.id), "utf8");
+    console.log("[result.md]\n" + result);
+    const parsed = parseResultDoc(parseFrontmatter(result).frontmatter);
+    expect(parsed.run).toBe(run.id);
+    expect(parsed.item).toBe(repo.item.id);
+    expect(parsed.status).toBe("success");
+    // The worker read the real document, not an empty file.
+    const doc = await taskDoc(repo, run.id);
+    expect(parsed.summary).toContain(`${doc.length} bytes`);
+  });
+
+  test("a task carrying newlines, unicode and its own `---` fence round-trips byte-identically", async () => {
+    const task = "---\nnot: frontmatter\n---\n\nFix the ✓ marker — 日本語.\n\n\n";
+    const repo = await setup();
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", task])).toBe(0);
+    const run = await onlyRun(repo.layout);
+    const { frontmatter, body } = parseFrontmatter(await taskDoc(repo, run.id));
+    expect(body).toBe(task);
+    expect(frontmatter["run"]).toBe(run.id);
+  });
+});
+
+/**
+ * `--task-file` (PRD F2): the task's other input. Exactly one source, read
+ * before any state changes, copied into the run dir — after which the source
+ * file is the caller's own business.
+ */
+describe("nahel dispatch — --task-file (F2)", () => {
+  const TASK = "Implement the pointer prompt.\n\n- step one\n- step two\n";
+
+  test("--task-file and the equivalent argv task produce the SAME document and the same prompt", async () => {
+    // Both repos run on the same seeded Env, so ids and clock readings match:
+    // the two documents are comparable byte for byte, which is exactly F2's
+    // acceptance — the input route may not change what the worker receives.
+    const viaArgv = await setup();
+    expect(await dispatch(viaArgv, ["implementation", "--item", viaArgv.item.id, "--", TASK])).toBe(
+      0,
+    );
+    const argvRun = await onlyRun(viaArgv.layout);
+    const argvPrompt = (await invocationRecord(viaArgv)).argv.at(-1)!;
+
+    const viaFile = await setup();
+    await writeFile(join(viaFile.root, "brief.md"), TASK, "utf8");
+    expect(
+      await dispatch(viaFile, [
+        "implementation",
+        "--item",
+        viaFile.item.id,
+        "--task-file",
+        "brief.md",
+      ]),
+    ).toBe(0);
+    const fileRun = await onlyRun(viaFile.layout);
+    const filePrompt = (await invocationRecord(viaFile)).argv.at(-1)!;
+
+    expect(fileRun.id).toBe(argvRun.id); // same seed, same ids — precondition
+    const argvDoc = await readFile(taskDocPath(viaArgv.layout, argvRun.id), "utf8");
+    const fileDoc = await readFile(taskDocPath(viaFile.layout, fileRun.id), "utf8");
+    console.log(`[docs] argv=${argvDoc.length}B file=${fileDoc.length}B`);
+    expect(fileDoc).toBe(argvDoc);
+    expect(parseFrontmatter(fileDoc).body).toBe(TASK);
+    expect(filePrompt).toBe(argvPrompt);
+  });
+
+  test("the path is resolved against the CALLER's cwd, not the store root", async () => {
+    // The task file is caller-side input, like any file argument: a dispatch
+    // from a subdirectory names its file relative to where the human stands.
+    const repo = await setup();
+    expect(spawnSync("git", ["init", "-q"], { cwd: repo.root }).status).toBe(0);
+    const sub = join(repo.root, "briefs");
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, "brief.md"), TASK, "utf8");
+
+    const code = await dispatchCommand.run(
+      ["implementation", "--item", repo.item.id, "--task-file", "brief.md"],
+      repo.env,
+      sub,
+      "agent:host-runner",
+    );
+    console.log("[subdir task-file]", errs.join("\n"));
+    expect(code).toBe(0);
+    const run = await onlyRun(repo.layout);
+    expect(parseFrontmatter(await readFile(taskDocPath(repo.layout, run.id), "utf8")).body).toBe(
+      TASK,
+    );
+  });
+
+  test("a --task-file naming no readable file refuses BEFORE any state change", async () => {
+    // The misrouted-dispatch-is-inert contract: the read happens with every
+    // other refusal, so a typo'd path leaves no run, no events, no spawn.
+    const repo = await setup();
+    const code = await dispatch(repo, [
+      "implementation",
+      "--item",
+      repo.item.id,
+      "--task-file",
+      "no-such-brief.md",
+    ]);
+    const message = errs.join("\n");
+    console.log("[missing task file]", message);
+    expect(code).toBe(1);
+    expect(message).toContain("no-such-brief.md");
+    expect(await listRuns(repo.layout)).toEqual([]);
+    expect(await events(repo.layout)).toEqual([]);
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
+  });
+
+  test("a --task-file naming a DIRECTORY is refused the same way", async () => {
+    const repo = await setup();
+    const code = await dispatch(repo, [
+      "implementation",
+      "--item",
+      repo.item.id,
+      "--task-file",
+      "nahel",
+    ]);
+    console.log("[directory task file]", errs.join("\n"));
+    expect(code).toBe(1);
+    expect(await listRuns(repo.layout)).toEqual([]);
+    expect(await events(repo.layout)).toEqual([]);
+  });
+
+  test("both task sources at once is a usage error naming the rule", async () => {
+    const repo = await setup();
+    await writeFile(join(repo.root, "brief.md"), TASK, "utf8");
+    const code = await dispatch(repo, [
+      "implementation",
+      "--item",
+      repo.item.id,
+      "--task-file",
+      "brief.md",
+      "--",
+      "and also this",
+    ]);
+    const message = errs.join("\n");
+    console.log("[both sources]", message);
+    expect(code).toBe(1);
+    expect(message).toContain("--task-file");
+    expect(message).toContain("exactly one");
+    expect(await events(repo.layout)).toEqual([]);
+    expect(await Bun.file(repo.recordPath).exists()).toBe(false);
+  });
+
+  test("neither task source is a usage error naming both forms", async () => {
+    const repo = await setup();
+    const code = await dispatch(repo, ["implementation", "--item", repo.item.id]);
+    const message = errs.join("\n");
+    console.log("[neither source]", message);
+    expect(code).toBe(1);
+    expect(message).toContain("--task-file");
+    expect(message).toContain("--");
+    expect(await events(repo.layout)).toEqual([]);
+  });
+
+  test("a multi-hundred-KB task file round-trips into task.md while the argv stays bounded", async () => {
+    // The pathological dispatch the feature exists for (journal nt93edc0):
+    // inlined, this is a multi-hundred-KB argv that hung codex. As a document
+    // it is just a file, and the spawned prompt is the same bounded pointer.
+    const PROMPT_BYTE_BOUND = 4096;
+    const huge = `${"x".repeat(400_000)}\n`;
+    const repo = await setup();
+    await writeFile(join(repo.root, "huge-brief.md"), huge, "utf8");
+    expect(
+      await dispatch(repo, [
+        "implementation",
+        "--item",
+        repo.item.id,
+        "--task-file",
+        "huge-brief.md",
+      ]),
+    ).toBe(0);
+
+    const run = await onlyRun(repo.layout);
+    const doc = await readFile(taskDocPath(repo.layout, run.id), "utf8");
+    expect(parseFrontmatter(doc).body).toBe(huge);
+
+    const argv = (await invocationRecord(repo)).argv;
+    const prompt = argv.at(-1)!;
+    console.log(`[bounds] doc=${doc.length}B prompt=${Buffer.byteLength(prompt, "utf8")}B`);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(PROMPT_BYTE_BOUND);
+    expect(prompt).not.toContain("xxxxxxxxxx");
+    const argvBytes = argv.reduce((sum, arg) => sum + Buffer.byteLength(arg, "utf8"), 0);
+    expect(argvBytes).toBeLessThan(PROMPT_BYTE_BOUND);
+  });
+});
+
+/**
+ * The journal records PATHS, not content (PRD F5). Run dirs are committed
+ * store state, so a pointer is durable — and a journal that quoted the whole
+ * brief would grow without bound for no added truth.
+ */
+describe("nahel dispatch — the journal carries the document paths (F5)", () => {
+  /** A string that appears in the task and nowhere else in the universe. */
+  const SENTINEL = "sentinel-4nq2v7zx-task-body";
+
+  test("the start event carries task_doc — the repo-relative POSIX path — and no task content", async () => {
+    const repo = await setup();
+    expect(
+      await dispatch(repo, [
+        "implementation",
+        "--item",
+        repo.item.id,
+        "--",
+        `do the work: ${SENTINEL}`,
+      ]),
+    ).toBe(0);
+
+    const run = await onlyRun(repo.layout);
+    const started = await eventOfType(repo.layout, "dispatch.started");
+    console.log("[dispatch.started]", JSON.stringify(started?.payload["task_doc"]));
+    expect(started?.payload["task_doc"]).toBe(`nahel/runs/${run.id}/task.md`);
+
+    // The task text is on disk, and ONLY on disk: not in the payload, not in
+    // the recorded invocation, not anywhere in the journal.
+    expect(JSON.stringify(started)).not.toContain(SENTINEL);
+    for (const event of await events(repo.layout)) {
+      expect(JSON.stringify(event)).not.toContain(SENTINEL);
+    }
+    expect(parseFrontmatter(await readFile(taskDocPath(repo.layout, run.id), "utf8")).body).toContain(
+      SENTINEL,
+    );
+  });
+
+  test("the end event carries result_doc when the worker left one", async () => {
+    const repo = await setup({ workerWritesResult: true });
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(0);
+    const run = await onlyRun(repo.layout);
+    const ended = await eventOfType(repo.layout, "dispatch.ended");
+    console.log("[dispatch.ended]", ended?.payload);
+    expect(ended?.payload["result_doc"]).toBe(`nahel/runs/${run.id}/result.md`);
+  });
+
+  test("a worker that left no result.md adds nothing and fails nothing", async () => {
+    // PRD F4's non-goal: worker compliance is prose-governed. Presence is
+    // RECORDED, never required — the run still ends a success.
+    const repo = await setup();
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(0);
+    const ended = await eventOfType(repo.layout, "dispatch.ended");
+    console.log("[dispatch.ended, no result]", ended?.payload);
+    expect(ended?.payload["result_doc"]).toBeUndefined();
+    expect(ended?.payload["outcome"]).toBe("success");
+    expect((await onlyRun(repo.layout)).phase).toBe("success");
+  });
+
+  test("a FAILING worker's result.md is still recorded — the document is the report, not the verdict", async () => {
+    const repo = await setup({ workerWritesResult: true, exitCode: 3 });
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(1);
+    const run = await onlyRun(repo.layout);
+    const ended = await eventOfType(repo.layout, "dispatch.ended");
+    console.log("[dispatch.ended, failed worker]", ended?.payload);
+    expect(ended?.payload["outcome"]).toBe("failure");
+    expect(ended?.payload["result_doc"]).toBe(`nahel/runs/${run.id}/result.md`);
+  });
+
+  test("a worker that never started closes the bracket without a result_doc", async () => {
+    // The agent binary is gone, so nothing ran: the dispatch still journals
+    // its end and closes the run, and there is no result document to point at.
+    const repo = await setup();
+    await rm(repo.stubPath);
+    expect(await dispatch(repo, ["implementation", "--item", repo.item.id, "--", "work"])).toBe(1);
+    const run = await onlyRun(repo.layout);
+    expect(run.status).toBe("ended");
+    expect(run.phase).toBe("failure");
+    const ended = await eventOfType(repo.layout, "dispatch.ended");
+    console.log("[dispatch.ended, no spawn]", ended?.payload);
+    expect(ended?.payload["outcome"]).toBe("failure");
+    expect(ended?.payload["result_doc"]).toBeUndefined();
+    // …and the handoff document was written before the spawn was attempted.
+    expect(await Bun.file(taskDocPath(repo.layout, run.id)).exists()).toBe(true);
   });
 });
 
@@ -884,9 +1244,10 @@ describe("nahel dispatch — usage surface", () => {
         "not-a-flag",
       ]),
     ).toBe(0);
-    const prompt = (await invocationRecord(repo)).argv.at(-1)!;
-    expect(prompt).toContain("--item not-a-flag");
-    // The task's `--item` never displaced nahel's: the run belongs to the real item.
+    // nahel's own parse stopped at `--`: had it consumed the task's `--item`,
+    // the dispatch would have refused (no such item) instead of running, and
+    // the run would not belong to the real one. (That the task TEXT keeps
+    // those flags is proven where the task now lives — the run dir's task.md.)
     expect((await onlyRun(repo.layout)).item).toBe(repo.item.id);
   });
 

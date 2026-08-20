@@ -1,0 +1,2 @@
+{"id":"p2znjh43","ts":"2026-08-20T17:37:46Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"8112yg22","payload":{"summary":"review finding: src/validate/index.ts:~392 — result.md that is a directory treated as absent, no run.result-doc finding [severity: major] head=3fce9ec round=1 vendor=codex"}}
+{"id":"8021xs9g","ts":"2026-08-20T17:37:46Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

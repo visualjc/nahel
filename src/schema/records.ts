@@ -25,7 +25,13 @@ import { TIMESTAMP_PATTERN } from "./time";
  * validation errors instead of silently-ignored state.
  */
 
-const idField = z
+/**
+ * The stored id field — exported so every schema that REFERENCES a record by
+ * id states the rule the same way (the result-doc contract's `run`/`item` keys,
+ * PRD F4). One definition, one message: an id check can never drift between
+ * the records nahel writes and the documents workers write back.
+ */
+export const idField = z
   .string()
   .regex(
     ID_PATTERN,

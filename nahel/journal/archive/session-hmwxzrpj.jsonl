@@ -1,0 +1,2 @@
+{"id":"q9wrg197","ts":"2026-08-20T17:18:19Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"opus-validate-result"},"item":"3zka6zmz","payload":{"target":"item","record":{"id":"3zka6zmz","name":"validate-result-docs","type":"feature","status":"in-review","lane":"direct","parent":"8112yg22","depends_on":["9akby10d"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T17:18:19Z"},"body":""}}
+{"id":"vdbxtv0p","ts":"2026-08-20T17:18:19Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"opus-validate-result"},"payload":{}}

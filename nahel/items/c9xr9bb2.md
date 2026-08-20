@@ -2,12 +2,12 @@
 id: c9xr9bb2
 name: canonize-handoff-prose
 type: chore
-status: backlog
+status: in-review
 lane: direct
 parent: 8112yg22
 depends_on:
   - nsc0k9xy
 external_refs: []
 created: 2026-08-20T16:37:36Z
-updated: 2026-08-20T16:37:36Z
+updated: 2026-08-20T17:25:43Z
 ---

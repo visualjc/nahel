@@ -1,0 +1,13 @@
+{
+  "id": "8j44rq9g",
+  "item": "9akby10d",
+  "actor": {
+    "kind": "agent",
+    "id": "opus-result-doc"
+  },
+  "lane": "direct",
+  "phase": "success",
+  "status": "ended",
+  "started": "2026-08-20T16:40:04Z",
+  "ended": "2026-08-20T16:47:20Z"
+}

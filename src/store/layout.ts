@@ -1,4 +1,13 @@
-import { mkdir, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
@@ -25,6 +34,7 @@ import {
 } from "../schema/records";
 import { ID_PATTERN, requireValidId } from "../schema/id";
 import { readFrontmatterFile, writeFileAtomic, writeFrontmatterFile } from "./frontmatter";
+import { RESULT_DOC_FILENAME, TASK_DOC_FILENAME } from "./result";
 
 /**
  * The on-disk layout of a nahel-managed repo (PRD F1): all state machinery
@@ -90,6 +100,25 @@ export function storeLayout(root: string): StoreLayout {
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
   };
+}
+
+/**
+ * True when the NAME itself is occupied — by a file, a directory, or a
+ * symlink whether or not its target exists. `lstat`, deliberately: `stat`
+ * follows links, so a dangling symlink reads as absent and a caller asking
+ * "is something squatting on this path?" gets the wrong answer (review
+ * round 2 — validate must flag a result.md whose name is taken but whose
+ * bytes are unreachable).
+ */
+export async function pathOccupied(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
 }
 
 /** True when anything exists at `path` (a file, a directory, a symlink target). */
@@ -221,6 +250,19 @@ export function runDir(layout: StoreLayout, id: string): string {
 /** Path of a run record. */
 export function runRecordPath(layout: StoreLayout, id: string): string {
   return join(runDir(layout, id), "run.json");
+}
+
+/**
+ * Path of the task document dispatch hands a worker, beside that run's record
+ * (PRD F4). Id validated by runDir before any join, like every other path here.
+ */
+export function taskDocPath(layout: StoreLayout, id: string): string {
+  return join(runDir(layout, id), TASK_DOC_FILENAME);
+}
+
+/** Path of the result document a worker writes back for a run (PRD F4). */
+export function resultDocPath(layout: StoreLayout, id: string): string {
+  return join(runDir(layout, id), RESULT_DOC_FILENAME);
 }
 
 /** Path of an observation record. The id is validated before any join. */

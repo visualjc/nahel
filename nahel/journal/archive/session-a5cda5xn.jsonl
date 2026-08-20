@@ -1,0 +1,2 @@
+{"id":"g7ss8d7p","ts":"2026-08-20T16:17:45Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"ticket":"fpwwf6za","summary":"Jim answered live (structured chat dialog, 2026-08-19): committed, distill-then-prune. Run dirs are committed store state on the existing distill/compact lifecycle — findings distilled into observations, then dirs prunable, same as journal segments."}}
+{"id":"80msvpmw","ts":"2026-08-20T16:17:45Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

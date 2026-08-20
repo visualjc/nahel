@@ -1,0 +1,2 @@
+{"id":"wqkdgrkt","ts":"2026-08-20T16:17:45Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"ticket":"jc5x1hs7","summary":"Jim answered live (structured chat dialog, 2026-08-19): fresh task.md per round with path refs. Round N gets its own run dir; its task.md references round N-1's result.md by path — reference-don't-duplicate, provenance per round."}}
+{"id":"7apkkg3w","ts":"2026-08-20T16:17:45Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

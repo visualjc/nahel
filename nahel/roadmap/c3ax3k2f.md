@@ -1,0 +1,12 @@
+---
+id: c3ax3k2f
+name: dispatch-handoff-documents
+kind: feature
+horizon: next
+parent: kyeb086y
+adrs: []
+features: []
+created: 2026-08-20T16:08:12Z
+updated: 2026-08-20T16:08:12Z
+---
+Dispatch passes task context through handoff DOCUMENTS, not giant prompts (approved direction, journal f4v1wt9m 2026-07-28; field-proven 2026-08-19 when a mega-prompt codex dispatch hung and a pointer-prompt re-dispatch ran healthy — note nt93edc0). The dispatcher writes the full brief to nahel/runs/<run-id>/task.md; the spawned prompt shrinks to a pointer (run nahel brief, read task.md, write result.md); the worker writes nahel/runs/<run-id>/result.md; the journal records PATHS, not content. Adopts the handoff-skill principles: tailor the doc to what the next agent will do, point at items/PRDs/ADRs/git refs by id/path instead of inlining, redact secrets (ADR-0014 presence-not-value). Provenance rule: task.md is dispatcher-written content, never human-signed unless a human wrote it. Plan item: a22spcmj.

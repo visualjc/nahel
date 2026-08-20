@@ -1,0 +1,2 @@
+{"id":"erpnja5a","ts":"2026-08-20T16:17:45Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"ticket":"4hfjsa0x","summary":"Jim answered live (structured chat dialog, 2026-08-19): frontmatter + free prose. result.md carries a small required frontmatter (run id, item, status/verdict enum, one-line summary) tooling can parse, and a free markdown body for findings."}}
+{"id":"cs3yqdcm","ts":"2026-08-20T16:17:45Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -1,0 +1,13 @@
+---
+id: z5atxgw6
+node: c3ax3k2f
+destination: A dispatch of any size travels as a pointer prompt plus a run-dir
+  handoff document, a worker's output comes back as a document the journal
+  references by path, and no nahel workflow ever tells an agent to inline large
+  context into an agent CLI invocation.
+fog: []
+out_of_scope: []
+created: 2026-08-20T16:08:25Z
+updated: 2026-08-20T16:08:25Z
+---
+Four open questions carried from the 2026-07-28 grill (f4v1wt9m) plus one new from the 2026-08-19 field evidence (nt93edc0). Existing mechanics: composeInvocation passes preamble+task as one trailing argv arg; run records live under nahel/runs/; dispatch already creates run records journaled by id.

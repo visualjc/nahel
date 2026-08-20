@@ -19,6 +19,7 @@ import {
   listTickets,
   mapPath,
   observationPath,
+  pathOccupied,
   readConfigText,
   readRunRecordText,
   readSkillsLockText,
@@ -393,7 +394,13 @@ export async function collectValidationInput(
     // carries that state to the check, which owns the finding.
     try {
       const text = await readTextFile(raw.resultDocPath);
-      if (text !== null) raw.resultDocText = text;
+      if (text !== null) {
+        raw.resultDocText = text;
+      } else if (await pathOccupied(raw.resultDocPath)) {
+        // A dangling symlink: reading followed the link to ENOENT, but the
+        // NAME is taken — exists-but-unreadable, same as the directory case.
+        raw.resultDocUnreadable = true;
+      }
     } catch {
       raw.resultDocUnreadable = true;
     }

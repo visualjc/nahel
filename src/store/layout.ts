@@ -1,4 +1,13 @@
-import { mkdir, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import {
@@ -91,6 +100,25 @@ export function storeLayout(root: string): StoreLayout {
     skillsManifestPath: join(root, "skills.yaml"),
     skillsLockPath: join(root, "skills.lock"),
   };
+}
+
+/**
+ * True when the NAME itself is occupied — by a file, a directory, or a
+ * symlink whether or not its target exists. `lstat`, deliberately: `stat`
+ * follows links, so a dangling symlink reads as absent and a caller asking
+ * "is something squatting on this path?" gets the wrong answer (review
+ * round 2 — validate must flag a result.md whose name is taken but whose
+ * bytes are unreachable).
+ */
+export async function pathOccupied(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
 }
 
 /** True when anything exists at `path` (a file, a directory, a symlink target). */

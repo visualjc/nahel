@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CORE_EVENT_TYPES } from "../../src/schema/events";
 import { generateId } from "../../src/schema/id";
@@ -2678,6 +2678,22 @@ describe("validate — worker result documents (run.result-doc, F4)", () => {
     // the document "exists" per F4 but is unreadable as a file — swallowing it
     // as absent would pass validate on a run whose result cannot be read.
     await mkdir(resultDocPath(fixture.layout, run.id), { recursive: true });
+
+    const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.message).toContain(run.id);
+    expect(findings[0]!.message).toContain("not a readable file");
+  });
+
+  test("a DANGLING SYMLINK at result.md is a finding, never silently absent (review round 2)", async () => {
+    const { fixture, run } = await fixtureWithRun();
+    // The name is occupied but reading follows the link to ENOENT — the same
+    // exists-but-unreadable class as the directory case, one rung sneakier.
+    await symlink(
+      join(fixture.layout.runsDir, run.id, "never-written.md"),
+      resultDocPath(fixture.layout, run.id),
+    );
 
     const findings = findingsFor(await validateStore(fixture.layout), "run.result-doc");
     expect(findings).toHaveLength(1);

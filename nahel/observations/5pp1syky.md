@@ -1,0 +1,19 @@
+---
+id: 5pp1syky
+name: dispatch-handoff-shipped
+created: 2026-08-20T20:32:00Z
+tags:
+  - dispatch
+  - handoff
+  - release
+  - afk
+  - v0.5.0
+sources:
+  - qbhav29g
+  - 62barwyx
+  - k0yrzjz6
+  - kp74t3wh
+  - 9m9x2qd8
+  - na35nkcb
+---
+dispatch-handoff-documents shipped as v0.5.0 (merged 49cc155, 2026-08-20), the first feature executed 100% AFK through the full pipeline under one explicit delegation: map-fed PRD (codex-verified 3 rounds pre-build, 2 defects caught), 6 children built red-first by opus workers on epic/dispatch-handoff, codex review loop (3 majors found and fixed across 2 rounds, round-3 approve), PRD exit test plus a real-codex verify-by-driving, merge pre-authorized by the human with post-merge verification as the acceptance gate. Dispatch now writes nahel/runs/<run-id>/task.md, spawns a bounded ~1.2KB pointer prompt, and journals paths never content; result.md carries a validated contract.

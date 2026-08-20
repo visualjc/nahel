@@ -1,0 +1,2 @@
+{"id":"63xve732","ts":"2026-08-20T15:44:04Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"payload":{"summary":"skill-entry-shim t4nsm0de moved next -> later by Jim (chat 2026-08-19): sided with cursor-agent's timing — build when an AGENTS.md-blind skill-capable host is actually in the target set."}}
+{"id":"2zjfvhyg","ts":"2026-08-20T15:44:04Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

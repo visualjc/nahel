@@ -1,0 +1,2 @@
+{"id":"kwq0nsvx","ts":"2026-08-19T16:03:50Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"jkvadyhz","payload":{"target":"item","record":{"id":"jkvadyhz","name":"guide-freshness-check","type":"chore","status":"backlog","lane":"direct","depends_on":[],"external_refs":[],"created":"2026-08-19T16:03:50Z","updated":"2026-08-19T16:03:50Z"},"body":""}}
+{"id":"45mpbwab","ts":"2026-08-19T16:03:50Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

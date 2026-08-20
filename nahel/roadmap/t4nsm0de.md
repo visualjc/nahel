@@ -1,0 +1,12 @@
+---
+id: t4nsm0de
+name: skill-entry-shim
+kind: feature
+horizon: later
+parent: kyeb086y
+adrs: []
+features: []
+created: 2026-08-19T16:04:19Z
+updated: 2026-08-20T15:44:04Z
+---
+Any host agent that discovers capabilities through the agent-skills format (SKILL.md description matching + progressive disclosure) can discover and correctly enter a Nahel-managed repository — identify itself via NAHEL_ACTOR, onboard via the brief, route to canonical workflows, and mutate state only through the CLI — even when that host never loads AGENTS.md. The skill is a generated, regenerable ROUTER emitted by nahel install (e.g. .claude/skills/nahel/SKILL.md, generator-owned like the shim namespaces): narrow trigger description scoped to Nahel-managed repos, body of pointers only — the orientation invariants shared from the same template constant that renders the AGENTS.md section, a workflow index projected from workflow frontmatter, progressive-disclosure links to CONTEXT.md / PRODUCT.md / nahel --help — so no second onboarding document ever exists to drift. Conditions from the 2026-08-19 cross-vendor evaluation (claude + codex + cursor-agent, delegation m246ffk6): thin router only, never a third constitution; build when a skill-capable-but-AGENTS.md-blind host is actually in the target set (codex said build now as a compatibility adapter, cursor-agent said wait for a blind host); always-on rules like NAHEL_ACTOR stay enforced by the AGENTS.md section, the skill only restates them; precondition — coin a CONTEXT.md term (working name: skill entry shim) distinguishing this PRODUCED artifact from ADR-0009 CONSUMED skill dependencies.

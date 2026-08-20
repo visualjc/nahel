@@ -1,0 +1,2 @@
+{"id":"rc52f037","ts":"2026-08-20T17:37:46Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"8112yg22","payload":{"summary":"review finding: src/validate/checks.ts:~3167 — result doc item not cross-checked against run record item, misattribution passes validate [severity: major] head=3fce9ec round=1 vendor=codex"}}
+{"id":"tbfxf58p","ts":"2026-08-20T17:37:46Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

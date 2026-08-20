@@ -1,0 +1,2 @@
+{"id":"4kh5mxvy","ts":"2026-08-20T16:37:36Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"b0kz7pzd","payload":{"target":"item","record":{"id":"b0kz7pzd","name":"handoff-exit-test","type":"qa","status":"backlog","lane":"direct","parent":"8112yg22","depends_on":["nsc0k9xy","3zka6zmz"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T16:37:36Z"},"body":""}}
+{"id":"5a9sg61f","ts":"2026-08-20T16:37:36Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

@@ -1,0 +1,2 @@
+{"id":"gtxghkx0","ts":"2026-08-20T16:37:36Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"nsc0k9xy","payload":{"target":"item","record":{"id":"nsc0k9xy","name":"dispatch-writes-handoff","type":"feature","status":"backlog","lane":"direct","parent":"8112yg22","depends_on":["r4h2840z"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T16:37:36Z"},"body":""}}
+{"id":"4p444h26","ts":"2026-08-20T16:37:36Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

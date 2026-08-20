@@ -1,0 +1,2 @@
+{"id":"22j7cnea","ts":"2026-08-20T16:37:36Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"3zka6zmz","payload":{"target":"item","record":{"id":"3zka6zmz","name":"validate-result-docs","type":"feature","status":"backlog","lane":"direct","parent":"8112yg22","depends_on":["9akby10d"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T16:37:36Z"},"body":""}}
+{"id":"f10bbp7p","ts":"2026-08-20T16:37:36Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

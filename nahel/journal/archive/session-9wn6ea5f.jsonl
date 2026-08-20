@@ -1,0 +1,2 @@
+{"id":"3cmzjn24","ts":"2026-08-20T16:37:36Z","seq":0,"type":"item.created","actor":{"kind":"agent","id":"claude-code"},"item":"9akby10d","payload":{"target":"item","record":{"id":"9akby10d","name":"result-doc-contract","type":"feature","status":"backlog","lane":"direct","parent":"8112yg22","depends_on":[],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-20T16:37:36Z"},"body":""}}
+{"id":"s41t0xwx","ts":"2026-08-20T16:37:36Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

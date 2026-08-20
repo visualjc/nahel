@@ -1,0 +1,2 @@
+{"id":"mkfxp8r5","ts":"2026-08-20T16:37:25Z","seq":0,"type":"note","actor":{"kind":"agent","id":"claude-code"},"item":"8112yg22","payload":{"summary":"Parses docs/prds/dispatch-handoff-documents.md (authored by plan item a22spcmj; approved via Jim's AFK delegation qbhav29g + codex 3-round verification ending approve). Lane epic-lite: one coherent feature, five session-sized deliverables, light ordering."}}
+{"id":"nbncazxd","ts":"2026-08-20T16:37:25Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

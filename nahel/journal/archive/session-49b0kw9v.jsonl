@@ -1,0 +1,2 @@
+{"id":"620aepp5","ts":"2026-08-21T01:16:03Z","seq":0,"type":"item.updated","actor":{"kind":"agent","id":"claude-code"},"item":"r4h2840z","payload":{"target":"item","record":{"id":"r4h2840z","name":"pointer-invocation","type":"feature","status":"done","lane":"direct","parent":"8112yg22","depends_on":["9akby10d"],"external_refs":[],"created":"2026-08-20T16:37:36Z","updated":"2026-08-21T01:16:03Z"},"body":""}}
+{"id":"wqqxq7hj","ts":"2026-08-21T01:16:03Z","seq":1,"type":"session.closed","actor":{"kind":"agent","id":"claude-code"},"payload":{}}

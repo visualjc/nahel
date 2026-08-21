@@ -160,3 +160,5 @@ The layer *above* plan items: the thing that feeds the PRD→Epic→Issue engine
 - **phase-4-roadmap-layer** shipped — its delta is closed and the PRD that stated it is archived at `docs/prds/archived/phase-4-roadmap-layer.md` (archival event 4zx0yf0h).
 
 - **planning-partner** shipped — its delta is closed and the PRD that stated it is archived at `docs/prds/archived/planning-partner.md` (archival event e0qdy9nv).
+
+- **decision-digest** shipped — its delta is closed and the PRD that stated it is archived at `docs/prds/archived/decision-digest.md` (archival event xx52dzmz).

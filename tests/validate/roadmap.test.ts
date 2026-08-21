@@ -504,6 +504,101 @@ describe("validate — the F2 derivation warnings", () => {
  * the signal that someone is working against a CLOSED delta instead of
  * opening a new node.
  */
+/**
+ * The shelf lagging the work (decided with Jim, 2026-08-17): horizon is
+ * human-set intent, and a feature whose work is in-flight or built while its
+ * horizon still reads `next`/`later` is a shelf nobody re-filed when the work
+ * started. Advisory, features only, and `released` is exempt — a released
+ * feature leaves the horizon buckets in every view, so its stored horizon is
+ * history and owes nothing.
+ */
+describe("validate — a stale horizon (roadmap.horizon-stale)", () => {
+  /** A feature node over an epic with one child at the status given. */
+  async function featureWith(
+    fixture: ValidateFixture,
+    horizon: RoadmapNodeFrontmatter["horizon"],
+    childStatus: "in-progress" | "done" | "backlog",
+  ) {
+    const product = await createNode(fixture, { kind: "product", name: "nahel" });
+    const epic = await createItem(fixture, { name: "demo-epic", type: "plan", lane: "full" });
+    await createItem(fixture, { name: "leaf-work", status: childStatus, parent: epic.id });
+    const node = await createNode(fixture, {
+      name: "shelved-feature",
+      parent: product.id,
+      epic: epic.id,
+      horizon,
+    });
+    return { product, epic, node };
+  }
+
+  test("in-flight work at horizon next is a WARNING naming the node and pointing at now", async () => {
+    const fixture = await setup();
+    const { node } = await featureWith(fixture, "next", "in-progress");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.horizon-stale");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("warning");
+    expect(findings[0]!.path).toContain(`${node.id}.md`);
+    expect(findings[0]!.message).toContain(node.id);
+    expect(findings[0]!.message).toContain("shelved-feature");
+    expect(findings[0]!.message).toContain("in-flight");
+    expect(findings[0]!.message).toContain("next");
+    expect(findings[0]!.fix).toContain("--horizon now");
+    // Advisory only — a stale shelf never fails validate.
+    expect(findings[0]!.fix).toContain("advisory");
+    expect((await validateStore(fixture.layout)).filter((f) => f.severity === "error")).toEqual([]);
+  });
+
+  test("built work at horizon later warns too — finished building is not filed as future", async () => {
+    const fixture = await setup();
+    await featureWith(fixture, "later", "done");
+
+    const findings = findingsFor(await validateStore(fixture.layout), "roadmap.horizon-stale");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("built");
+    expect(findings[0]!.message).toContain("later");
+  });
+
+  test("a RELEASED feature at next is exempt — the released bucket already retired it", async () => {
+    const fixture = await setup();
+    const { epic } = await featureWith(fixture, "next", "done");
+    await appendEvent(fixture.layout, fixture.env, {
+      type: RELEASE_ANNOUNCED_EVENT_TYPE,
+      actor: { kind: "agent", id: "claude-code" },
+      item: epic.id,
+      payload: {
+        version: "0.3.0",
+        channel: "git main + local install",
+        announcement: "https://example.com/pr/1",
+      },
+      session: fixture.agent.session,
+    });
+
+    expect(findingsFor(await validateStore(fixture.layout), "roadmap.horizon-stale")).toEqual([]);
+  });
+
+  test("planned work at next is silent — nothing started, the shelf is honest", async () => {
+    const fixture = await setup();
+    await featureWith(fixture, "next", "backlog");
+
+    expect(findingsFor(await validateStore(fixture.layout), "roadmap.horizon-stale")).toEqual([]);
+  });
+
+  test("in-flight work at NOW is silent — the shelf and the work agree", async () => {
+    const fixture = await setup();
+    await featureWith(fixture, "now", "in-progress");
+
+    expect(findingsFor(await validateStore(fixture.layout), "roadmap.horizon-stale")).toEqual([]);
+  });
+
+  test("a product node never fires it — only features carry a stage to lag behind", async () => {
+    const fixture = await setup();
+    await createNode(fixture, { kind: "product", name: "nahel", horizon: "later" });
+
+    expect(findingsFor(await validateStore(fixture.layout), "roadmap.horizon-stale")).toEqual([]);
+  });
+});
+
 describe("validate — the PRD lifecycle (F10)", () => {
   /**
    * The payload of an ARCHIVAL-QUALIFIED release (A3): the three keys the

@@ -4,6 +4,16 @@ created: 2026-08-09T00:29:14Z
 updated: 2026-08-09T00:57:51Z
 ---
 
+> **Archived — the delta this PRD stated is closed.**
+>
+> - Release: released 0.4.2 2026-08-18T04:26:00Z
+> - Epic: 9qskgzv1 — roadmap node decision-digest (0f07w6gn)
+> - Journal: archived by event xx52dzmz
+>
+> The code and tests are the truth now — this PRD is never reopened and
+> never edited. Further work on this feature is a new node with a new PRD,
+> which may name this one as its predecessor.
+
 # PRD: Decision Digest
 
 Roadmap node: `decision-digest` (0f07w6gn) · Map: 0ty003v6 · Plan item: 4318wy9h

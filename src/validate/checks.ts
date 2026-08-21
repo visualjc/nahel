@@ -816,6 +816,12 @@ function checkRoadmapRefs(state: ParsedState): Finding[] {
  * thin deploy was never checked anywhere. Each names the EVENT and the keys it
  * lacks, because re-logging that act is the fix; a retracted fact decides no
  * column, so the derivation hands back nothing and none of them fires.
+ *
+ * `horizon-stale` is the one check that reads the horizon against the
+ * derivation: a feature whose work is in-flight or built while its horizon
+ * still says `next`/`later`. It nags toward `now`, never away from it —
+ * retiring a shipped feature needs no hand, because a released stage removes
+ * the node from the horizon buckets on its own.
  */
 function checkRoadmapDerivation(state: ParsedState): Finding[] {
   const findings: Finding[] = [];
@@ -850,6 +856,30 @@ function checkRoadmapDerivation(state: ParsedState): Finding[] {
           `roadmap node ${record.id} (${record.name}) is covered by ${type} event ${gaps.event}, which ` +
           `records no ${gaps.missing.join(", ")} — the stage did not advance on it and reads ${status.stage}`,
         fix: `re-log the act in full (\`nahel log ${type} --item ${record.epic ?? "<epic>"} ${gaps.missing.map((key) => `--data ${key}=<${key}>`).join(" ")}\`), and retract the thin one with \`nahel log ${ROADMAP_COLUMN_RETRACTED_EVENT_TYPE}\` if it was wrong`,
+      });
+    }
+    // The shelf lagging the work (decided with Jim, 2026-08-17): work under a
+    // feature node has started — or finished building — while its human-set
+    // horizon still files it as future. Horizon means "when this is meant to
+    // be worked", so a worked node reading `next`/`later` is a stale shelf,
+    // not a plan. `released` is exempt: a released feature leaves the horizon
+    // buckets entirely (horizonGroups), so its stored horizon is history and
+    // no re-filing is owed. Advisory like every roadmap shape check — the
+    // horizon stays human-owned and nothing here moves it.
+    if (
+      record.kind === "feature" &&
+      status.stage !== "released" &&
+      (status.dev === "in-flight" || status.dev === "built") &&
+      (record.horizon === "next" || record.horizon === "later")
+    ) {
+      findings.push({
+        severity: "warning",
+        check: "roadmap.horizon-stale",
+        path,
+        message:
+          `roadmap node ${record.id} (${record.name}) carries ${status.dev} work (stage ${status.stage}) ` +
+          `but its horizon still reads ${record.horizon} — work has started, so the shelf lags the store`,
+        fix: `re-file it with \`nahel roadmap node update ${record.name} --horizon now\` — horizon is human intent; this is advisory`,
       });
     }
     const epic = record.epic;

@@ -1489,7 +1489,7 @@ describe("renderBrief — the roadmap block (Phase 4 F4)", () => {
     expect(statuses).toBeGreaterThan(roadmap);
     const section = brief.split("== roadmap ==\n")[1]!.split("\n\n")[0]!;
     expect(section).toBe(
-      `detached-state-repo  feature  planned  id=${charted.frontmatter.id}\nnext: none\nlater: none`,
+      `detached-state-repo  feature  planned  id=${charted.frontmatter.id}\nnext: none\nlater: none\nreleased: none`,
     );
   });
 
